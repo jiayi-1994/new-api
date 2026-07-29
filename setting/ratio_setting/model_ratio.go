@@ -402,9 +402,9 @@ func GetTaskBillingModeMap() map[string]string {
 	return taskBillingModeMap.ReadAll()
 }
 
-// IsTaskPerCallBilling 判断模型的任务计费单位是否为按次。
+// GetTaskBillingMode 返回模型显式配置的任务计费单位以及是否命中配置。
 // 旧的 TASK_PRICE_PATCH 环境变量作为兜底保留，页面配置优先。
-func IsTaskPerCallBilling(name string) bool {
+func GetTaskBillingMode(name string) (string, bool) {
 	matchName := FormatMatchingModelName(name)
 
 	mode, ok := taskBillingModeMap.Get(matchName)
@@ -412,10 +412,19 @@ func IsTaskPerCallBilling(name string) bool {
 		mode, ok = taskBillingModeMap.Get(CompactWildcardModelKey)
 	}
 	if ok {
-		return mode == TaskBillingModePerCall
+		return mode, true
 	}
 
-	return common.StringsContains(constant.TaskPricePatches, name)
+	if common.StringsContains(constant.TaskPricePatches, name) {
+		return TaskBillingModePerCall, true
+	}
+	return "", false
+}
+
+// IsTaskPerCallBilling 判断模型的任务计费单位是否为按次。
+func IsTaskPerCallBilling(name string) bool {
+	mode, ok := GetTaskBillingMode(name)
+	return ok && mode == TaskBillingModePerCall
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {

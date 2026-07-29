@@ -81,3 +81,64 @@ func TestIsTaskPerCallBilling(t *testing.T) {
 		})
 	}
 }
+
+// GetTaskBillingMode 供模型广场展示使用：命中配置（或旧环境变量）才返回 ok，
+// 未配置的模型不返回模式，由调用方按端点推断默认值。
+func TestGetTaskBillingMode(t *testing.T) {
+	testCases := []struct {
+		name      string
+		modeJSON  string
+		envPatch  []string
+		modelName string
+		wantMode  string
+		wantOK    bool
+	}{
+		{
+			name:      "未配置不返回模式",
+			modelName: "sora-2",
+			wantOK:    false,
+		},
+		{
+			name:      "显式按秒配置命中",
+			modeJSON:  `{"videos-4-720p":"per_second"}`,
+			modelName: "videos-4-720p",
+			wantMode:  TaskBillingModePerSecond,
+			wantOK:    true,
+		},
+		{
+			name:      "显式按次配置命中",
+			modeJSON:  `{"videos-4-720p":"per_call"}`,
+			modelName: "videos-4-720p",
+			wantMode:  TaskBillingModePerCall,
+			wantOK:    true,
+		},
+		{
+			name:      "旧环境变量视为按次配置",
+			envPatch:  []string{"sora-2"},
+			modelName: "sora-2",
+			wantMode:  TaskBillingModePerCall,
+			wantOK:    true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			originalPatches := constant.TaskPricePatches
+			t.Cleanup(func() {
+				constant.TaskPricePatches = originalPatches
+				require.NoError(t, UpdateTaskBillingModeByJSONString("{}"))
+			})
+
+			constant.TaskPricePatches = tc.envPatch
+			modeJSON := tc.modeJSON
+			if modeJSON == "" {
+				modeJSON = "{}"
+			}
+			require.NoError(t, UpdateTaskBillingModeByJSONString(modeJSON))
+
+			mode, ok := GetTaskBillingMode(tc.modelName)
+			require.Equal(t, tc.wantOK, ok)
+			require.Equal(t, tc.wantMode, mode)
+		})
+	}
+}

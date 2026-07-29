@@ -379,15 +379,17 @@ func updatePricing() {
 		if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
-			// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长
-			for _, et := range pricing.SupportedEndpointTypes {
-				if et == constant.EndpointTypeOpenAIVideo {
-					if ratio_setting.IsTaskPerCallBilling(model) {
-						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerCall
-					} else {
+			// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长。
+			// 显式配置（页面或 TASK_PRICE_PATCH）无条件生效——渠道类型不一定
+			// 声明 openai-video 端点；未配置时仅对声明视频端点的模型推断默认按秒。
+			if mode, ok := ratio_setting.GetTaskBillingMode(model); ok {
+				pricing.TaskBillingMode = mode
+			} else {
+				for _, et := range pricing.SupportedEndpointTypes {
+					if et == constant.EndpointTypeOpenAIVideo {
 						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+						break
 					}
-					break
 				}
 			}
 		} else {
