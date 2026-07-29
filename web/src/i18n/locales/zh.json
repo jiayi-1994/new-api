@@ -1251,6 +1251,7 @@
     "DeepSeek": "DeepSeek",
     "default": "默认",
     "Default": "默认",
+    "Default (per second)": "默认（按秒）",
     "Default / range": "默认值 / 范围",
     "Default administrator permissions can be overridden for this user.": "可以为此用户覆盖默认管理员权限。",
     "Default API Version *": "默认 API 版本 *",

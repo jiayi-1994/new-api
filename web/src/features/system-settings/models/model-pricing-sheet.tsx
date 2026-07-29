@@ -167,7 +167,8 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
-  const [taskPerCallBilling, setTaskPerCallBilling] = useState(false)
+  // '' 表示未显式配置，走系统默认（按秒）
+  const [taskBillingMode, setTaskBillingMode] = useState('')
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -210,9 +211,7 @@ export const ModelPricingEditorPanel = forwardRef<
       )
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
-      setTaskPerCallBilling(
-        editData.taskBillingMode === TASK_BILLING_PER_CALL
-      )
+      setTaskBillingMode(editData.taskBillingMode || '')
     } else {
       form.reset({
         name: '',
@@ -228,7 +227,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
-      setTaskPerCallBilling(false)
+      setTaskBillingMode('')
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -239,6 +238,7 @@ export const ModelPricingEditorPanel = forwardRef<
 
   const taskBillingUnitOptions = useMemo(
     () => [
+      { value: '', label: t('Default (per second)') },
       { value: TASK_BILLING_PER_SECOND, label: t('Per second (× duration)') },
       { value: TASK_BILLING_PER_CALL, label: t('Per task (fixed)') },
     ],
@@ -377,7 +377,7 @@ export const ModelPricingEditorPanel = forwardRef<
         lanePrices,
         laneEnabled,
         t,
-        taskPerCallBilling
+        taskBillingMode === TASK_BILLING_PER_CALL
       ),
     [
       billingExpr,
@@ -387,7 +387,7 @@ export const ModelPricingEditorPanel = forwardRef<
       promptPrice,
       requestRuleExpr,
       t,
-      taskPerCallBilling,
+      taskBillingMode,
       watchedValues,
     ]
   )
@@ -485,14 +485,15 @@ export const ModelPricingEditorPanel = forwardRef<
         data.requestRuleExpr = requestRuleExpr
       }
 
-      // 任务计费单位只对固定价格生效：按秒计费是默认值，不落库
-      if (pricingMode === 'per-request' && taskPerCallBilling) {
-        data.taskBillingMode = TASK_BILLING_PER_CALL
+      // 任务计费单位只对固定价格生效；显式选择（含按秒）才落库，
+      // 否则渠道端点推断不出视频模型时展示无法区分按秒/按条
+      if (pricingMode === 'per-request' && taskBillingMode) {
+        data.taskBillingMode = taskBillingMode
       }
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr, taskPerCallBilling]
+    [billingExpr, pricingMode, requestRuleExpr, taskBillingMode]
   )
 
   useImperativeHandle(
@@ -673,16 +674,9 @@ export const ModelPricingEditorPanel = forwardRef<
                         <FieldLabel>{t('Video task billing unit')}</FieldLabel>
                         <Select
                           items={taskBillingUnitOptions}
-                          value={
-                            taskPerCallBilling
-                              ? TASK_BILLING_PER_CALL
-                              : TASK_BILLING_PER_SECOND
-                          }
+                          value={taskBillingMode}
                           onValueChange={(value) =>
-                            value !== null &&
-                            setTaskPerCallBilling(
-                              value === TASK_BILLING_PER_CALL
-                            )
+                            value !== null && setTaskBillingMode(value)
                           }
                         >
                           <SelectTrigger className='w-full'>
@@ -702,7 +696,7 @@ export const ModelPricingEditorPanel = forwardRef<
                           </SelectContent>
                         </Select>
                         <FieldDescription>
-                          {taskPerCallBilling
+                          {taskBillingMode === TASK_BILLING_PER_CALL
                             ? t(
                                 'The fixed price is charged once per video task, regardless of its duration.'
                               )

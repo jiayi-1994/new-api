@@ -1251,6 +1251,7 @@
     "DeepSeek": "DeepSeek",
     "default": "mặc định",
     "Default": "Mặc định",
+    "Default (per second)": "Default (per second)",
     "Default / range": "Mặc định / khoảng",
     "Default administrator permissions can be overridden for this user.": "Có thể ghi đè quyền quản trị viên mặc định cho người dùng này.",
     "Default API Version *": "Phiên bản API mặc định *",

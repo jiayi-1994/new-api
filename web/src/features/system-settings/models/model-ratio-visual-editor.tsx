@@ -564,7 +564,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         delete billingExprMap[name]
         delete taskBillingModeMap[name]
 
-        // 任务计费单位只在固定价格模式下有意义；按秒是默认值，不写入配置
+        // 任务计费单位只在固定价格模式下有意义；未显式选择时不写入配置
         if (data.billingMode === 'per-request' && data.taskBillingMode) {
           taskBillingModeMap[name] = data.taskBillingMode
         }

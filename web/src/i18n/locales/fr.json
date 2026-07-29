@@ -1251,6 +1251,7 @@
     "DeepSeek": "DeepSeek",
     "default": "par défaut",
     "Default": "Par défaut",
+    "Default (per second)": "Default (per second)",
     "Default / range": "Défaut / plage",
     "Default administrator permissions can be overridden for this user.": "Les autorisations administrateur par défaut peuvent être remplacées pour cet utilisateur.",
     "Default API Version *": "Version API par défaut *",
