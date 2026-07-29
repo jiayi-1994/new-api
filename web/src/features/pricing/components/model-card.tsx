@@ -188,7 +188,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             props.selectedGroup
           )}
         </span>{' '}
-        / {t('request')}
+        /{' '}
+        {props.model.task_billing_mode === 'per_second'
+          ? t('second')
+          : t('request')}
       </span>
     )
   }

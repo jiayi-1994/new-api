@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -20,26 +19,37 @@ import (
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
-	// 支持任务仅按次计费
-	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
+	// 支持任务仅按次计费：额度不随参数变化，但参数（时长等）仍需记录以便追溯
+	perCallBilling := ratio_setting.IsTaskPerCallBilling(info.OriginModelName)
+	if perCallBilling {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
-	} else {
-		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
-			var contents []string
-			for key, ra := range otherRatios {
-				if 1.0 != ra {
-					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
-				}
+	}
+	if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
+		var contents []string
+		for key, ra := range otherRatios {
+			if 1.0 != ra {
+				contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
 			}
-			if len(contents) > 0 {
-				logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+		}
+		if len(contents) > 0 {
+			label := "计算参数"
+			if perCallBilling {
+				// 按次计费下这些参数不参与额度计算，避免读日志的人误解为乘数
+				label = "任务参数"
 			}
+			logContent = fmt.Sprintf("%s, %s：%s", logContent, label, strings.Join(contents, ", "))
 		}
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
+	if perCallBilling {
+		other["task_per_call_billing"] = true
+	}
+	if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
+		other["task_ratios"] = otherRatios
+	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}

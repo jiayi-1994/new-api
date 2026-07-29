@@ -228,7 +228,10 @@ export function usePricingColumns(
           <div className='max-w-full min-w-0'>
             <span className='font-mono text-sm tabular-nums'>{price}</span>
             <div className='text-muted-foreground/50 text-[10px]'>
-              / {t('request')}
+              /{' '}
+              {model.task_billing_mode === 'per_second'
+                ? t('second')
+                : t('request')}
             </div>
           </div>
         )

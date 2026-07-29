@@ -35,7 +35,9 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	// TaskBillingMode 视频任务计费单位（per_second/per_call），仅对按次定价的视频模型输出
+	TaskBillingMode string `json:"task_billing_mode,omitempty"`
+	PricingVersion  string `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -377,6 +379,17 @@ func updatePricing() {
 		if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
+			// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长
+			for _, et := range pricing.SupportedEndpointTypes {
+				if et == constant.EndpointTypeOpenAIVideo {
+					if ratio_setting.IsTaskPerCallBilling(model) {
+						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerCall
+					} else {
+						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+					}
+					break
+				}
+			}
 		} else {
 			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
 			pricing.ModelRatio = modelRatio

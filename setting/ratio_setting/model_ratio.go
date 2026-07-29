@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 )
@@ -324,6 +325,7 @@ var defaultAudioCompletionRatio = map[string]float64{
 var modelPriceMap = types.NewRWMap[string, float64]()
 var modelRatioMap = types.NewRWMap[string, float64]()
 var completionRatioMap = types.NewRWMap[string, float64]()
+var taskBillingModeMap = types.NewRWMap[string, string]()
 
 var defaultCompletionRatio = map[string]float64{
 	"gpt-4-gizmo-*":  2,
@@ -379,6 +381,41 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 		common.SysError("model price not found: " + name)
 	}
 	return -1, false
+}
+
+// 任务（视频）计费单位。按秒计费时模型价格会乘上时长等 OtherRatios，
+// 按次计费时模型价格即为一次任务的最终价格，时长仅作为日志参数保留。
+const (
+	TaskBillingModePerSecond = "per_second"
+	TaskBillingModePerCall   = "per_call"
+)
+
+func TaskBillingMode2JSONString() string {
+	return taskBillingModeMap.MarshalJSONString()
+}
+
+func UpdateTaskBillingModeByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(taskBillingModeMap, jsonStr, InvalidateExposedDataCache)
+}
+
+func GetTaskBillingModeMap() map[string]string {
+	return taskBillingModeMap.ReadAll()
+}
+
+// IsTaskPerCallBilling 判断模型的任务计费单位是否为按次。
+// 旧的 TASK_PRICE_PATCH 环境变量作为兜底保留，页面配置优先。
+func IsTaskPerCallBilling(name string) bool {
+	matchName := FormatMatchingModelName(name)
+
+	mode, ok := taskBillingModeMap.Get(matchName)
+	if !ok && strings.HasSuffix(matchName, CompactModelSuffix) {
+		mode, ok = taskBillingModeMap.Get(CompactWildcardModelKey)
+	}
+	if ok {
+		return mode == TaskBillingModePerCall
+	}
+
+	return common.StringsContains(constant.TaskPricePatches, name)
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {

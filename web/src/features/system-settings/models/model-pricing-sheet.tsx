@@ -54,6 +54,14 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -80,6 +88,10 @@ import {
   type PricingMode,
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
+import {
+  TASK_BILLING_PER_CALL,
+  TASK_BILLING_PER_SECOND,
+} from './model-pricing-snapshots'
 import { formatPricingNumber } from './pricing-format'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
@@ -155,6 +167,7 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [taskPerCallBilling, setTaskPerCallBilling] = useState(false)
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -197,6 +210,9 @@ export const ModelPricingEditorPanel = forwardRef<
       )
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
+      setTaskPerCallBilling(
+        editData.taskBillingMode === TASK_BILLING_PER_CALL
+      )
     } else {
       form.reset({
         name: '',
@@ -212,6 +228,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
+      setTaskPerCallBilling(false)
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -219,6 +236,14 @@ export const ModelPricingEditorPanel = forwardRef<
     setLaneEnabled(nextLaneState.enabled)
     setEditorReloadToken((token) => token + 1)
   }, [editData, form])
+
+  const taskBillingUnitOptions = useMemo(
+    () => [
+      { value: TASK_BILLING_PER_SECOND, label: t('Per second (× duration)') },
+      { value: TASK_BILLING_PER_CALL, label: t('Per task (fixed)') },
+    ],
+    [t]
+  )
 
   const setFormValue = (field: keyof ModelPricingFormValues, value: string) => {
     form.setValue(field, value, {
@@ -351,7 +376,8 @@ export const ModelPricingEditorPanel = forwardRef<
         promptPrice,
         lanePrices,
         laneEnabled,
-        t
+        t,
+        taskPerCallBilling
       ),
     [
       billingExpr,
@@ -361,6 +387,7 @@ export const ModelPricingEditorPanel = forwardRef<
       promptPrice,
       requestRuleExpr,
       t,
+      taskPerCallBilling,
       watchedValues,
     ]
   )
@@ -458,9 +485,14 @@ export const ModelPricingEditorPanel = forwardRef<
         data.requestRuleExpr = requestRuleExpr
       }
 
+      // 任务计费单位只对固定价格生效：按秒计费是默认值，不落库
+      if (pricingMode === 'per-request' && taskPerCallBilling) {
+        data.taskBillingMode = TASK_BILLING_PER_CALL
+      }
+
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [billingExpr, pricingMode, requestRuleExpr, taskPerCallBilling]
   )
 
   useImperativeHandle(
@@ -636,6 +668,49 @@ export const ModelPricingEditorPanel = forwardRef<
                           </FormItem>
                         )}
                       />
+
+                      <Field>
+                        <FieldLabel>{t('Video task billing unit')}</FieldLabel>
+                        <Select
+                          items={taskBillingUnitOptions}
+                          value={
+                            taskPerCallBilling
+                              ? TASK_BILLING_PER_CALL
+                              : TASK_BILLING_PER_SECOND
+                          }
+                          onValueChange={(value) =>
+                            value !== null &&
+                            setTaskPerCallBilling(
+                              value === TASK_BILLING_PER_CALL
+                            )
+                          }
+                        >
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              {taskBillingUnitOptions.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        <FieldDescription>
+                          {taskPerCallBilling
+                            ? t(
+                                'The fixed price is charged once per video task, regardless of its duration.'
+                              )
+                            : t(
+                                'The fixed price is multiplied by the video duration in seconds.'
+                              )}
+                        </FieldDescription>
+                      </Field>
                     </FieldGroup>
                   </TabsContent>
 

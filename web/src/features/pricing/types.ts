@@ -52,6 +52,8 @@ export type PricingModel = {
   group_ratio?: Record<string, number>
   /** Billing mode (e.g. "tiered_expr") used to flag dynamic pricing */
   billing_mode?: string
+  /** Video task billing unit: 'per_second' (price × duration) or 'per_call' (fixed) */
+  task_billing_mode?: string
   /** Raw expression describing dynamic / tiered billing */
   billing_expr?: string
   /** Pricing version returned by backend, useful for cache busting */

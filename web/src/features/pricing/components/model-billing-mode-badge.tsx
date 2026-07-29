@@ -40,6 +40,9 @@ export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
   } else if (isTokenBasedModel(props.model)) {
     label = t('Token-based')
     variant = 'info'
+  } else if (props.model.task_billing_mode === 'per_second') {
+    // 按秒计费的视频模型：固定价格只是每秒单价
+    label = t('Per Second')
   }
 
   return (

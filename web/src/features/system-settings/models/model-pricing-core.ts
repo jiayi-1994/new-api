@@ -62,6 +62,8 @@ export type ModelRatioData = {
   billingMode?: PricingMode
   billingExpr?: string
   requestRuleExpr?: string
+  /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
+  taskBillingMode?: string
 }
 
 export type PreviewRow = {
@@ -215,7 +217,8 @@ export function buildPreviewRows(
   promptPrice: string,
   lanePrices: Record<LaneKey, string>,
   laneEnabled: Record<LaneKey, boolean>,
-  t: (key: string) => string
+  t: (key: string) => string,
+  taskPerCallBilling = false
 ): PreviewRow[] {
   if (mode === 'tiered_expr') {
     const effectiveExpr = combineBillingExpr(billingExpr, requestRuleExpr)
@@ -236,6 +239,13 @@ export function buildPreviewRows(
         key: 'price',
         label: 'ModelPrice',
         value: values.price || t('Empty'),
+      },
+      {
+        key: 'taskBillingMode',
+        label: t('Video task billing unit'),
+        value: taskPerCallBilling
+          ? t('Per task (fixed)')
+          : t('Per second (× duration)'),
       },
     ]
   }

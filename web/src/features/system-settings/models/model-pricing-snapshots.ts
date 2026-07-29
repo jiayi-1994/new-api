@@ -32,6 +32,7 @@ export type ModelPricingSnapshotInput = {
   audioCompletionRatio: string
   billingMode: string
   billingExpr: string
+  taskBillingMode: string
 }
 
 export type ModelPricingSnapshot = {
@@ -47,8 +48,16 @@ export type ModelPricingSnapshot = {
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
+  /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
+  taskBillingMode?: string
   hasConflict: boolean
 }
+
+export const TASK_BILLING_PER_CALL = 'per_call'
+export const TASK_BILLING_PER_SECOND = 'per_second'
+
+export const isTaskPerCallBilling = (snapshot?: ModelPricingSnapshot) =>
+  snapshot?.taskBillingMode === TASK_BILLING_PER_CALL
 
 export type ModelRow = ModelPricingSnapshot & {
   saved?: ModelPricingSnapshot
@@ -174,6 +183,7 @@ export const buildModelSnapshots = ({
   audioCompletionRatio,
   billingMode,
   billingExpr,
+  taskBillingMode,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
   const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
     fallback: {},
@@ -215,6 +225,10 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'billing expression',
   })
+  const taskBillingModeMap = safeJsonParse<Record<string, string>>(
+    taskBillingMode,
+    { fallback: {}, context: 'task billing mode' }
+  )
 
   const modelNames = new Set([
     ...Object.keys(priceMap),
@@ -227,6 +241,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(audioCompletionMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
+    ...Object.keys(taskBillingModeMap),
   ])
 
   return Array.from(modelNames).map((name) => {
@@ -238,6 +253,7 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
+    const taskMode = taskBillingModeMap[name] || ''
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -257,6 +273,7 @@ export const buildModelSnapshots = ({
         imageRatio: image,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
+        taskBillingMode: taskMode,
         hasConflict: false,
       }
     }
@@ -271,6 +288,7 @@ export const buildModelSnapshots = ({
       imageRatio: image,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
+      taskBillingMode: taskMode,
       billingMode: price !== '' ? 'per-request' : 'per-token',
       hasConflict:
         price !== '' &&
@@ -299,5 +317,6 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingMode: snapshot.billingMode || 'per-token',
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
+    taskBillingMode: snapshot.taskBillingMode || '',
   })
 }
