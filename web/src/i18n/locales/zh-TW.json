@@ -2393,6 +2393,7 @@
     "JSON map of group → description exposed when users create API keys.": "分組 → 描述的 JSON 映射，在用戶建立 API 金鑰時公開。",
     "JSON map of group → ratio applied when the user selects the group explicitly.": "分組 → 比率的 JSON 映射，當用戶明確選擇該分組時套用此比率。",
     "JSON map of model → multiplier applied to quota billing.": "模型 → 套用於配額收費的乘數的 JSON 映射。",
+    "JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.": "模型 → per_second 或 per_call 的 JSON 映射。控制影片任務的固定價格是否乘以時長。",
     "JSON map of model → USD cost per request. Takes precedence over ratio based billing.": "模型 → 每請求美元成本的 JSON 映射。優先於基於比率的收費。",
     "JSON mode": "JSON 模式",
     "JSON Mode": "JSON 模式",

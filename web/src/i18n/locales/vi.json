@@ -2393,6 +2393,7 @@
     "JSON map of group → description exposed when users create API keys.": "Ánh xạ JSON của nhóm → mô tả được hiển thị khi người dùng tạo khóa API.",
     "JSON map of group → ratio applied when the user selects the group explicitly.": "Bản đồ JSON của nhóm → tỷ lệ được áp dụng khi người dùng chọn nhóm đó một cách rõ ràng.",
     "JSON map of model → multiplier applied to quota billing.": "Bản đồ JSON của mô hình → hệ số nhân áp dụng cho thanh toán hạn mức.",
+    "JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.": "JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.",
     "JSON map of model → USD cost per request. Takes precedence over ratio based billing.": "Ánh xạ JSON của mô hình → chi phí USD mỗi yêu cầu. Ưu tiên hơn thanh toán dựa trên tỷ lệ.",
     "JSON mode": "Chế độ JSON",
     "JSON Mode": "Chế độ JSON",

@@ -81,6 +81,7 @@ type ModelJsonFieldName =
   | 'ImageRatio'
   | 'AudioRatio'
   | 'AudioCompletionRatio'
+  | 'TaskBillingMode'
 
 const modelJsonFields: Array<{
   name: ModelJsonFieldName
@@ -130,6 +131,12 @@ const modelJsonFields: Array<{
     name: 'AudioCompletionRatio',
     labelKey: 'Audio completion ratio',
     descriptionKey: 'Ratio applied to audio completions for streaming models.',
+  },
+  {
+    name: 'TaskBillingMode',
+    labelKey: 'Video task billing unit',
+    descriptionKey:
+      'JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.',
   },
 ]
 
