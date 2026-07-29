@@ -160,6 +160,20 @@ function lookupModelRatio(
   })[modelName]
 }
 
+// 视频任务计费单位（per_second/per_call），与模型定价页共用 TaskBillingMode 配置
+function lookupTaskBillingMode(
+  settings: ModelSettings | null,
+  modelName: string
+): string {
+  if (!settings || !modelName) return ''
+  return (
+    safeJsonParse<Record<string, string>>(settings.TaskBillingMode, {
+      fallback: {},
+      silent: true,
+    })[modelName] || ''
+  )
+}
+
 // Pricing is not stored on the model row: it lives in system options as
 // model-name keyed JSON maps, so it has to be read back out of those maps to
 // populate the form. Both create and edit rely on this, because submit rebuilds
@@ -244,6 +258,8 @@ export function ModelMutateDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [pricingMode, setPricingMode] = useState<PricingMode>('per-token')
   const [pricingSubMode, setPricingSubMode] = useState<PricingSubMode>('ratio')
+  // '' 表示未显式配置，走系统默认（按秒）
+  const [taskBillingMode, setTaskBillingMode] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
@@ -426,6 +442,9 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setTaskBillingMode(
+        lookupTaskBillingMode(modelSettingsRef.current, model.model_name)
+      )
       form.reset({
         id: model.id,
         model_name: model.model_name,
@@ -452,6 +471,9 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setTaskBillingMode(
+        lookupTaskBillingMode(modelSettingsRef.current, modelName)
+      )
       form.reset({
         model_name: modelName,
         description: '',
@@ -543,6 +565,10 @@ export function ModelMutateDrawer({
               modelSettings.AudioCompletionRatio,
               { fallback: {}, silent: true }
             )
+            const taskBillingModeMap = safeJsonParse<Record<string, string>>(
+              modelSettings.TaskBillingMode,
+              { fallback: {}, silent: true }
+            )
 
             // Remove old model name entries if model name changed (always, even if no new config)
             if (isEditing && oldModelName && oldModelName !== finalModelName) {
@@ -553,6 +579,7 @@ export function ModelMutateDrawer({
               delete imageMap[oldModelName]
               delete audioMap[oldModelName]
               delete audioCompletionMap[oldModelName]
+              delete taskBillingModeMap[oldModelName]
             }
 
             // Rebuild this model name's entries from the form, but only when
@@ -572,6 +599,7 @@ export function ModelMutateDrawer({
               delete imageMap[finalModelName]
               delete audioMap[finalModelName]
               delete audioCompletionMap[finalModelName]
+              delete taskBillingModeMap[finalModelName]
             }
 
             // Only add new entries if user provided new configuration
@@ -582,6 +610,10 @@ export function ModelMutateDrawer({
                 values.price !== ''
               ) {
                 priceMap[finalModelName] = Number.parseFloat(values.price)
+                // 显式选择的任务计费单位跟随固定价格一起写入
+                if (taskBillingMode) {
+                  taskBillingModeMap[finalModelName] = taskBillingMode
+                }
               } else if (pricingMode === 'per-token') {
                 if (values.ratio && values.ratio !== '') {
                   ratioMap[finalModelName] = Number.parseFloat(values.ratio)
@@ -681,6 +713,19 @@ export function ModelMutateDrawer({
               })
             }
 
+            const newTaskBillingMode = normalizeJsonString(
+              JSON.stringify(taskBillingModeMap)
+            )
+            if (
+              newTaskBillingMode !==
+              normalizeJsonString(modelSettings.TaskBillingMode)
+            ) {
+              updates.push({
+                key: 'TaskBillingMode',
+                value: newTaskBillingMode,
+              })
+            }
+
             // Apply all updates (including deletions when clearing fields)
             for (const update of updates) {
               await updateOption.mutateAsync(update)
@@ -710,6 +755,7 @@ export function ModelMutateDrawer({
       queryClient,
       onOpenChange,
       pricingMode,
+      taskBillingMode,
       oldModelName,
       loadedPricingName,
       modelSettings,
@@ -1009,34 +1055,80 @@ export function ModelMutateDrawer({
               </div>
 
               {pricingMode === 'per-request' ? (
-                <FormField
-                  control={form.control}
-                  name='price'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Fixed price (USD)')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          type='text'
-                          placeholder='0.01'
-                          {...field}
-                          onChange={(e) => {
-                            const value = e.target.value
-                            if (validateNumber(value)) {
-                              field.onChange(value)
-                            }
-                          }}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'Cost in USD per request, regardless of tokens used.'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <>
+                  <FormField
+                    control={form.control}
+                    name='price'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Fixed price (USD)')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='text'
+                            placeholder='0.01'
+                            {...field}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (validateNumber(value)) {
+                                field.onChange(value)
+                              }
+                            }}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Cost in USD per request, regardless of tokens used.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className='space-y-2'>
+                    <Label>{t('Video task billing unit')}</Label>
+                    <Select
+                      items={[
+                        { value: '', label: t('Default (per second)') },
+                        {
+                          value: 'per_second',
+                          label: t('Per second (× duration)'),
+                        },
+                        { value: 'per_call', label: t('Per task (fixed)') },
+                      ]}
+                      value={taskBillingMode}
+                      onValueChange={(value) =>
+                        value !== null && setTaskBillingMode(value)
+                      }
+                    >
+                      <SelectTrigger className='w-full'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value=''>
+                            {t('Default (per second)')}
+                          </SelectItem>
+                          <SelectItem value='per_second'>
+                            {t('Per second (× duration)')}
+                          </SelectItem>
+                          <SelectItem value='per_call'>
+                            {t('Per task (fixed)')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <p className='text-muted-foreground text-[0.8rem]'>
+                      {taskBillingMode === 'per_call'
+                        ? t(
+                            'The fixed price is charged once per video task, regardless of its duration.'
+                          )
+                        : t(
+                            'The fixed price is multiplied by the video duration in seconds.'
+                          )}
+                    </p>
+                  </div>
+                </>
               ) : (
                 <>
                   <div className='space-y-4'>
