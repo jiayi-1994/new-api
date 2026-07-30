@@ -297,7 +297,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		Code: 0,
 	}
 
-	switch resTask.Status {
+	status := strings.ToLower(strings.TrimSpace(resTask.Status))
+	switch status {
+	case "unknown":
+		taskResult.Status = model.TaskStatusQueued
+	case "submitted", "created":
+		taskResult.Status = model.TaskStatusSubmitted
 	case "queued", "pending":
 		taskResult.Status = model.TaskStatusQueued
 	case "processing", "in_progress":
