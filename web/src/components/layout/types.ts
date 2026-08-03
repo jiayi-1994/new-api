@@ -34,6 +34,11 @@ type BaseNavItem = {
    * `useSidebarView`). Route-level guards still enforce access independently.
    */
   requiredRole?: number
+  /**
+   * Marks `url` as an absolute address outside the console. External items are
+   * rendered as plain anchors opened in a new tab instead of router links.
+   */
+  external?: boolean
 }
 
 /**

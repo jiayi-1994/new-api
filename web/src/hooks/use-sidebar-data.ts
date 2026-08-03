@@ -29,6 +29,7 @@ import {
   Radio,
   ServerCog,
   Settings,
+  ShoppingCart,
   Ticket,
   User,
   Users,
@@ -36,7 +37,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { type SidebarData } from '@/components/layout/types'
+import { type NavLink, type SidebarData } from '@/components/layout/types'
+import { useStatus } from '@/hooks/use-status'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -47,6 +49,21 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const { status } = useStatus()
+
+  // External shop entry, gated by the SHOP_LINK_ENABLED / SHOP_LINK_URL
+  // environment variables and surfaced through /api/status.
+  const shopLinkUrl =
+    typeof status?.shop_link_url === 'string' ? status.shop_link_url : ''
+  const shopLink: NavLink | null =
+    status?.shop_link_enabled === true && shopLinkUrl !== ''
+      ? {
+          title: t('Purchase Credits'),
+          url: shopLinkUrl,
+          icon: ShoppingCart,
+          external: true,
+        }
+      : null
 
   return {
     navGroups: [
@@ -108,6 +125,7 @@ export function useSidebarData(): SidebarData {
             url: '/wallet',
             icon: Wallet,
           },
+          ...(shopLink ? [shopLink] : []),
           {
             title: t('Profile'),
             url: '/profile',

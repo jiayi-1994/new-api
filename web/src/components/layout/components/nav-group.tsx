@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useLocation } from '@tanstack/react-router'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, ExternalLink } from 'lucide-react'
 import { type ReactNode, useState, useEffect } from 'react'
 
 import { Badge } from '@/components/ui/badge'
@@ -122,6 +122,30 @@ function NavBadge({ children }: { children: ReactNode }) {
  */
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
   const { setOpenMobile } = useSidebar()
+
+  if (item.external) {
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          tooltip={item.title}
+          render={
+            <a
+              href={item.url as string}
+              target='_blank'
+              rel='noopener noreferrer'
+              onClick={() => setOpenMobile(false)}
+            />
+          }
+        >
+          {item.icon && <item.icon className='shrink-0' />}
+          <span className='min-w-0 flex-1 truncate'>{item.title}</span>
+          {item.badge && <NavBadge>{item.badge}</NavBadge>}
+          <ExternalLink className='ms-auto size-4 shrink-0 opacity-70' />
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    )
+  }
+
   return (
     <SidebarMenuItem>
       <SidebarMenuButton

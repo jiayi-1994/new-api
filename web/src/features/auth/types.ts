@@ -134,6 +134,8 @@ export interface SystemStatus {
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
+    shop_link_enabled?: boolean
+    shop_link_url?: string
     [key: string]: unknown
   }
   // Allow direct access to common properties
