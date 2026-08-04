@@ -15,5 +15,5 @@ var (
 // 必须在 godotenv 加载 .env 之后调用，否则 .env 中的取值不会生效。
 func InitShopLinkSetting() {
 	ShopLinkEnabled = common.GetEnvOrDefaultBool("SHOP_LINK_ENABLED", false)
-	ShopLinkUrl = common.GetEnvOrDefaultString("SHOP_LINK_URL", "https://pay.ldxp.cn/shop/FWJQYF6M")
+	ShopLinkUrl = common.GetEnvOrDefaultString("SHOP_LINK_URL", "https://pay.ldxp.cn/shop/FWJQYF6M/klxgc9")
 }
