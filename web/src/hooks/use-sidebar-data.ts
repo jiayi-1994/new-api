@@ -22,6 +22,7 @@ import {
   CreditCard,
   FileText,
   FlaskConical,
+  InfinityIcon,
   Key,
   LayoutDashboard,
   ListTodo,
@@ -37,7 +38,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { type NavLink, type SidebarData } from '@/components/layout/types'
+import type { NavLink, SidebarData } from '@/components/layout/types'
 import { useStatus } from '@/hooks/use-status'
 import { ROLE } from '@/lib/roles'
 
@@ -75,6 +76,13 @@ export function useSidebarData(): SidebarData {
             title: t('Playground'),
             url: '/playground',
             icon: FlaskConical,
+          },
+          {
+            title: t('Infinite Canvas'),
+            url: 'https://canvas.xjy.de5.net/',
+            icon: InfinityIcon,
+            external: true,
+            configUrls: ['/playground'],
           },
           {
             title: t('Chat'),
