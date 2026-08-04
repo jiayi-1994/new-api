@@ -31,8 +31,10 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
+// eslint-disable-next-line import/no-cycle -- SearchProvider owns and mounts this dialog.
 import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
+import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 import { useSidebarData } from '@/hooks/use-sidebar-data'
 
 import { getNavGroupsForPath } from './layout/lib/sidebar-view-registry'
@@ -45,10 +47,11 @@ export function CommandMenu() {
   const { open, setOpen } = useSearch()
   const { pathname } = useLocation()
   const sidebarData = useSidebarData()
+  const filteredRootNavGroups = useSidebarConfig(sidebarData.navGroups)
 
   // Use the active nested sidebar view's nav groups when one matches
   // the current URL; otherwise fall back to the root navigation.
-  const navGroups = getNavGroupsForPath(pathname, t) ?? sidebarData.navGroups
+  const navGroups = getNavGroupsForPath(pathname, t) ?? filteredRootNavGroups
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {
@@ -68,9 +71,10 @@ export function CommandMenu() {
             {navGroups.map((group) => (
               <CommandGroup key={group.id || group.title} heading={group.title}>
                 {group.items.map((navItem, i) => {
-                  if (navItem.url)
+                  if (navItem.url) {
                     return (
                       <CommandItem
+                        // eslint-disable-next-line react/no-array-index-key -- Existing items may share URLs.
                         key={`${navItem.url}-${i}`}
                         value={navItem.title}
                         onSelect={() => {
@@ -93,9 +97,11 @@ export function CommandMenu() {
                         {navItem.title}
                       </CommandItem>
                     )
+                  }
 
                   return navItem.items?.map((subItem, i) => (
                     <CommandItem
+                      // eslint-disable-next-line react/no-array-index-key -- Existing items may share URLs.
                       key={`${navItem.title}-${subItem.url}-${i}`}
                       value={`${navItem.title}-${subItem.url}`}
                       onSelect={() => {
