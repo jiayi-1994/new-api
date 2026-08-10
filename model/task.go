@@ -166,6 +166,7 @@ type SyncTaskQueryParams struct {
 	Platform       constant.TaskPlatform
 	ChannelID      string
 	TaskID         string
+	TaskRecordID   int64
 	UserID         string
 	Action         string
 	Status         string
@@ -223,6 +224,9 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
 	}
+	if queryParams.TaskRecordID > 0 {
+		query = query.Where("id = ?", queryParams.TaskRecordID)
+	}
 	if queryParams.Action != "" {
 		query = query.Where("action = ?", queryParams.Action)
 	}
@@ -271,6 +275,9 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
+	}
+	if queryParams.TaskRecordID > 0 {
+		query = query.Where("id = ?", queryParams.TaskRecordID)
 	}
 	if queryParams.Action != "" {
 		query = query.Where("action = ?", queryParams.Action)
@@ -347,6 +354,20 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 		return nil, false, err
 	}
 	return task, exist, err
+}
+
+func GetByTaskRecordID(userId int, taskRecordID int64) (*Task, bool, error) {
+	if taskRecordID <= 0 {
+		return nil, false, nil
+	}
+	var task *Task
+	err := DB.Where("user_id = ? and id = ?", userId, taskRecordID).
+		First(&task).Error
+	exist, err := RecordExist(err)
+	if err != nil {
+		return nil, false, err
+	}
+	return task, exist, nil
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
@@ -466,6 +487,9 @@ func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
 	}
+	if queryParams.TaskRecordID > 0 {
+		query = query.Where("id = ?", queryParams.TaskRecordID)
+	}
 	if queryParams.Action != "" {
 		query = query.Where("action = ?", queryParams.Action)
 	}
@@ -488,6 +512,9 @@ func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
 	query := DB.Model(&Task{}).Where("user_id = ?", userId)
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
+	}
+	if queryParams.TaskRecordID > 0 {
+		query = query.Where("id = ?", queryParams.TaskRecordID)
 	}
 	if queryParams.Action != "" {
 		query = query.Where("action = ?", queryParams.Action)

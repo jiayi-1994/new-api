@@ -1,8 +1,14 @@
 package service
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,29 +22,42 @@ const (
 	videoContentTokenIssuer   = "new-api-video-content"
 	videoContentTokenAudience = "new-api-video-content"
 	videoContentTokenVersion  = 1
+	videoContentPublicIDUse   = "video_content_public_id"
 )
 
+var gatewayPublicTaskIDPattern = regexp.MustCompile(`^task_[A-Za-z0-9]{32}$`)
+
 type videoContentTokenClaims struct {
-	TokenUse    string `json:"token_use"`
-	TaskID      string `json:"task_id"`
-	OwnerUserID int    `json:"owner_user_id"`
-	Version     int    `json:"version"`
+	TokenUse     string `json:"token_use"`
+	TaskID       string `json:"task_id"`
+	OwnerUserID  int    `json:"owner_user_id"`
+	TaskRecordID int64  `json:"task_record_id"`
+	Version      int    `json:"version"`
 	jwt.RegisteredClaims
 }
 
+// VideoContentGrant identifies the task record and owner authorized by a video capability.
+type VideoContentGrant struct {
+	OwnerUserID  int
+	TaskRecordID int64
+	ExpiresAt    int64
+}
+
 // IssueVideoContentToken creates a capability for one completed public video task.
-func IssueVideoContentToken(taskID string, ownerUserID int) (token string, expiresAt int64, err error) {
-	if strings.TrimSpace(taskID) == "" || ownerUserID <= 0 {
+func IssueVideoContentToken(publicTaskID string, ownerUserID int, taskRecordID int64) (token string, expiresAt int64, err error) {
+	publicTaskID = strings.TrimSpace(publicTaskID)
+	if publicTaskID == "" || ownerUserID <= 0 || taskRecordID <= 0 {
 		return "", 0, ErrAuthTokenInvalid
 	}
 
 	now := time.Now()
 	expires := now.Add(VideoContentTokenTTL)
 	claims := videoContentTokenClaims{
-		TokenUse:    videoContentTokenUse,
-		TaskID:      taskID,
-		OwnerUserID: ownerUserID,
-		Version:     videoContentTokenVersion,
+		TokenUse:     videoContentTokenUse,
+		TaskID:       publicTaskID,
+		OwnerUserID:  ownerUserID,
+		TaskRecordID: taskRecordID,
+		Version:      videoContentTokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    videoContentTokenIssuer,
 			Audience:  jwt.ClaimStrings{videoContentTokenAudience},
@@ -57,10 +76,11 @@ func IssueVideoContentToken(taskID string, ownerUserID int) (token string, expir
 }
 
 // ParseVideoContentToken validates a video capability for its route task ID.
-func ParseVideoContentToken(rawToken, expectedTaskID string) (ownerUserID int, expiresAt int64, err error) {
+func ParseVideoContentToken(rawToken, expectedPublicTaskID string) (VideoContentGrant, error) {
 	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" || strings.TrimSpace(expectedTaskID) == "" {
-		return 0, 0, ErrAuthTokenInvalid
+	expectedPublicTaskID = strings.TrimSpace(expectedPublicTaskID)
+	if rawToken == "" || expectedPublicTaskID == "" {
+		return VideoContentGrant{}, ErrAuthTokenInvalid
 	}
 
 	claims := &videoContentTokenClaims{}
@@ -79,21 +99,62 @@ func ParseVideoContentToken(rawToken, expectedTaskID string) (ownerUserID int, e
 	)
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
-			return 0, 0, ErrAuthTokenExpired
+			return VideoContentGrant{}, ErrAuthTokenExpired
 		}
-		return 0, 0, fmt.Errorf("%w: %v", ErrAuthTokenInvalid, err)
+		return VideoContentGrant{}, fmt.Errorf("%w: %v", ErrAuthTokenInvalid, err)
 	}
 	if !parsed.Valid ||
 		claims.TokenUse != videoContentTokenUse ||
-		claims.TaskID != expectedTaskID ||
+		claims.TaskID != expectedPublicTaskID ||
 		claims.OwnerUserID <= 0 ||
+		claims.TaskRecordID <= 0 ||
 		claims.Version != videoContentTokenVersion ||
 		claims.ID == "" ||
 		claims.IssuedAt == nil ||
 		claims.NotBefore == nil ||
 		claims.ExpiresAt == nil {
-		return 0, 0, ErrAuthTokenInvalid
+		return VideoContentGrant{}, ErrAuthTokenInvalid
 	}
 
-	return claims.OwnerUserID, claims.ExpiresAt.Unix(), nil
+	return VideoContentGrant{
+		OwnerUserID:  claims.OwnerUserID,
+		TaskRecordID: claims.TaskRecordID,
+		ExpiresAt:    claims.ExpiresAt.Unix(),
+	}, nil
+}
+
+// VideoContentPublicTaskID returns a stable, non-sensitive task ID for video capabilities.
+func VideoContentPublicTaskID(taskRecordID int64, storedTaskID string, hasSeparateUpstreamID bool) (string, error) {
+	if taskRecordID <= 0 {
+		return "", ErrAuthTokenInvalid
+	}
+	if hasSeparateUpstreamID && gatewayPublicTaskIDPattern.MatchString(storedTaskID) {
+		return storedTaskID, nil
+	}
+
+	return videoContentPublicTaskAlias(taskRecordID), nil
+}
+
+// ParseVideoContentPublicTaskID verifies a derived task alias and returns its task record ID.
+func ParseVideoContentPublicTaskID(publicTaskID string) (int64, bool) {
+	if len(publicTaskID) != len("task_")+32 || !strings.HasPrefix(publicTaskID, "task_") {
+		return 0, false
+	}
+	payload := publicTaskID[len("task_"):]
+	recordIDValue, err := strconv.ParseUint(payload[:16], 16, 64)
+	if err != nil || recordIDValue == 0 || recordIDValue > math.MaxInt64 {
+		return 0, false
+	}
+	recordID := int64(recordIDValue)
+	if !hmac.Equal([]byte(publicTaskID), []byte(videoContentPublicTaskAlias(recordID))) {
+		return 0, false
+	}
+	return recordID, true
+}
+
+func videoContentPublicTaskAlias(taskRecordID int64) string {
+	recordIDHex := fmt.Sprintf("%016x", taskRecordID)
+	mac := hmac.New(sha256.New, authSigningKey(videoContentPublicIDUse))
+	_, _ = mac.Write([]byte("task-record:" + recordIDHex))
+	return "task_" + recordIDHex + hex.EncodeToString(mac.Sum(nil)[:8])
 }
