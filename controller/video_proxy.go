@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 var videoProxyResponseHeaders = [...]string{
@@ -76,6 +77,30 @@ func videoContentFilename(contentType string) string {
 	default:
 		return "video.bin"
 	}
+}
+
+// videoURLFromTaskData 从上游任务 JSON 中提取视频直链。
+// 形如 /v1/videos/{id}/content 的候选是需要鉴权的代理端点（链式 new-api 上游
+// 或自身代理地址），不能当直链匿名抓取，跳过后由调用方走上游 /content。
+func videoURLFromTaskData(task *model.Task) string {
+	if len(task.Data) == 0 {
+		return ""
+	}
+	for _, path := range []string{"url", "video_url", "metadata.url", "metadata.origin_video_url"} {
+		candidate := strings.TrimSpace(gjson.GetBytes(task.Data, path).String())
+		if candidate == "" {
+			continue
+		}
+		parsed, err := url.Parse(candidate)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			continue
+		}
+		if strings.Contains(parsed.Path, "/v1/videos/") && strings.HasSuffix(parsed.Path, "/content") {
+			continue
+		}
+		return candidate
+	}
+	return ""
 }
 
 // videoProxyError returns a standardized OpenAI-style error response.
@@ -185,8 +210,14 @@ func VideoProxy(c *gin.Context) {
 			return
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
-		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
-		req.Header.Set("Authorization", "Bearer "+channel.Key)
+		// 部分 OpenAI 兼容中转不实现 /content，而是在任务 JSON 里直接返回视频直链
+		//（如 R2 预签名地址）。有直链时直接代理直链，且不携带渠道密钥；
+		// 否则按官方语义走上游 /content。
+		videoURL = videoURLFromTaskData(task)
+		if videoURL == "" {
+			videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
+			req.Header.Set("Authorization", "Bearer "+channel.Key)
+		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()

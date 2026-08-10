@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -273,6 +274,72 @@ func TestVideoProxyRejectsDataURLActiveContentGenerically(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, response.Code)
 	assert.Contains(t, response.Body.String(), "Failed to fetch video content")
 	assert.NotContains(t, response.Body.String(), "script")
+}
+
+func TestVideoProxyOpenAICompatibleUsesDirectURLFromTaskData(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret"}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"completed","metadata":{"url":"` + upstream.URL + `/videos/vid_1.mp4"}}`),
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Empty(t, gotAuth, "direct URL fetch must not carry the channel key")
+}
+
+func TestVideoProxyOpenAISkipsProxyStyleURLAndUsesUpstreamContent(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	var gotAuth, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	baseURL := upstream.URL
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret", BaseURL: &baseURL}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"completed","metadata":{"url":"http://chained-upstream/v1/videos/task_abc/content"}}`),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "vid_up",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Equal(t, "Bearer channel-secret", gotAuth)
+	assert.Equal(t, "/v1/videos/vid_up/content", gotPath)
 }
 
 func TestVideoProxyCapabilityUsesOwnerScopedTaskRecordID(t *testing.T) {
