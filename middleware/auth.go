@@ -272,6 +272,44 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	}
 }
 
+// VideoContentAuth accepts the existing Authorization flows or a capability
+// bound to the public task ID. Capability identities are always the task's
+// signed owner and do not grant an administrator-wide bypass.
+func VideoContentAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if len(c.Request.Header.Values("Authorization")) > 0 || len(c.Request.Header.Values("mj-api-secret")) > 0 {
+			TokenOrUserAuth()(c)
+			return
+		}
+
+		videoTokens, exists := c.Request.URL.Query()["video_token"]
+		if !exists || len(videoTokens) != 1 || strings.TrimSpace(videoTokens[0]) == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"message": "Unauthorized",
+					"type":    "authentication_error",
+				},
+			})
+			return
+		}
+
+		grant, err := service.ParseVideoContentToken(videoTokens[0], c.Param("task_id"))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"message": "Unauthorized",
+					"type":    "authentication_error",
+				},
+			})
+			return
+		}
+
+		c.Set("id", grant.OwnerUserID)
+		c.Set("video_task_record_id", grant.TaskRecordID)
+		c.Next()
+	}
+}
+
 // TokenAuthReadOnly 宽松版本的令牌认证中间件，用于只读查询接口。
 // 只验证令牌 key 是否存在，不检查令牌状态、过期时间和额度。
 // 即使令牌已过期、已耗尽或已禁用，也允许访问。
