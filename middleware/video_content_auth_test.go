@@ -51,8 +51,9 @@ func TestVideoContentAuthAcceptsCapabilityOwner(t *testing.T) {
 	router := gin.New()
 	router.GET("/v1/videos/:task_id/content", VideoContentAuth(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"id":             c.GetInt("id"),
-			"task_record_id": c.GetInt64("video_task_record_id"),
+			"id":                  c.GetInt("id"),
+			"task_record_id":      c.GetInt64("video_task_record_id"),
+			"video_task_owner_id": c.GetInt("video_task_owner_id"),
 		})
 	})
 	request := httptest.NewRequest(http.MethodGet, "/v1/videos/task-public-1/content?video_token="+token, nil)
@@ -62,8 +63,9 @@ func TestVideoContentAuthAcceptsCapabilityOwner(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, response.Code)
 	var body struct {
-		ID           int   `json:"id"`
-		TaskRecordID int64 `json:"task_record_id"`
+		ID               int   `json:"id"`
+		TaskRecordID     int64 `json:"task_record_id"`
+		VideoTaskOwnerID int   `json:"video_task_owner_id"`
 	}
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 	assert.Equal(t, 42, body.ID)
@@ -172,8 +174,9 @@ func TestVideoContentAuthAuthorizationTakesPrecedence(t *testing.T) {
 	router := gin.New()
 	router.GET("/v1/videos/:task_id/content", VideoContentAuth(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"id":             c.GetInt("id"),
-			"task_record_id": c.GetInt64("video_task_record_id"),
+			"id":                  c.GetInt("id"),
+			"task_record_id":      c.GetInt64("video_task_record_id"),
+			"video_task_owner_id": c.GetInt("video_task_owner_id"),
 		})
 	})
 	request := httptest.NewRequest(http.MethodGet, "/v1/videos/task-public-1/content?video_token="+capability, nil)
@@ -184,13 +187,15 @@ func TestVideoContentAuthAuthorizationTakesPrecedence(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, response.Code)
 	var body struct {
-		ID           int   `json:"id"`
-		TaskRecordID int64 `json:"task_record_id"`
+		ID               int   `json:"id"`
+		TaskRecordID     int64 `json:"task_record_id"`
+		VideoTaskOwnerID int   `json:"video_task_owner_id"`
 	}
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 	assert.Equal(t, user.Id, body.ID)
 	assert.NotEqual(t, 777, body.ID)
-	assert.Zero(t, body.TaskRecordID)
+	assert.Equal(t, int64(99), body.TaskRecordID)
+	assert.Equal(t, 777, body.VideoTaskOwnerID)
 
 	emptyHeaderRequest := httptest.NewRequest(http.MethodGet, "/v1/videos/task-public-1/content?video_token="+capability, nil)
 	emptyHeaderRequest.Header["Authorization"] = []string{""}

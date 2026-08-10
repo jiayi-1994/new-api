@@ -278,23 +278,16 @@ func TokenOrUserAuth() func(c *gin.Context) {
 func VideoContentAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) > 0 || len(c.Request.Header.Values("mj-api-secret")) > 0 {
+			if grant, ok := videoContentGrant(c); ok {
+				c.Set("video_task_record_id", grant.TaskRecordID)
+				c.Set("video_task_owner_id", grant.OwnerUserID)
+			}
 			TokenOrUserAuth()(c)
 			return
 		}
 
-		videoTokens, exists := c.Request.URL.Query()["video_token"]
-		if !exists || len(videoTokens) != 1 || strings.TrimSpace(videoTokens[0]) == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{
-					"message": "Unauthorized",
-					"type":    "authentication_error",
-				},
-			})
-			return
-		}
-
-		grant, err := service.ParseVideoContentToken(videoTokens[0], c.Param("task_id"))
-		if err != nil {
+		grant, ok := videoContentGrant(c)
+		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": gin.H{
 					"message": "Unauthorized",
@@ -306,8 +299,18 @@ func VideoContentAuth() gin.HandlerFunc {
 
 		c.Set("id", grant.OwnerUserID)
 		c.Set("video_task_record_id", grant.TaskRecordID)
+		c.Set("video_task_owner_id", grant.OwnerUserID)
 		c.Next()
 	}
+}
+
+func videoContentGrant(c *gin.Context) (service.VideoContentGrant, bool) {
+	videoTokens, exists := c.Request.URL.Query()["video_token"]
+	if !exists || len(videoTokens) != 1 || strings.TrimSpace(videoTokens[0]) == "" {
+		return service.VideoContentGrant{}, false
+	}
+	grant, err := service.ParseVideoContentToken(videoTokens[0], c.Param("task_id"))
+	return grant, err == nil
 }
 
 // TokenAuthReadOnly 宽松版本的令牌认证中间件，用于只读查询接口。

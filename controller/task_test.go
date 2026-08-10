@@ -122,11 +122,34 @@ func TestTasksToDtoClearsUnsafeFailureReasons(t *testing.T) {
 		"upstream returned https://provider.example.com/error?signature=secret",
 		"download failed from //storage.example.com/video.mp4",
 		"data:video/mp4;base64,secret",
+		"upload failed at oss-cn-hangzhou.aliyuncs.com/object",
+		"request to 192.0.2.4:443 failed",
 		"upload failed at oss-cn-hangzhou.aliyuncs.com",
 		"request to 192.0.2.4 failed",
+		"storage.example.com",
+		"192.0.2.4",
 		"provider returned X-Amz-Signature=secret",
 		"provider returned Signature=secret",
 		"provider returned OSSAccessKeyId=secret",
+		"provider returned api_key=secret",
+		"provider returned access_token=secret",
+		"provider returned Authorization: Bearer sk-secret",
+		"provider returned X-Api-Key=secret",
+		"provider returned X-Goog-Api-Key=secret",
+		"Incorrect X-Api-Key provided: sk-secret",
+		"upstream rejected Bearer sk-secret",
+		"Incorrect API key provided: sk-live-secret",
+		"download failed at cdn.download",
+		"request to storage.video failed",
+		"lookup storage.video: no such host",
+		"could not resolve cdn.download",
+		"certificate is valid for public.example, not cdn.download",
+		"TLS handshake with storage.video failed",
+		"hostname mismatch: storage.video",
+		"TLS handshake with storage.corp failed",
+		"hostname mismatch: storage.lan",
+		"dial tcp [2001:db8::1]:443: connect: connection refused",
+		"model foo.bar unavailable",
 	}
 	tasks := make([]*model.Task, 0, len(unsafeReasons))
 	for i, reason := range unsafeReasons {
@@ -156,6 +179,11 @@ func TestTasksToDtoPreservesSafeFailureReasons(t *testing.T) {
 		"request signature is invalid",
 		"worker emitted // as a delimiter",
 		"X-Amz-Algorithm is unavailable",
+		"failed to parse config.json",
+		"provider protocol v1.2 is unsupported",
+		"API key authentication failed",
+		"access token expired",
+		"client secret is not configured",
 	}
 	tasks := make([]*model.Task, 0, len(safeReasons))
 	for i, reason := range safeReasons {
@@ -174,6 +202,109 @@ func TestTasksToDtoPreservesSafeFailureReasons(t *testing.T) {
 	for i, result := range results {
 		assert.Equal(t, safeReasons[i], result.FailReason)
 	}
+}
+
+func TestTasksToDtoClearsFailuresLeakingUpstreamTaskID(t *testing.T) {
+	tasks := []*model.Task{
+		{
+			ID:         2401,
+			TaskID:     "legacy-upstream-task-id",
+			Platform:   "video-provider",
+			Status:     model.TaskStatusFailure,
+			FailReason: "provider rejected legacy-upstream-task-id",
+		},
+		{
+			ID:          2402,
+			TaskID:      "task_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+			Platform:    "video-provider",
+			Status:      model.TaskStatusFailure,
+			FailReason:  "provider rejected new-upstream-operation-id",
+			PrivateData: model.TaskPrivateData{UpstreamTaskID: "new-upstream-operation-id"},
+		},
+		{
+			ID:         2403,
+			Platform:   "video-provider",
+			Status:     model.TaskStatusFailure,
+			FailReason: "provider rejected the prompt",
+		},
+		{
+			ID:         2404,
+			TaskID:     "whitespace-legacy-upstream-id",
+			Platform:   "video-provider",
+			Status:     model.TaskStatusFailure,
+			FailReason: "provider rejected whitespace-legacy-upstream-id",
+			PrivateData: model.TaskPrivateData{
+				UpstreamTaskID: " \t",
+			},
+		},
+	}
+
+	results, err := tasksToDto(tasks, false)
+	require.NoError(t, err)
+	require.Len(t, results, len(tasks))
+	assert.Empty(t, results[0].FailReason)
+	assert.Empty(t, results[1].FailReason)
+	assert.Equal(t, "provider rejected the prompt", results[2].FailReason)
+	assert.Empty(t, results[3].FailReason)
+}
+
+func TestTasksToDtoClearsProviderCredentialFailureReasons(t *testing.T) {
+	unsafeReasons := []string{
+		"download gs://bucket/object",
+		"download s3://bucket/object",
+		"download r2://bucket/object",
+		"provider returned X-Goog-Signature=secret",
+		"provider returned X-Amz-Credential=secret",
+		"provider returned X-Oss-Signature=secret",
+		"provider returned X-Ms-Signature=secret",
+		"provider returned OSSAccessKeyId=secret",
+		"provider returned GoogleAccessId=secret",
+		"provider returned AWSAccessKeyId=secret",
+		"provider returned Credential=secret",
+		"provider returned sig=secret",
+	}
+	tasks := make([]*model.Task, 0, len(unsafeReasons))
+	for i, reason := range unsafeReasons {
+		tasks = append(tasks, &model.Task{
+			ID:         int64(i + 2450),
+			TaskID:     "legacy-upstream-task",
+			Platform:   "video-provider",
+			Status:     model.TaskStatusFailure,
+			FailReason: reason,
+		})
+	}
+
+	results, err := tasksToDto(tasks, false)
+	require.NoError(t, err)
+	for _, result := range results {
+		assert.Empty(t, result.FailReason)
+	}
+}
+
+func TestTasksToDtoExposesOnlyPublicNonSunoProperties(t *testing.T) {
+	const upstreamModel = "provider-internal-model"
+	task := &model.Task{
+		ID:       2501,
+		TaskID:   "legacy-upstream-task",
+		Platform: "video-provider",
+		Status:   model.TaskStatusInProgress,
+		Properties: model.Properties{
+			Input:             "safe user input",
+			OriginModelName:   "public-video-model",
+			UpstreamModelName: upstreamModel,
+		},
+	}
+
+	results, err := tasksToDto([]*model.Task{task}, false)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	serialized, err := common.Marshal(results[0])
+	require.NoError(t, err)
+	assert.NotContains(t, string(serialized), "upstream_model_name")
+	assert.NotContains(t, string(serialized), upstreamModel)
+	assert.Contains(t, string(serialized), "safe user input")
+	assert.Contains(t, string(serialized), "public-video-model")
 }
 
 func TestTasksToDtoRedactsSchemeRelativeFailureURLs(t *testing.T) {

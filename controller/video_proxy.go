@@ -58,9 +58,24 @@ func copyVideoProxyHeaders(destination, source http.Header) error {
 		}
 	}
 	destination.Set("Content-Type", contentType)
-	destination.Set("Content-Disposition", `attachment; filename="video.mp4"`)
+	destination.Set("Content-Disposition", `attachment; filename="`+videoContentFilename(contentType)+`"`)
 	destination.Set("X-Content-Type-Options", "nosniff")
 	return nil
+}
+
+func videoContentFilename(contentType string) string {
+	switch contentType {
+	case "video/mp4":
+		return "video.mp4"
+	case "video/webm":
+		return "video.webm"
+	case "video/quicktime":
+		return "video.mov"
+	case "video/x-matroska":
+		return "video.mkv"
+	default:
+		return "video.bin"
+	}
 }
 
 // videoProxyError returns a standardized OpenAI-style error response.
@@ -85,8 +100,15 @@ func VideoProxy(c *gin.Context) {
 	var exists bool
 	var err error
 	taskRecordID := c.GetInt64("video_task_record_id")
+	taskOwnerID := c.GetInt("video_task_owner_id")
+	if taskOwnerID > 0 && taskOwnerID != userID {
+		taskRecordID = 0
+	}
 	if taskRecordID > 0 {
-		task, exists, err = model.GetByTaskRecordID(userID, taskRecordID)
+		if taskOwnerID <= 0 {
+			taskOwnerID = userID
+		}
+		task, exists, err = model.GetByTaskRecordID(taskOwnerID, taskRecordID)
 	} else {
 		task, exists, err = model.GetByTaskId(userID, taskID)
 	}
@@ -265,7 +287,7 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	}
 
 	c.Writer.Header().Set("Content-Type", mediaType)
-	c.Writer.Header().Set("Content-Disposition", `attachment; filename="video.mp4"`)
+	c.Writer.Header().Set("Content-Disposition", `attachment; filename="`+videoContentFilename(mediaType)+`"`)
 	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.Header().Set("Cache-Control", "private, no-store")
 	c.Writer.WriteHeader(http.StatusOK)

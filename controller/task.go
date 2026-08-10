@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/publicsuffix"
 )
 
 func GetAllTask(c *gin.Context) {
@@ -137,8 +138,16 @@ func tasksToDto(tasks []*model.Task, fillUser bool) ([]*dto.TaskDto, error) {
 			projection.URL = "/v1/videos/" + url.PathEscape(publicTaskID) + "/content?" + query.Encode()
 			result[i].ResultURL = projection.URL
 		}
-		if task.Status == model.TaskStatusFailure && !isSensitiveTaskFailure(task.FailReason) {
+		upstreamTaskID := task.GetUpstreamTaskID()
+		if strings.TrimSpace(upstreamTaskID) == "" {
+			upstreamTaskID = task.TaskID
+		}
+		if task.Status == model.TaskStatusFailure && !isSensitiveTaskFailure(task.FailReason, upstreamTaskID) {
 			result[i].FailReason = task.FailReason
+		}
+		result[i].Properties = model.Properties{
+			Input:           task.Properties.Input,
+			OriginModelName: task.Properties.OriginModelName,
 		}
 		data, err := common.Marshal(projection)
 		if err != nil {
@@ -163,31 +172,48 @@ func taskVideoProgress(progress string) int {
 	return value
 }
 
-var taskFailureHostPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_-])(?:[[:alnum:]-]+\.)+[a-z]{2,}(?::[0-9]{1,5})?(?:[/?#]|$)|\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
-var taskFailureCredentialPattern = regexp.MustCompile(`(?i)\b(?:signature|ossaccesskeyid|x-(?:amz|oss)-[a-z0-9-]+)\s*=`)
+var taskFailureSchemePattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bdata:[^[:space:]]+`)
+var taskFailureHostWithLocationPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})(?::[0-9]{1,5}|[/?#])`)
+var taskFailureStandaloneHostPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+|(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})(?::[0-9]{1,5})?$`)
+var taskFailureIPv6HostPattern = regexp.MustCompile(`(?i)\[[0-9a-f:.]+(?:%[a-z0-9._-]+)?\](?::[0-9]{1,5})?`)
+var taskFailureDomainCandidatePattern = regexp.MustCompile(`(?i)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z](?:[a-z0-9-]*[a-z0-9])?`)
+var taskFailureContextHostPattern = regexp.MustCompile(`(?i)\b(?:at|from|to|via|with|host|endpoint|upstream|provider|lookup|resolve|resolving|not|dial(?:\s+tcp)?|hostname(?:\s+mismatch)?\s*:?|certificate(?:\s+(?:for|is\s+valid\s+for))?)\s+(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:$|[^[:alnum:]_.-])`)
+var taskFailureCredentialPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_-])(?:x-(?:goog-)?api-key(?:\s+(?:provided|received|used|supplied|is|was))?|x-goog-signature|x-amz-[a-z0-9-]+|x-oss-[a-z0-9-]+|x-ms-[a-z0-9-]+|ossaccesskeyid|googleaccessid|awsaccesskeyid|(?:api[ _-]?key|access[ _-]?token|client[ _-]?secret|secret[ _-]?key)(?:\s+(?:provided|received|used|supplied|is|was))?|credential|signature|sig)\s*[:=]`)
+var taskFailureAuthorizationPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_-])authorization\s*[:=]\s*(?:bearer|basic)\s+[^[:space:]]+`)
+var taskFailureBearerPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_-])bearer\s+[^[:space:]]+`)
 var taskFailureSchemeRelativeURLPattern = regexp.MustCompile(`(?i)(?:^|\s)//(?:\[[0-9a-f:.]+\]|[a-z0-9][a-z0-9._-]*)(?::[0-9]{1,5})?(?:[/?#]|$)`)
 
-func isSensitiveTaskFailure(reason string) bool {
+func isSensitiveTaskFailure(reason, upstreamTaskID string) bool {
 	if strings.TrimSpace(reason) == "" {
 		return false
 	}
-	if common.MaskSensitiveInfo(reason) != reason {
+	upstreamTaskID = strings.TrimSpace(upstreamTaskID)
+	if upstreamTaskID != "" && strings.Contains(reason, upstreamTaskID) {
 		return true
 	}
-	if taskFailureCredentialPattern.MatchString(reason) {
+	if taskFailureCredentialPattern.MatchString(reason) ||
+		taskFailureAuthorizationPattern.MatchString(reason) ||
+		taskFailureBearerPattern.MatchString(reason) {
 		return true
 	}
 	if taskFailureSchemeRelativeURLPattern.MatchString(reason) {
 		return true
 	}
-
-	lowerReason := strings.ToLower(reason)
-	for _, marker := range []string{
-		"http://", "https://", "data:", "oss://", "amazonaws.com", "r2.",
-	} {
-		if strings.Contains(lowerReason, marker) {
+	for _, candidate := range taskFailureDomainCandidatePattern.FindAllString(reason, -1) {
+		if _, icann := publicsuffix.PublicSuffix(strings.ToLower(candidate)); icann {
+			return true
+		}
+		extension := candidate[strings.LastIndex(candidate, ".")+1:]
+		switch strings.ToLower(extension) {
+		case "cfg", "conf", "css", "csv", "gif", "go", "htm", "html", "ini", "java", "jpeg", "jpg", "js", "json", "jsx", "log", "md", "mkv", "mov", "mp4", "pdf", "png", "py", "rb", "rs", "sh", "sql", "toml", "ts", "tsx", "txt", "webm", "webp", "xml", "yaml", "yml":
+			continue
+		default:
 			return true
 		}
 	}
-	return taskFailureHostPattern.MatchString(reason)
+	return taskFailureSchemePattern.MatchString(reason) ||
+		taskFailureHostWithLocationPattern.MatchString(reason) ||
+		taskFailureIPv6HostPattern.MatchString(reason) ||
+		taskFailureContextHostPattern.MatchString(reason) ||
+		taskFailureStandaloneHostPattern.MatchString(strings.TrimSpace(reason))
 }

@@ -51,7 +51,25 @@ func TestCopyVideoProxyHeadersAllowsOnlyDeliveryMetadata(t *testing.T) {
 	assert.Empty(t, destination.Get("Set-Cookie"))
 	assert.Empty(t, destination.Get("X-Provider-Request"))
 	assert.Equal(t, "nosniff", destination.Get("X-Content-Type-Options"))
-	assert.Len(t, destination, 8)
+}
+
+func TestCopyVideoProxyHeadersUsesMIMEAppropriateDownloadName(t *testing.T) {
+	for _, testCase := range []struct {
+		contentType string
+		filename    string
+	}{
+		{contentType: "video/webm", filename: "video.webm"},
+		{contentType: "video/quicktime", filename: "video.mov"},
+		{contentType: "video/x-matroska", filename: "video.mkv"},
+		{contentType: "video/unknown", filename: "video.bin"},
+		{contentType: "application/octet-stream", filename: "video.bin"},
+	} {
+		t.Run(testCase.contentType, func(t *testing.T) {
+			destination := make(http.Header)
+			require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{testCase.contentType}}))
+			assert.Equal(t, `attachment; filename="`+testCase.filename+`"`, destination.Get("Content-Disposition"))
+		})
+	}
 }
 
 func TestCopyVideoProxyHeadersRejectsActiveContent(t *testing.T) {
@@ -75,7 +93,7 @@ func TestCopyVideoProxyHeadersDefaultsMissingContentType(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "application/octet-stream", destination.Get("Content-Type"))
-	assert.Equal(t, `attachment; filename="video.mp4"`, destination.Get("Content-Disposition"))
+	assert.Equal(t, `attachment; filename="video.bin"`, destination.Get("Content-Disposition"))
 	assert.Equal(t, "nosniff", destination.Get("X-Content-Type-Options"))
 }
 
@@ -105,6 +123,17 @@ func TestWriteVideoDataURLRejectsActiveContent(t *testing.T) {
 	assert.Error(t, err)
 	assert.Empty(t, response.Header())
 	assert.Empty(t, response.Body.String())
+}
+
+func TestWriteVideoDataURLUsesMIMEAppropriateDownloadName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+
+	err := writeVideoDataURL(context, "data:video/quicktime;base64,aGVsbG8=")
+
+	require.NoError(t, err)
+	assert.Equal(t, `attachment; filename="video.mov"`, response.Header().Get("Content-Disposition"))
 }
 
 func setupVideoProxyTest(t *testing.T) {
@@ -260,6 +289,27 @@ func TestVideoProxyCapabilityUsesOwnerScopedTaskRecordID(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ownerResponse.Code)
 	assert.Equal(t, "hello", ownerResponse.Body.String())
 	assert.Equal(t, http.StatusNotFound, otherOwnerResponse.Code)
+}
+
+func TestVideoProxyCapabilityRecordDoesNotOverrideAuthenticatedOwner(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	createVideoProxyTask(t, 42, "data:video/mp4;base64,aGVsbG8=")
+	var task model.Task
+	require.NoError(t, model.DB.Where("user_id = ?", 42).First(&task).Error)
+
+	router := gin.New()
+	router.GET("/v1/videos/:task_id/content", func(c *gin.Context) {
+		c.Set("id", 7)
+		c.Set("video_task_record_id", task.ID)
+		c.Set("video_task_owner_id", 42)
+		c.Next()
+	}, VideoProxy)
+	request := httptest.NewRequest(http.MethodGet, "/v1/videos/task_safe_public_id/content", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusNotFound, response.Code)
 }
 
 func TestVideoContentRouteCapabilityEndToEnd(t *testing.T) {
