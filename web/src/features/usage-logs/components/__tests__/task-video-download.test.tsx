@@ -67,12 +67,25 @@ originalGlobalDescriptors.set(
 )
 reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 
-const { cleanup, render, screen } = await import('@testing-library/react')
+const { act, cleanup, fireEvent, render, screen } =
+  await import('@testing-library/react')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { flexRender, getCoreRowModel, useReactTable } =
   await import('@tanstack/react-table')
 const { useTaskLogsColumns } = await import('../columns/task-logs-columns')
+
+const userEvent = {
+  setup() {
+    return {
+      click: async (element: Element) => {
+        await act(async () => {
+          fireEvent.click(element)
+        })
+      },
+    }
+  },
+}
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
@@ -145,130 +158,102 @@ describe('task video download link', () => {
     domWindow.close()
   })
 
-  test('shows an administrator a secure new-tab link from data.url', () => {
-    const directUrl = 'https://cdn.example.com/generated.mp4?expires=123'
-    renderDetails(
-      {
-        ...baseTask,
-        result_url:
-          'http://localhost:3000/v1/videos/task_video_download/content',
-        data: {
-          url: directUrl,
-          video_url: 'https://fallback.example.com/video-url.mp4',
-          metadata: {
-            url: 'https://fallback.example.com/metadata-url.mp4',
-            origin_video_url:
-              'https://fallback.example.com/origin-video-url.mp4',
-          },
-        },
-      },
-      true
-    )
+  for (const isAdmin of [false, true]) {
+    test(`renders a signed relative proxy link for ${isAdmin ? 'administrator' : 'user'} tables`, () => {
+      const signedUrl =
+        '/v1/videos/task_video_download/content?video_token=signed-capability'
+      renderDetails({ ...baseTask, result_url: signedUrl }, isAdmin)
 
-    const link = screen.getByRole('link', { name: 'Click to preview video' })
-    assert.equal(link.getAttribute('href'), directUrl)
-    assert.equal(link.getAttribute('target'), '_blank')
-    assert.equal(link.getAttribute('rel'), 'noopener noreferrer')
-  })
-
-  test('prefers a direct external result_url over provider response URLs', () => {
-    renderDetails({
-      ...baseTask,
-      result_url: 'https://canonical.example.com/result.mp4',
-      data: { url: 'https://fallback.example.com/result.mp4' },
-    })
-
-    assert.equal(
-      screen
-        .getByRole('link', { name: 'Click to preview video' })
-        .getAttribute('href'),
-      'https://canonical.example.com/result.mp4'
-    )
-  })
-
-  const providerFallbacks: Array<{ name: string; data: unknown; url: string }> =
-    [
-      {
-        name: 'data.video_url',
-        data: {
-          url: '/v1/videos/task_video_download/content',
-          video_url: 'https://cdn.example.com/video-url.mp4',
-          metadata: {
-            url: 'https://cdn.example.com/lower-metadata-url.mp4',
-            origin_video_url:
-              'https://cdn.example.com/lower-origin-video-url.mp4',
-          },
-        },
-        url: 'https://cdn.example.com/video-url.mp4',
-      },
-      {
-        name: 'data.metadata.url',
-        data: {
-          url: 'http://localhost:3000/v1/videos/task_video_download/content',
-          video_url: '/v1/videos/task_video_download/content',
-          metadata: {
-            url: 'https://cdn.example.com/metadata-url.mp4',
-            origin_video_url:
-              'https://cdn.example.com/lower-origin-video-url.mp4',
-          },
-        },
-        url: 'https://cdn.example.com/metadata-url.mp4',
-      },
-      {
-        name: 'data.metadata.origin_video_url',
-        data: {
-          url: '/v1/videos/task_video_download/content',
-          video_url: '/v1/videos/task_video_download/content',
-          metadata: {
-            url: '/v1/videos/task_video_download/content',
-            origin_video_url: 'https://cdn.example.com/origin-video-url.mp4',
-          },
-        },
-        url: 'https://cdn.example.com/origin-video-url.mp4',
-      },
-    ]
-
-  for (const scenario of providerFallbacks) {
-    test(`uses ${scenario.name} when earlier candidates are absent or rejected`, () => {
-      renderDetails({
-        ...baseTask,
-        data: scenario.data,
-      })
-      assert.equal(
-        screen
-          .getByRole('link', { name: 'Click to preview video' })
-          .getAttribute('href'),
-        scenario.url
-      )
+      const link = screen.getByRole('link', { name: 'Click to preview video' })
+      assert.equal(link.getAttribute('href'), signedUrl)
+      assert.equal(link.getAttribute('target'), '_blank')
+      assert.equal(link.getAttribute('rel'), 'noopener noreferrer')
     })
   }
 
-  test('parses a JSON-string task data value', () => {
-    renderDetails({
-      ...baseTask,
-      data: JSON.stringify({ url: 'https://cdn.example.com/string-data.mp4' }),
-    })
+  test('accepts a signed same-origin absolute proxy link', () => {
+    const signedUrl =
+      'https://dashboard.example.com/v1/videos/task_video_download/content?video_token=signed-capability'
+    renderDetails({ ...baseTask, result_url: signedUrl })
+
     assert.equal(
       screen
         .getByRole('link', { name: 'Click to preview video' })
         .getAttribute('href'),
-      'https://cdn.example.com/string-data.mp4'
+      signedUrl
     )
   })
 
-  const rejectedProxyUrls = [
-    '/v1/videos/task_video_download/content',
-    'http://localhost:3000/v1/videos/task_video_download/content',
-    'https://api.example.com/v1/videos/task_video_download/content/?token=old',
+  const rejectedLinks: Array<{
+    name: string
+    result_url?: string
+    data?: unknown
+    fail_reason?: string
+  }> = [
+    {
+      name: 'an unsigned local link',
+      result_url: '/v1/videos/task_video_download/content',
+    },
+    {
+      name: 'a local link with an empty capability',
+      result_url: '/v1/videos/task_video_download/content?video_token=%20',
+    },
+    {
+      name: 'a local link with a trailing slash',
+      result_url:
+        '/v1/videos/task_video_download/content/?video_token=signed-capability',
+    },
+    {
+      name: 'a local link with duplicate capabilities',
+      result_url:
+        '/v1/videos/task_video_download/content?video_token=one&video_token=two',
+    },
+    {
+      name: 'a dot-normalized proxy path',
+      result_url:
+        '/v1/videos/task_video_download/./content?video_token=signed-capability',
+    },
+    {
+      name: 'a percent-encoded dot proxy path',
+      result_url:
+        '/v1/videos/task_video_download/%2e/content?video_token=signed-capability',
+    },
+    {
+      name: 'a link for another task',
+      result_url:
+        '/v1/videos/another-task/content?video_token=signed-capability',
+    },
+    {
+      name: 'a cross-origin lookalike proxy link',
+      result_url:
+        'https://dashboard.example.com.evil.test/v1/videos/task_video_download/content?video_token=signed-capability',
+    },
+    {
+      name: 'a direct provider result URL',
+      result_url:
+        'https://cdn.example.com/generated.mp4?video_token=signed-capability',
+    },
+    {
+      name: 'a malicious protocol URL',
+      result_url: 'javascript:window.alert(1)',
+    },
+    {
+      name: 'a data URL',
+      result_url: 'data:video/mp4;base64,AAAA',
+    },
+    {
+      name: 'a malformed result URL',
+      result_url: 'http://[invalid',
+    },
+    {
+      name: 'a URL-shaped failure reason',
+      fail_reason: 'https://cdn.example.com/legacy-video.mp4',
+    },
   ]
 
-  for (const resultUrl of rejectedProxyUrls) {
-    test(`does not render authenticated proxy URL ${resultUrl}`, () => {
-      renderDetails({
-        ...baseTask,
-        result_url: resultUrl,
-        data: '{malformed',
-      })
+  for (const scenario of rejectedLinks) {
+    test(`renders a dash for ${scenario.name}`, () => {
+      renderDetails({ ...baseTask, ...scenario, data: '{malformed' })
       assert.equal(
         screen.queryByRole('link', { name: 'Click to preview video' }),
         null
@@ -277,18 +262,71 @@ describe('task video download link', () => {
     })
   }
 
-  test('keeps failure details instead of rendering a video link', () => {
+  const providerFallbacks = [
+    {
+      name: 'data.url',
+      data: {
+        url: '/v1/videos/task_video_download/content?video_token=provider',
+      },
+    },
+    {
+      name: 'data.video_url',
+      data: { video_url: 'https://cdn.example.com/video.mp4' },
+    },
+    {
+      name: 'data.metadata.url',
+      data: { metadata: { url: 'https://cdn.example.com/metadata.mp4' } },
+    },
+    {
+      name: 'data.metadata.origin_video_url',
+      data: {
+        metadata: { origin_video_url: 'https://cdn.example.com/origin.mp4' },
+      },
+    },
+  ]
+
+  for (const scenario of providerFallbacks) {
+    test(`does not use ${scenario.name} as a video fallback`, () => {
+      renderDetails({ ...baseTask, data: scenario.data })
+      assert.equal(screen.queryByRole('link'), null)
+      assert.ok(screen.getByText('-'))
+    })
+  }
+
+  test('does not use provider fallback data when result_url is a JSON string', () => {
+    renderDetails({
+      ...baseTask,
+      data: JSON.stringify({
+        url: 'https://cdn.example.com/string-data.mp4',
+        video_url: 'https://cdn.example.com/video.mp4',
+      }),
+    })
+    assert.equal(screen.queryByRole('link'), null)
+    assert.ok(screen.getByText('-'))
+  })
+
+  test('opens failure details when the failure trigger is clicked', async () => {
     renderDetails({
       ...baseTask,
       status: 'FAILURE',
       fail_reason: 'Content review failed',
       data: { url: 'https://cdn.example.com/should-not-open.mp4' },
     })
+
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole('button', { name: 'Content review failed' })
+    )
+
     assert.equal(screen.queryByRole('link'), null)
-    assert.ok(screen.getByRole('button', { name: 'Content review failed' }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Fail Reason Details',
+    })
+    assert.ok(dialog.textContent?.includes('Content review failed'))
+    assert.ok(dialog.textContent?.includes('Error Message'))
   })
 
-  test('shows a dash for a successful video with no valid direct URL', () => {
+  test('shows a dash for a successful video with no valid signed local URL', () => {
     renderDetails({
       ...baseTask,
       result_url: 'javascript:alert(1)',
@@ -299,38 +337,26 @@ describe('task video download link', () => {
     assert.ok(screen.getByText('-'))
   })
 
-  test('uses a legacy absolute HTTP(S) fail_reason as the last fallback', () => {
-    const legacyUrl = 'https://legacy.example.com/video.mp4'
-    renderDetails({
-      ...baseTask,
-      result_url: '/v1/videos/task_video_download/content',
-      fail_reason: legacyUrl,
-      data: {
-        url: '/v1/videos/task_video_download/content',
-        video_url: '/v1/videos/task_video_download/content',
-        metadata: {
-          url: '/v1/videos/task_video_download/content',
-          origin_video_url: '/v1/videos/task_video_download/content',
-        },
-      },
-    })
-
-    assert.equal(
-      screen
-        .getByRole('link', { name: 'Click to preview video' })
-        .getAttribute('href'),
-      legacyUrl
-    )
-  })
-
-  test('preserves the Suno audio preview path', () => {
+  test('opens the Suno audio preview when its trigger is clicked', async () => {
     renderDetails({
       ...baseTask,
       platform: 'suno',
-      data: [{ audio_url: 'https://cdn.example.com/audio.mp3' }],
+      data: [
+        {
+          title: 'Generated Suno track',
+          audio_url: 'https://cdn.example.com/audio.mp3',
+        },
+      ],
     })
 
-    assert.ok(screen.getByRole('button', { name: 'Click to preview audio' }))
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole('button', { name: 'Click to preview audio' })
+    )
+
+    const dialog = await screen.findByRole('dialog', { name: 'Audio Preview' })
+    assert.ok(dialog.textContent?.includes('Generated Suno track'))
+    assert.ok(dialog.querySelector('audio'))
     assert.equal(screen.queryByRole('link'), null)
   })
 })

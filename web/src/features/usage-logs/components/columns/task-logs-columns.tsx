@@ -58,55 +58,38 @@ function parseTaskData(data: unknown): unknown[] {
   return Array.isArray(parsed) ? parsed : []
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
+function resolveTaskVideoUrl(log: TaskLog): string | null {
+  if (typeof log.result_url !== 'string') return null
 
-function isTaskVideoProxyUrl(candidate: string, taskId: string): boolean {
+  const candidate = log.result_url.trim()
+  if (!candidate) return null
+
   try {
     const url = new URL(candidate, window.location.origin)
-    const pathname = url.pathname.replace(/\/+$/, '')
-    const proxyPath = `/v1/videos/${encodeURIComponent(taskId)}/content`
-    return pathname === proxyPath
-  } catch {
-    return false
-  }
-}
+    const rawPathMatch = candidate.match(
+      /^(?:[a-z][a-z\d+.-]*:)?\/\/[^/?#]*(\/[^?#]*)?/i
+    )
+    const rawPath = rawPathMatch
+      ? (rawPathMatch[1] ?? '/')
+      : candidate.split(/[?#]/, 1)[0]
+    const pathname = url.pathname
+    const proxyPath = `/v1/videos/${encodeURIComponent(log.task_id)}/content`
+    const videoTokens = url.searchParams.getAll('video_token')
 
-function asDirectHttpUrl(value: unknown, taskId: string): string | null {
-  if (typeof value !== 'string') return null
+    if (
+      url.origin !== window.location.origin ||
+      rawPath !== proxyPath ||
+      pathname !== proxyPath ||
+      videoTokens.length !== 1 ||
+      !videoTokens[0]?.trim()
+    ) {
+      return null
+    }
 
-  const candidate = value.trim()
-  if (!candidate || isTaskVideoProxyUrl(candidate, taskId)) return null
-
-  try {
-    const url = new URL(candidate)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     return candidate
   } catch {
     return null
   }
-}
-
-function resolveTaskVideoUrl(log: TaskLog): string | null {
-  const parsedData = parseTaskDataValue(log.data)
-  const data = isRecord(parsedData) ? parsedData : undefined
-  const metadata = isRecord(data?.metadata) ? data.metadata : undefined
-  const candidates = [
-    log.result_url,
-    data?.url,
-    data?.video_url,
-    metadata?.url,
-    metadata?.origin_video_url,
-    log.fail_reason,
-  ]
-
-  for (const candidate of candidates) {
-    const url = asDirectHttpUrl(candidate, log.task_id)
-    if (url) return url
-  }
-
-  return null
 }
 
 function AudioPreviewCell({ log }: { log: TaskLog }) {
