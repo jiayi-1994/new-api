@@ -144,7 +144,15 @@ describe('task video download link', () => {
         ...baseTask,
         result_url:
           'http://localhost:3000/v1/videos/task_video_download/content',
-        data: { url: directUrl },
+        data: {
+          url: directUrl,
+          video_url: 'https://fallback.example.com/video-url.mp4',
+          metadata: {
+            url: 'https://fallback.example.com/metadata-url.mp4',
+            origin_video_url:
+              'https://fallback.example.com/origin-video-url.mp4',
+          },
+        },
       },
       true
     )
@@ -176,18 +184,37 @@ describe('task video download link', () => {
   const providerFallbacks: Array<{ name: string; data: unknown; url: string }> = [
     {
       name: 'data.video_url',
-      data: { video_url: 'https://cdn.example.com/video-url.mp4' },
+      data: {
+        url: '/v1/videos/task_video_download/content',
+        video_url: 'https://cdn.example.com/video-url.mp4',
+        metadata: {
+          url: 'https://cdn.example.com/lower-metadata-url.mp4',
+          origin_video_url:
+            'https://cdn.example.com/lower-origin-video-url.mp4',
+        },
+      },
       url: 'https://cdn.example.com/video-url.mp4',
     },
     {
       name: 'data.metadata.url',
-      data: { metadata: { url: 'https://cdn.example.com/metadata-url.mp4' } },
+      data: {
+        url: 'http://localhost:3000/v1/videos/task_video_download/content',
+        video_url: '/v1/videos/task_video_download/content',
+        metadata: {
+          url: 'https://cdn.example.com/metadata-url.mp4',
+          origin_video_url:
+            'https://cdn.example.com/lower-origin-video-url.mp4',
+        },
+      },
       url: 'https://cdn.example.com/metadata-url.mp4',
     },
     {
       name: 'data.metadata.origin_video_url',
       data: {
+        url: '/v1/videos/task_video_download/content',
+        video_url: '/v1/videos/task_video_download/content',
         metadata: {
+          url: '/v1/videos/task_video_download/content',
           origin_video_url: 'https://cdn.example.com/origin-video-url.mp4',
         },
       },
