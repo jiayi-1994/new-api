@@ -43,17 +43,70 @@ import {
   createProgressColumn,
 } from './column-helpers'
 
-function parseTaskData(data: unknown): unknown[] {
-  if (Array.isArray(data)) return data
-  if (typeof data === 'string') {
-    try {
-      const parsed = JSON.parse(data)
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
+function parseTaskDataValue(data: unknown): unknown {
+  if (typeof data !== 'string') return data
+
+  try {
+    return JSON.parse(data)
+  } catch {
+    return undefined
   }
-  return []
+}
+
+function parseTaskData(data: unknown): unknown[] {
+  const parsed = parseTaskDataValue(data)
+  return Array.isArray(parsed) ? parsed : []
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isTaskVideoProxyUrl(candidate: string, taskId: string): boolean {
+  try {
+    const url = new URL(candidate, window.location.origin)
+    const pathname = url.pathname.replace(/\/+$/, '')
+    const proxyPath = `/v1/videos/${encodeURIComponent(taskId)}/content`
+    return pathname === proxyPath
+  } catch {
+    return false
+  }
+}
+
+function asDirectHttpUrl(value: unknown, taskId: string): string | null {
+  if (typeof value !== 'string') return null
+
+  const candidate = value.trim()
+  if (!candidate || isTaskVideoProxyUrl(candidate, taskId)) return null
+
+  try {
+    const url = new URL(candidate)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    return candidate
+  } catch {
+    return null
+  }
+}
+
+function resolveTaskVideoUrl(log: TaskLog): string | null {
+  const parsedData = parseTaskDataValue(log.data)
+  const data = isRecord(parsedData) ? parsedData : undefined
+  const metadata = isRecord(data?.metadata) ? data.metadata : undefined
+  const candidates = [
+    log.result_url,
+    data?.url,
+    data?.video_url,
+    metadata?.url,
+    metadata?.origin_video_url,
+    log.fail_reason,
+  ]
+
+  for (const candidate of candidates) {
+    const url = asDirectHttpUrl(candidate, log.task_id)
+    if (url) return url
+  }
+
+  return null
 }
 
 function AudioPreviewCell({ log }: { log: TaskLog }) {
@@ -245,10 +298,10 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           log.action === TASK_ACTIONS.REFERENCE_GENERATE ||
           log.action === TASK_ACTIONS.REMIX_GENERATE
         const isSuccess = status === TASK_STATUS.SUCCESS
-        const isUrl = failReason?.startsWith('http')
+        const videoUrl =
+          isSuccess && isVideoTask ? resolveTaskVideoUrl(log) : null
 
-        if (isSuccess && isVideoTask && isUrl) {
-          const videoUrl = `/v1/videos/${log.task_id}/content`
+        if (videoUrl) {
           return (
             <a
               href={videoUrl}
@@ -259,6 +312,10 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
               {t('Click to preview video')}
             </a>
           )
+        }
+
+        if (isSuccess && isVideoTask) {
+          return <span className='text-muted-foreground/60 text-xs'>-</span>
         }
 
         if (!failReason) {
