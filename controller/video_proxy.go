@@ -79,6 +79,40 @@ func videoContentFilename(contentType string) string {
 	}
 }
 
+// objectStorageHostSuffixes 列出主流对象存储/配套 CDN 的托管域名。
+// 命中即认为是带时效签名的公开直链，302 让客户端直连厂商边缘节点，
+// 绕开网关中转的带宽瓶颈；未命中的第三方站点仍由网关代理兜一层。
+var objectStorageHostSuffixes = [...]string{
+	".r2.cloudflarestorage.com", // Cloudflare R2
+	".r2.dev",                   // Cloudflare R2 公开域名
+	".amazonaws.com",            // AWS S3
+	".cloudfront.net",           // AWS CloudFront
+	".storage.googleapis.com",   // Google Cloud Storage
+	".aliyuncs.com",             // 阿里云 OSS
+	".myqcloud.com",             // 腾讯云 COS
+	".volces.com",               // 火山引擎 TOS
+	".myhuaweicloud.com",        // 华为云 OBS
+	".bcebos.com",               // 百度云 BOS
+	".blob.core.windows.net",    // Azure Blob Storage
+}
+
+func isObjectStorageVideoURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "storage.googleapis.com" {
+		return true
+	}
+	for _, suffix := range objectStorageHostSuffixes {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // videoURLFromTaskData 从上游任务 JSON 中提取视频直链。
 // 形如 /v1/videos/{id}/content 的候选是需要鉴权的代理端点（链式 new-api 上游
 // 或自身代理地址），不能当直链匿名抓取，跳过后由调用方走上游 /content。
@@ -187,6 +221,9 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
+	// 只有不携带我方凭据的公开直链才允许 302 直连；
+	// Gemini/Vertex 的地址可能内嵌 API key 或需要鉴权头，必须走代理。
+	allowRedirect := false
 	switch channel.Type {
 	case constant.ChannelTypeGemini:
 		apiKey := task.PrivateData.Key
@@ -217,10 +254,13 @@ func VideoProxy(c *gin.Context) {
 		if videoURL == "" {
 			videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 			req.Header.Set("Authorization", "Bearer "+channel.Key)
+		} else {
+			allowRedirect = true
 		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
+		allowRedirect = true
 	}
 
 	videoURL = strings.TrimSpace(videoURL)
@@ -235,6 +275,12 @@ func VideoProxy(c *gin.Context) {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode video data for task %s", taskID))
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 		}
+		return
+	}
+
+	if allowRedirect && isObjectStorageVideoURL(videoURL) {
+		c.Writer.Header().Set("Cache-Control", "private, no-store")
+		c.Redirect(http.StatusFound, videoURL)
 		return
 	}
 

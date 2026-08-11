@@ -342,6 +342,75 @@ func TestVideoProxyOpenAISkipsProxyStyleURLAndUsesUpstreamContent(t *testing.T) 
 	assert.Equal(t, "/v1/videos/vid_up/content", gotPath)
 }
 
+func TestVideoProxyRedirectsObjectStorageDirectURL(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	directURL := "https://bucket.r2.cloudflarestorage.com/videos/vid_1.mp4?X-Amz-Signature=abc"
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret"}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"completed","metadata":{"url":"` + directURL + `"}}`),
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusFound, response.Code)
+	assert.Equal(t, directURL, response.Header().Get("Location"))
+	assert.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
+}
+
+func TestVideoProxyStillProxiesThirdPartyDirectURL(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	createVideoProxyTask(t, 42, upstream.URL+"/videos/vid_1.mp4")
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Empty(t, response.Header().Get("Location"))
+}
+
+func TestIsObjectStorageVideoURL(t *testing.T) {
+	for _, testCase := range []struct {
+		url      string
+		expected bool
+	}{
+		{url: "https://bucket.r2.cloudflarestorage.com/v.mp4?sig=1", expected: true},
+		{url: "https://pub-abc.r2.dev/v.mp4", expected: true},
+		{url: "https://bucket.s3.us-east-1.amazonaws.com/v.mp4", expected: true},
+		{url: "https://d123.cloudfront.net/v.mp4", expected: true},
+		{url: "https://storage.googleapis.com/bucket/v.mp4", expected: true},
+		{url: "https://bucket.storage.googleapis.com/v.mp4", expected: true},
+		{url: "https://bucket.oss-cn-hangzhou.aliyuncs.com/v.mp4", expected: true},
+		{url: "https://bucket.cos.ap-guangzhou.myqcloud.com/v.mp4", expected: true},
+		{url: "https://bucket.tos-cn-beijing.volces.com/v.mp4", expected: true},
+		{url: "https://bucket.obs.cn-north-4.myhuaweicloud.com/v.mp4", expected: true},
+		{url: "https://bucket.bj.bcebos.com/v.mp4", expected: true},
+		{url: "https://account.blob.core.windows.net/c/v.mp4", expected: true},
+		{url: "http://bucket.r2.cloudflarestorage.com/v.mp4", expected: false},
+		{url: "https://update.asiot.top/videos/v.mp4", expected: false},
+		{url: "https://evil.example.com/?fake=.r2.cloudflarestorage.com", expected: false},
+		{url: "https://r2.cloudflarestorage.com.evil.example/v.mp4", expected: false},
+	} {
+		t.Run(testCase.url, func(t *testing.T) {
+			assert.Equal(t, testCase.expected, isObjectStorageVideoURL(testCase.url))
+		})
+	}
+}
+
 func TestVideoProxyCapabilityUsesOwnerScopedTaskRecordID(t *testing.T) {
 	setupVideoProxyTest(t)
 	gin.SetMode(gin.TestMode)
