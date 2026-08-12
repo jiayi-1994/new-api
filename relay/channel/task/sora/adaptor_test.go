@@ -25,6 +25,8 @@ func TestTaskAdaptorParseTaskResultMapsNonTerminalStatuses(t *testing.T) {
 		{name: "status is normalized", upstreamStatus: "  UNKNOWN  ", expectedStatus: model.TaskStatusQueued},
 		{name: "processing is unchanged", upstreamStatus: "processing", expectedStatus: model.TaskStatusInProgress},
 		{name: "completed is unchanged", upstreamStatus: "completed", expectedStatus: model.TaskStatusSuccess},
+		{name: "succeeded maps to success", upstreamStatus: "succeeded", expectedStatus: model.TaskStatusSuccess},
+		{name: "success maps to success", upstreamStatus: "success", expectedStatus: model.TaskStatusSuccess},
 		{name: "failed is unchanged", upstreamStatus: "failed", expectedStatus: model.TaskStatusFailure},
 	}
 
