@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -331,6 +332,23 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	var err error
 	if data, err = sjson.SetBytes(data, "id", task.TaskID); err != nil {
 		return nil, errors.Wrap(err, "set id failed")
+	}
+	// 上游任务 JSON 可能携带上游视频直链与上游任务 ID（url/result_url/metadata.url 等），
+	// 对外统一映射为本站签名代理地址，不暴露上游。存储的 task.Data 保持原样，
+	// 供 /content 代理端点解析上游直链。
+	proxyURL := taskcommon.BuildProxyURL(task.TaskID)
+	for _, path := range []string{"url", "video_url", "result_url", "metadata.url", "metadata.origin_video_url"} {
+		if !gjson.GetBytes(data, path).Exists() {
+			continue
+		}
+		if data, err = sjson.SetBytes(data, path, proxyURL); err != nil {
+			return nil, errors.Wrapf(err, "rewrite %s failed", path)
+		}
+	}
+	if gjson.GetBytes(data, "task_id").Exists() {
+		if data, err = sjson.SetBytes(data, "task_id", task.TaskID); err != nil {
+			return nil, errors.Wrap(err, "rewrite task_id failed")
+		}
 	}
 	return data, nil
 }
