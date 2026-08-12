@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -335,11 +336,18 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	}
 	// 上游任务 JSON 可能携带上游视频直链与上游任务 ID（url/result_url/metadata.url 等），
 	// 对外统一映射为本站签名代理地址，不暴露上游。存储的 task.Data 保持原样，
-	// 供 /content 代理端点解析上游直链。
-	proxyURL := taskcommon.BuildProxyURL(task.TaskID)
+	// 供 /content 代理端点解析上游直链。附带 video_token 能力签名，
+	// 浏览器 <video>/<a> 无法携带 Authorization 头也能访问。
+	proxyURL := ""
 	for _, path := range []string{"url", "video_url", "result_url", "metadata.url", "metadata.origin_video_url"} {
 		if !gjson.GetBytes(data, path).Exists() {
 			continue
+		}
+		if proxyURL == "" {
+			proxyURL = taskcommon.BuildProxyURL(task.TaskID)
+			if token, _, tokenErr := service.IssueVideoContentToken(task.TaskID, task.UserId, task.ID); tokenErr == nil {
+				proxyURL += "?video_token=" + url.QueryEscape(token)
+			}
 		}
 		if data, err = sjson.SetBytes(data, path, proxyURL); err != nil {
 			return nil, errors.Wrapf(err, "rewrite %s failed", path)

@@ -1,11 +1,13 @@
 package sora
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -54,19 +56,31 @@ func TestConvertToOpenAIVideoHidesUpstreamURLsAndTaskID(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	task := &model.Task{TaskID: "task_public456", Data: data}
+	prevSecret := common.SessionSecret
+	common.SessionSecret = "sora-adaptor-test-secret"
+	t.Cleanup(func() { common.SessionSecret = prevSecret })
+
+	task := &model.Task{ID: 99, UserId: 42, TaskID: "task_public456", Data: data}
 	out, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(out), "upstream.example.com")
 	assert.NotContains(t, string(out), "task_upstream123")
 
-	proxyURL := taskcommon.BuildProxyURL(task.TaskID)
+	// browser <video> cannot send Authorization — rewritten links must carry a video_token capability
+	rewritten := gjson.GetBytes(out, "url").String()
+	parsed, err := url.Parse(rewritten)
+	require.NoError(t, err)
+	assert.Equal(t, taskcommon.BuildProxyURL(task.TaskID), parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	grant, err := service.ParseVideoContentToken(parsed.Query().Get("video_token"), task.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 42, grant.OwnerUserID)
+	assert.Equal(t, int64(99), grant.TaskRecordID)
+
 	assert.Equal(t, "task_public456", gjson.GetBytes(out, "id").String())
 	assert.Equal(t, "task_public456", gjson.GetBytes(out, "task_id").String())
-	assert.Equal(t, proxyURL, gjson.GetBytes(out, "url").String())
-	assert.Equal(t, proxyURL, gjson.GetBytes(out, "result_url").String())
-	assert.Equal(t, proxyURL, gjson.GetBytes(out, "metadata.url").String())
+	assert.Equal(t, rewritten, gjson.GetBytes(out, "result_url").String())
+	assert.Equal(t, rewritten, gjson.GetBytes(out, "metadata.url").String())
 	assert.Equal(t, "keep-me", gjson.GetBytes(out, "metadata.note").String())
 	// stored task data must stay untouched for the /content proxy to resolve upstream
 	assert.Equal(t, string(data), string(task.Data))
