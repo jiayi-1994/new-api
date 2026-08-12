@@ -41,6 +41,21 @@ func TestTaskAdaptorParseTaskResultMapsNonTerminalStatuses(t *testing.T) {
 	}
 }
 
+func TestParseTaskResultAcceptsNumericSeconds(t *testing.T) {
+	// some OpenAI-compatible relays send `"seconds": 15` as a number where the
+	// official API uses a string — polling must not get stuck on parse errors
+	body := []byte(`{"id":"task_up1","object":"video","status":"completed","progress":100,"seconds":15,"size":"1280x720"}`)
+
+	taskInfo, err := (&TaskAdaptor{}).ParseTaskResult(body)
+	require.NoError(t, err)
+	assert.Equal(t, string(model.TaskStatusSuccess), taskInfo.Status)
+
+	stringBody := []byte(`{"id":"task_up1","object":"video","status":"completed","progress":100,"seconds":"15"}`)
+	taskInfo, err = (&TaskAdaptor{}).ParseTaskResult(stringBody)
+	require.NoError(t, err)
+	assert.Equal(t, string(model.TaskStatusSuccess), taskInfo.Status)
+}
+
 func TestConvertToOpenAIVideoHidesUpstreamURLsAndTaskID(t *testing.T) {
 	upstreamURL := "https://upstream.example.com/v1/videos/task_upstream123/content?signature=abc"
 	data, err := common.Marshal(map[string]any{
