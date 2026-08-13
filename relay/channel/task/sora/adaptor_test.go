@@ -151,3 +151,65 @@ func TestConvertToOpenAIVideoLeavesPendingTaskWithoutURLs(t *testing.T) {
 	assert.False(t, gjson.GetBytes(out, "url").Exists())
 	assert.False(t, gjson.GetBytes(out, "task_id").Exists())
 }
+
+func TestWrapDashScopeVideoPayloadWrapsPromptImagesAndKnobs(t *testing.T) {
+	bodyMap := map[string]interface{}{
+		"model":        "sd-2-c5",
+		"prompt":       "咖啡店交接第一杯",
+		"seconds":      "15",
+		"duration":     float64(15),
+		"resolution":   "720p",
+		"aspect_ratio": "16:9",
+		"images":       []interface{}{"https://cdn.example.com/a.png", "https://cdn.example.com/b.png"},
+	}
+
+	wrapDashScopeVideoPayload(bodyMap)
+
+	input, ok := bodyMap["input"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "咖啡店交接第一杯", input["prompt"])
+	media, ok := input["media"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, media, 2)
+	assert.Equal(t, map[string]interface{}{"type": "reference_image", "url": "https://cdn.example.com/a.png"}, media[0])
+
+	parameters, ok := bodyMap["parameters"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "720P", parameters["resolution"])
+	assert.Equal(t, 15, parameters["duration"])
+	assert.Equal(t, "16:9", parameters["ratio"])
+	assert.Equal(t, false, parameters["prompt_extend"])
+	assert.Equal(t, false, parameters["watermark"])
+
+	// top-level fields stay for gateway validation/billing
+	assert.Equal(t, "咖啡店交接第一杯", bodyMap["prompt"])
+	assert.Equal(t, "15", bodyMap["seconds"])
+}
+
+func TestWrapDashScopeVideoPayloadIsIdempotentForDialectClients(t *testing.T) {
+	existingInput := map[string]interface{}{"prompt": "already wrapped", "media": []interface{}{}}
+	bodyMap := map[string]interface{}{
+		"model":  "sd-2-c5",
+		"prompt": "outer",
+		"input":  existingInput,
+	}
+
+	wrapDashScopeVideoPayload(bodyMap)
+
+	assert.Equal(t, existingInput, bodyMap["input"])
+	assert.Nil(t, bodyMap["parameters"])
+}
+
+func TestWrapDashScopeVideoPayloadTextToVideoOmitsMedia(t *testing.T) {
+	bodyMap := map[string]interface{}{"model": "sd-2-c5", "prompt": "一只猫", "duration": float64(5)}
+
+	wrapDashScopeVideoPayload(bodyMap)
+
+	input, ok := bodyMap["input"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "一只猫", input["prompt"])
+	_, hasMedia := input["media"]
+	assert.False(t, hasMedia)
+	parameters := bodyMap["parameters"].(map[string]interface{})
+	assert.Equal(t, 5, parameters["duration"])
+}

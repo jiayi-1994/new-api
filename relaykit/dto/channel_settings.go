@@ -17,6 +17,10 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// VideoPayloadFormat rewrites OpenAI-style /v1/videos JSON bodies for upstreams
+	// that read prompt/media from a DashScope-like envelope. Accepted values: "",
+	// "dashscope" (wrap top-level prompt/images into input{} and knobs into parameters{}).
+	VideoPayloadFormat string `json:"video_payload_format,omitempty"`
 	// HTTPProtocol controls outbound HTTP version negotiation for this channel.
 	// Accepted values: "", "auto" (default), "http1".
 	HTTPProtocol string `json:"http_protocol,omitempty"`

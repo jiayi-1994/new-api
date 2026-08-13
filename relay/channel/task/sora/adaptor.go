@@ -167,6 +167,54 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 	return nil
 }
 
+// wrapDashScopeVideoPayload rewrites an OpenAI-style video body for upstreams (e.g. meaicc
+// sd-2-* Seedance) that only read prompt/media from a DashScope-like `input` object and
+// knobs from `parameters`. Top-level fields are kept: such upstreams ignore unknown fields,
+// while this gateway's own validation and per-second billing still read them. Idempotent —
+// a body that already carries input.prompt (a client that speaks the dialect) is left as is.
+func wrapDashScopeVideoPayload(bodyMap map[string]any) {
+	if input, ok := bodyMap["input"].(map[string]any); ok {
+		if _, has := input["prompt"]; has {
+			return
+		}
+	}
+	input := map[string]any{}
+	if prompt, _ := bodyMap["prompt"].(string); prompt != "" {
+		input["prompt"] = prompt
+	}
+	if images, ok := bodyMap["images"].([]any); ok {
+		media := make([]any, 0, len(images))
+		for _, item := range images {
+			if u, ok := item.(string); ok && u != "" {
+				media = append(media, map[string]any{"type": "reference_image", "url": u})
+			}
+		}
+		if len(media) > 0 {
+			input["media"] = media
+		}
+	}
+	bodyMap["input"] = input
+
+	parameters := map[string]any{"prompt_extend": false, "watermark": false}
+	if resolution, _ := bodyMap["resolution"].(string); resolution != "" {
+		parameters["resolution"] = strings.ToUpper(resolution)
+	}
+	if seconds, _ := bodyMap["seconds"].(string); seconds != "" {
+		if n, err := strconv.Atoi(seconds); err == nil && n > 0 {
+			parameters["duration"] = n
+		}
+	}
+	if _, has := parameters["duration"]; !has {
+		if duration, ok := bodyMap["duration"].(float64); ok && duration > 0 {
+			parameters["duration"] = int(duration)
+		}
+	}
+	if ratio, _ := bodyMap["aspect_ratio"].(string); ratio != "" {
+		parameters["ratio"] = ratio
+	}
+	bodyMap["parameters"] = parameters
+}
+
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -182,6 +230,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		var bodyMap map[string]interface{}
 		if err := common.Unmarshal(cachedBody, &bodyMap); err == nil {
 			bodyMap["model"] = info.UpstreamModelName
+			if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
+				wrapDashScopeVideoPayload(bodyMap)
+			}
 			if newBody, err := common.Marshal(bodyMap); err == nil {
 				return bytes.NewReader(newBody), nil
 			}
