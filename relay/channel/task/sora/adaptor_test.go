@@ -105,6 +105,38 @@ func TestConvertToOpenAIVideoHidesUpstreamURLsAndTaskID(t *testing.T) {
 	assert.Equal(t, string(data), string(task.Data))
 }
 
+func TestConvertToOpenAIVideoRewritesURLValuedObjectField(t *testing.T) {
+	// meaicc-style relays return the signed upstream video link in the
+	// non-standard `object` field; it must be hidden like url/result_url.
+	// A literal `"object":"video"` must stay untouched.
+	upstreamURL := "https://plcdn.example.com/gen_video/atomic_1.mp4?x-oss-signature=sig"
+	data, err := common.Marshal(map[string]any{
+		"id":     "wr_upstream1",
+		"object": upstreamURL,
+		"status": "SUCCEEDED",
+	})
+	require.NoError(t, err)
+
+	prevSecret := common.SessionSecret
+	common.SessionSecret = "sora-adaptor-test-secret"
+	t.Cleanup(func() { common.SessionSecret = prevSecret })
+
+	out, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(&model.Task{ID: 99, UserId: 42, TaskID: "task_public456", Data: data})
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "plcdn.example.com")
+	rewritten := gjson.GetBytes(out, "object").String()
+	parsed, err := url.Parse(rewritten)
+	require.NoError(t, err)
+	assert.Equal(t, taskcommon.BuildProxyURL("task_public456"), parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	assert.NotEmpty(t, parsed.Query().Get("video_token"))
+
+	literalData, err := common.Marshal(map[string]any{"id": "wr_upstream1", "object": "video", "status": "completed"})
+	require.NoError(t, err)
+	out, err = (&TaskAdaptor{}).ConvertToOpenAIVideo(&model.Task{ID: 99, UserId: 42, TaskID: "task_public456", Data: literalData})
+	require.NoError(t, err)
+	assert.Equal(t, "video", gjson.GetBytes(out, "object").String())
+}
+
 func TestConvertToOpenAIVideoLeavesPendingTaskWithoutURLs(t *testing.T) {
 	data, err := common.Marshal(map[string]any{
 		"id":     "task_upstream123",

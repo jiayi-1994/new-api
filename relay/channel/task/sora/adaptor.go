@@ -364,8 +364,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	// 对外统一映射为本站签名代理地址，不暴露上游。存储的 task.Data 保持原样，
 	// 供 /content 代理端点解析上游直链。附带 video_token 能力签名，
 	// 浏览器 <video>/<a> 无法携带 Authorization 头也能访问。
+	// meaicc 类中转把签名直链塞在非标准 `object` 字段（官方值应为字面量 "video"），
+	// 仅当其值形如 http(s) URL 时一并改写，避免破坏正常的 "video" 字面量。
+	rewritePaths := []string{"url", "video_url", "result_url", "metadata.url", "metadata.origin_video_url"}
+	if obj := strings.TrimSpace(gjson.GetBytes(data, "object").String()); strings.HasPrefix(obj, "http://") || strings.HasPrefix(obj, "https://") {
+		rewritePaths = append(rewritePaths, "object")
+	}
 	proxyURL := ""
-	for _, path := range []string{"url", "video_url", "result_url", "metadata.url", "metadata.origin_video_url"} {
+	for _, path := range rewritePaths {
 		if !gjson.GetBytes(data, path).Exists() {
 			continue
 		}
