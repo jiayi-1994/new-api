@@ -487,8 +487,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -602,14 +601,27 @@ export function transformChannelToFormDefaults(
  * Build the setting JSON string from form extra settings
  */
 export function buildSettingJSON(formData: ChannelFormValues): string {
-  const settingObj: Record<string, unknown> = {
-    force_format: formData.force_format || false,
-    thinking_to_content: formData.thinking_to_content || false,
-    proxy: formData.proxy?.trim() || '',
-    pass_through_body_enabled: formData.pass_through_body_enabled || false,
-    system_prompt: formData.system_prompt || '',
-    system_prompt_override: formData.system_prompt_override || false,
+  // Start from the channel's original setting JSON so keys the form does not
+  // know about (backend-only flags like video_payload_format) survive a save.
+  let settingObj: Record<string, unknown> = {}
+  if (formData.setting) {
+    try {
+      const parsed = JSON.parse(formData.setting)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        settingObj = parsed as Record<string, unknown>
+      }
+    } catch {
+      settingObj = {}
+    }
   }
+
+  settingObj.force_format = formData.force_format || false
+  settingObj.thinking_to_content = formData.thinking_to_content || false
+  settingObj.proxy = formData.proxy?.trim() || ''
+  settingObj.pass_through_body_enabled =
+    formData.pass_through_body_enabled || false
+  settingObj.system_prompt = formData.system_prompt || ''
+  settingObj.system_prompt_override = formData.system_prompt_override || false
 
   const protocol = normalizeHttpProtocol(formData.http_protocol)
   const shards =
@@ -618,6 +630,8 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       : normalizeHttp2ConnectionShards(formData.http2_connection_shards)
 
   // Omit defaults so unchanged channels keep equivalent JSON.
+  delete settingObj.http_protocol
+  delete settingObj.http2_connection_shards
   if (protocol === HTTP_PROTOCOL_HTTP1) {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
