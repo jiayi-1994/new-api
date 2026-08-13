@@ -5237,5 +5237,7 @@
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放"
-  }
+  },
+  "DashScope Video Payload": "DashScope 视频请求包装",
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "将 /v1/videos 的顶层 prompt/参考图自动包装为 input/parameters 结构（适配即梦式上游，如 meaicc）"
 }

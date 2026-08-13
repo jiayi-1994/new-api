@@ -282,6 +282,7 @@ const SENSITIVE_FORM_FIELDS = [
   'aws_key_type',
   'azure_responses_version',
   'force_format',
+  'video_payload_dashscope',
   'thinking_to_content',
   'proxy',
   'http_protocol',
@@ -338,6 +339,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
+    values.video_payload_dashscope ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
@@ -4094,6 +4096,33 @@ export function ChannelMutateDrawer({
                                 />
                               )}
 
+                              {currentType === 1 && (
+                                <FormField
+                                  control={form.control}
+                                  name='video_payload_dashscope'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('DashScope Video Payload')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+
                               <FormField
                                 control={form.control}
                                 name='thinking_to_content'
@@ -4233,9 +4262,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}

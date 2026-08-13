@@ -251,6 +251,7 @@ export const channelFormSchema = z
     key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
+    video_payload_dashscope: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
     proxy: z
       .string()
@@ -426,6 +427,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   key_mode: 'append',
   // Channel extra settings
   force_format: false,
+  video_payload_dashscope: false,
   thinking_to_content: false,
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
@@ -466,6 +468,7 @@ export function transformChannelToFormDefaults(
   // Parse channel extra settings from setting field
   let extraSettings = {
     force_format: false,
+    video_payload_dashscope: false,
     thinking_to_content: false,
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
@@ -484,6 +487,7 @@ export function transformChannelToFormDefaults(
       )
       extraSettings = {
         force_format: parsed.force_format || false,
+        video_payload_dashscope: parsed.video_payload_format === 'dashscope',
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
@@ -622,6 +626,11 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     formData.pass_through_body_enabled || false
   settingObj.system_prompt = formData.system_prompt || ''
   settingObj.system_prompt_override = formData.system_prompt_override || false
+
+  delete settingObj.video_payload_format
+  if (formData.video_payload_dashscope) {
+    settingObj.video_payload_format = 'dashscope'
+  }
 
   const protocol = normalizeHttpProtocol(formData.http_protocol)
   const shards =
