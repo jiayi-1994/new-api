@@ -24,10 +24,12 @@ func TestTaskAdaptorParseTaskResultMapsNonTerminalStatuses(t *testing.T) {
 		{name: "created remains submitted", upstreamStatus: "created", expectedStatus: model.TaskStatusSubmitted},
 		{name: "status is normalized", upstreamStatus: "  UNKNOWN  ", expectedStatus: model.TaskStatusQueued},
 		{name: "processing is unchanged", upstreamStatus: "processing", expectedStatus: model.TaskStatusInProgress},
+		{name: "running maps to in progress", upstreamStatus: "RUNNING", expectedStatus: model.TaskStatusInProgress},
 		{name: "completed is unchanged", upstreamStatus: "completed", expectedStatus: model.TaskStatusSuccess},
 		{name: "succeeded maps to success", upstreamStatus: "succeeded", expectedStatus: model.TaskStatusSuccess},
 		{name: "success maps to success", upstreamStatus: "success", expectedStatus: model.TaskStatusSuccess},
 		{name: "failed is unchanged", upstreamStatus: "failed", expectedStatus: model.TaskStatusFailure},
+		{name: "canceled single-l maps to failure", upstreamStatus: "canceled", expectedStatus: model.TaskStatusFailure},
 	}
 
 	adaptor := &TaskAdaptor{}
