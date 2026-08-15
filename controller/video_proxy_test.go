@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -158,9 +160,10 @@ func TestWriteVideoDataURLUsesPrivateNoStoreCaching(t *testing.T) {
 	response := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(response)
 
-	err := writeVideoDataURL(context, "data:video/mp4;base64,aGVsbG8=")
+	committed, err := writeVideoDataURL(context, "data:video/mp4;base64,aGVsbG8=")
 
 	require.NoError(t, err)
+	assert.True(t, committed)
 	assert.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "video/mp4", response.Header().Get("Content-Type"))
 	assert.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
@@ -174,9 +177,10 @@ func TestWriteVideoDataURLRejectsActiveContent(t *testing.T) {
 	response := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(response)
 
-	err := writeVideoDataURL(context, "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")
+	committed, err := writeVideoDataURL(context, "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")
 
 	assert.Error(t, err)
+	assert.False(t, committed, "validation failure must not commit the response")
 	assert.Empty(t, response.Header())
 	assert.Empty(t, response.Body.String())
 }
@@ -186,9 +190,10 @@ func TestWriteVideoDataURLUsesMIMEAppropriateDownloadName(t *testing.T) {
 	response := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(response)
 
-	err := writeVideoDataURL(context, "data:video/quicktime;base64,aGVsbG8=")
+	committed, err := writeVideoDataURL(context, "data:video/quicktime;base64,aGVsbG8=")
 
 	require.NoError(t, err)
+	assert.True(t, committed)
 	assert.Equal(t, `attachment; filename="video.mov"`, response.Header().Get("Content-Disposition"))
 }
 
@@ -519,9 +524,17 @@ func TestVideoProxyOpenAIAllSourcesFailedIsGenericError(t *testing.T) {
 	assert.NotContains(t, response.Body.String(), upstream.URL)
 }
 
+func stubVideoDirectLinkProbe(t *testing.T, deadStatus int) {
+	t.Helper()
+	previousProbe := probeVideoDirectLink
+	probeVideoDirectLink = func(context.Context, *http.Client, string) int { return deadStatus }
+	t.Cleanup(func() { probeVideoDirectLink = previousProbe })
+}
+
 func TestVideoProxyRedirectsObjectStorageDirectURL(t *testing.T) {
 	setupVideoProxyTest(t)
 	gin.SetMode(gin.TestMode)
+	stubVideoDirectLinkProbe(t, 0)
 	directURL := "https://bucket.r2.cloudflarestorage.com/videos/vid_1.mp4?X-Amz-Signature=abc"
 	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret"}
 	require.NoError(t, model.DB.Create(channel).Error)
@@ -539,6 +552,128 @@ func TestVideoProxyRedirectsObjectStorageDirectURL(t *testing.T) {
 	assert.Equal(t, http.StatusFound, response.Code)
 	assert.Equal(t, directURL, response.Header().Get("Location"))
 	assert.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
+}
+
+func TestVideoProxyDeadObjectStorageLinkFallsBackToUpstreamContent(t *testing.T) {
+	// 过期的对象存储签名直链会被探测出 4xx，此时不能把客户端 302 到死链，
+	// 必须回退上游官方 /content。
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	stubVideoDirectLinkProbe(t, http.StatusForbidden)
+	var fallbackAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/videos/vid_up/content" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fallbackAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	baseURL := upstream.URL
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret", BaseURL: &baseURL}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"SUCCEEDED","object":"https://bucket.oss-cn-hangzhou.aliyuncs.com/v.mp4?x-oss-expires=64800"}`),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "vid_up",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Empty(t, response.Header().Get("Location"))
+	assert.Equal(t, "Bearer channel-secret", fallbackAuth)
+}
+
+func TestVideoProxyHungDirectLinkStillReachesFallbackInTime(t *testing.T) {
+	// 挂住不响应的直链只允许吃掉单次响应头限时，不能耗尽总预算，
+	// 兜底候选必须还有机会执行。
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	previousTimeout := videoContentAttemptHeaderTimeout
+	videoContentAttemptHeaderTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { videoContentAttemptHeaderTimeout = previousTimeout })
+	var fallbackAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/hung/video.mp4":
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case "/v1/videos/vid_up/content":
+			fallbackAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("hello"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	baseURL := upstream.URL
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret", BaseURL: &baseURL}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"SUCCEEDED","object":"` + upstream.URL + `/hung/video.mp4"}`),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "vid_up",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	start := time.Now()
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Equal(t, "Bearer channel-secret", fallbackAuth)
+	assert.Less(t, time.Since(start), 2*time.Second, "hung direct link must not consume the whole budget")
+}
+
+func TestProbeVideoDirectLink(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/alive-206":
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0})
+		case "/alive-200":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("x"))
+		case "/expired":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	client := upstream.Client()
+
+	assert.Zero(t, probeVideoDirectLink(context.Background(), client, upstream.URL+"/alive-206"))
+	assert.Zero(t, probeVideoDirectLink(context.Background(), client, upstream.URL+"/alive-200"))
+	assert.Equal(t, http.StatusForbidden, probeVideoDirectLink(context.Background(), client, upstream.URL+"/expired"))
+
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+	assert.Zero(t, probeVideoDirectLink(context.Background(), client, deadURL+"/gone"), "network errors are inconclusive, not dead")
 }
 
 func TestVideoProxyStillProxiesThirdPartyDirectURL(t *testing.T) {

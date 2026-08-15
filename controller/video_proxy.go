@@ -189,6 +189,69 @@ type videoContentSource struct {
 	allowRedirect bool
 }
 
+// videoContentAttemptHeaderTimeout 限制"还有后备候选时"单次尝试等待响应头的时长。
+// 没有它，一条挂住不响应的直链会吃光整个总预算，让兜底候选没机会执行。
+// 响应头到达后该限时即解除，正片流式传输只受总超时约束。var 形式便于测试收紧。
+var videoContentAttemptHeaderTimeout = 20 * time.Second
+
+var videoDirectLinkProbeTimeout = 10 * time.Second
+
+// probeVideoDirectLink 在把客户端 302 到对象存储签名直链前，用 1 字节 Range GET 验活：
+// 签名过期时存储侧会明确返回 4xx，此时重定向只会把客户端送到死链，应改走兜底候选。
+// 网络层错误不下定论（返回 0），调用方按可重定向处理。var 形式是测试注入缝。
+var probeVideoDirectLink = func(ctx context.Context, client *http.Client, videoURL string) (deadStatus int) {
+	probeCtx, cancel := context.WithTimeout(ctx, videoDirectLinkProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, videoURL, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return resp.StatusCode
+	}
+	return 0
+}
+
+// fetchVideoContentAttempt 执行一次候选抓取，封装尝试级的 context/计时器生命周期。
+// limitHeaderWait 为真时响应头等待单独限时；头到达后停表，流式读取交还调用方总超时。
+// 返回的 cleanup 必须在 body 使用完毕后调用。
+func fetchVideoContentAttempt(ctx context.Context, client *http.Client, source videoContentSource, videoURL string, limitHeaderWait bool) (*http.Response, func(), error) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	var headerTimer *time.Timer
+	if limitHeaderWait {
+		headerTimer = time.AfterFunc(videoContentAttemptHeaderTimeout, cancel)
+	}
+	cleanup := func() {
+		if headerTimer != nil {
+			headerTimer.Stop()
+		}
+		cancel()
+	}
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, videoURL, nil)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if source.authHeaderKey != "" {
+		req.Header.Set(source.authHeaderKey, source.authHeaderVal)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if headerTimer != nil {
+		headerTimer.Stop()
+	}
+	return resp, cleanup, nil
+}
+
 // videoProxyError returns a standardized OpenAI-style error response.
 func videoProxyError(c *gin.Context, status int, errType, message string) {
 	c.JSON(status, gin.H{
@@ -309,26 +372,34 @@ func VideoProxy(c *gin.Context) {
 
 	// 逐候选尝试，任一成功即出片；全部失败按最后一次失败的性质报错。
 	failStatus := http.StatusBadGateway
-	failMessage := "Failed to fetch video content"
 	attempted := false
-	for _, source := range sources {
+	for i, source := range sources {
 		videoURL := strings.TrimSpace(source.url)
 		if videoURL == "" {
 			continue
 		}
 		attempted = true
+		failStatus = http.StatusBadGateway
+		hasFallback := i < len(sources)-1
 
 		if strings.HasPrefix(videoURL, "data:") {
-			// writeVideoDataURL 完成全部校验后才写响应，失败时响应未被污染。
-			if err := writeVideoDataURL(c, videoURL); err == nil {
+			committed, err := writeVideoDataURL(c, videoURL)
+			if err == nil {
 				return
 			}
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode video data for task %s", taskID))
-			failStatus, failMessage = http.StatusBadGateway, "Failed to fetch video content"
+			if committed {
+				// 响应已提交（写入中途失败），继续尝试只会往半截视频后追加脏数据。
+				return
+			}
 			continue
 		}
 
 		if source.allowRedirect && isObjectStorageVideoURL(videoURL) {
+			if deadStatus := probeVideoDirectLink(ctx, client, videoURL); deadStatus > 0 {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Video direct link probe returned status %d for task %s", deadStatus, taskID))
+				continue
+			}
 			c.Writer.Header().Set("Cache-Control", "private, no-store")
 			c.Redirect(http.StatusFound, videoURL)
 			return
@@ -343,31 +414,20 @@ func VideoProxy(c *gin.Context) {
 		}
 		if validateErr != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content fetch blocked for task %s", taskID))
-			failStatus, failMessage = http.StatusForbidden, "Failed to fetch video content"
+			failStatus = http.StatusForbidden
 			continue
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, videoURL, nil)
-		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to create video content request for task %s", taskID))
-			failStatus, failMessage = http.StatusInternalServerError, "Failed to create proxy request"
-			continue
-		}
-		if source.authHeaderKey != "" {
-			req.Header.Set(source.authHeaderKey, source.authHeaderVal)
-		}
-
-		resp, err := client.Do(req)
+		resp, cleanup, err := fetchVideoContentAttempt(ctx, client, source, videoURL, hasFallback)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video content for task %s", taskID))
-			failStatus, failMessage = http.StatusBadGateway, "Failed to fetch video content"
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
+			cleanup()
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned status %d for task %s", resp.StatusCode, taskID))
-			failStatus, failMessage = http.StatusBadGateway, "Failed to fetch video content"
 			continue
 		}
 
@@ -375,16 +435,13 @@ func VideoProxy(c *gin.Context) {
 		safeHeaders := make(http.Header)
 		if err := copyVideoProxyHeaders(safeHeaders, resp.Header, videoURL); err != nil {
 			resp.Body.Close()
+			cleanup()
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned an unsafe content type for task %s", taskID))
-			failStatus, failMessage = http.StatusBadGateway, "Failed to fetch video content"
 			continue
 		}
 
 		for key, values := range safeHeaders {
-			c.Writer.Header().Del(key)
-			for _, value := range values {
-				c.Writer.Header().Add(key, value)
-			}
+			c.Writer.Header()[key] = values
 		}
 		c.Writer.Header().Set("Cache-Control", "private, no-store")
 		c.Writer.WriteHeader(resp.StatusCode)
@@ -392,45 +449,48 @@ func VideoProxy(c *gin.Context) {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content for task %s", taskID))
 		}
 		resp.Body.Close()
+		cleanup()
 		return
 	}
 
 	if !attempted {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video URL is empty for task %s", taskID))
 	}
-	videoProxyError(c, failStatus, "server_error", failMessage)
+	videoProxyError(c, failStatus, "server_error", "Failed to fetch video content")
 }
 
-func writeVideoDataURL(c *gin.Context, dataURL string) error {
+// writeVideoDataURL 校验并输出 data: 内嵌视频。committed 表示响应头/状态码是否已写出：
+// 全部校验通过前不会写响应，此时失败可安全换下一候选；写入中途失败则响应已污染，调用方必须终止。
+func writeVideoDataURL(c *gin.Context, dataURL string) (committed bool, err error) {
 	parts := strings.SplitN(dataURL, ",", 2)
 	if len(parts) != 2 {
-		return fmt.Errorf("invalid data url")
+		return false, fmt.Errorf("invalid data url")
 	}
 
 	header := parts[0]
 	payload := parts[1]
 	if !strings.HasPrefix(header, "data:") {
-		return fmt.Errorf("unsupported data url")
+		return false, fmt.Errorf("unsupported data url")
 	}
 
 	metadata := strings.TrimPrefix(header, "data:")
 	if !strings.HasSuffix(strings.ToLower(metadata), ";base64") {
-		return fmt.Errorf("unsupported data url")
+		return false, fmt.Errorf("unsupported data url")
 	}
 	mediaType, _, err := mime.ParseMediaType(metadata[:len(metadata)-len(";base64")])
 	if err != nil {
-		return fmt.Errorf("invalid data url content type")
+		return false, fmt.Errorf("invalid data url content type")
 	}
 	mediaType = strings.ToLower(mediaType)
 	if !strings.HasPrefix(mediaType, "video/") {
-		return fmt.Errorf("unsupported data url content type")
+		return false, fmt.Errorf("unsupported data url content type")
 	}
 
 	videoBytes, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
 		videoBytes, err = base64.RawStdEncoding.DecodeString(payload)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 
@@ -440,5 +500,5 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	c.Writer.Header().Set("Cache-Control", "private, no-store")
 	c.Writer.WriteHeader(http.StatusOK)
 	_, err = c.Writer.Write(videoBytes)
-	return err
+	return true, err
 }
