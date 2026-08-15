@@ -395,11 +395,20 @@ func TestVideoProxyOpenAICompatibleUsesObjectFieldURL(t *testing.T) {
 	assert.Empty(t, gotAuth, "direct URL fetch must not carry the channel key")
 }
 
-func TestVideoProxyOpenAISkipsProxyStyleURLAndUsesUpstreamContent(t *testing.T) {
+func TestVideoProxyOpenAIUsesContentShapedPublicDirectLink(t *testing.T) {
+	// meaicc-style relays hand out anonymous CDN links shaped like
+	// /v1/videos/{id}/content while their official /content endpoint is broken;
+	// the direct link must be tried first and win without the channel key.
 	setupVideoProxyTest(t)
 	gin.SetMode(gin.TestMode)
 	var gotAuth, gotPath string
+	officialContentCalled := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/videos/vid_up/content" {
+			officialContentCalled = true
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "video/mp4")
@@ -416,7 +425,7 @@ func TestVideoProxyOpenAISkipsProxyStyleURLAndUsesUpstreamContent(t *testing.T) 
 		UserId:    42,
 		ChannelId: channel.Id,
 		Status:    model.TaskStatusSuccess,
-		Data:      json.RawMessage(`{"status":"completed","metadata":{"url":"http://chained-upstream/v1/videos/task_abc/content"}}`),
+		Data:      json.RawMessage(`{"created_at":1786771696,"id":"task_up1","object":"` + upstream.URL + `/c3/v1/videos/task_up1/content","seconds":29,"status":"SUCCEEDED"}`),
 		PrivateData: model.TaskPrivateData{
 			UpstreamTaskID: "vid_up",
 		},
@@ -427,8 +436,87 @@ func TestVideoProxyOpenAISkipsProxyStyleURLAndUsesUpstreamContent(t *testing.T) 
 
 	assert.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "hello", response.Body.String())
-	assert.Equal(t, "Bearer channel-secret", gotAuth)
-	assert.Equal(t, "/v1/videos/vid_up/content", gotPath)
+	assert.Equal(t, "/c3/v1/videos/task_up1/content", gotPath)
+	assert.Empty(t, gotAuth, "direct URL fetch must not carry the channel key")
+	assert.False(t, officialContentCalled, "official /content must not be called when the direct link works")
+}
+
+func TestVideoProxyOpenAIFallsBackToUpstreamContentWhenDirectLinkFails(t *testing.T) {
+	// Chained-relay protected links 401 anonymously and signed links expire;
+	// both must fall through to the official /content with the channel key.
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	var directAuth, fallbackAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oss/video.mp4":
+			directAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusForbidden)
+		case "/v1/videos/vid_up/content":
+			fallbackAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("hello"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	baseURL := upstream.URL
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret", BaseURL: &baseURL}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"SUCCEEDED","object":"` + upstream.URL + `/oss/video.mp4?x-oss-expires=64800"}`),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "vid_up",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Empty(t, directAuth, "direct URL fetch must not carry the channel key")
+	assert.Equal(t, "Bearer channel-secret", fallbackAuth)
+}
+
+func TestVideoProxyOpenAIAllSourcesFailedIsGenericError(t *testing.T) {
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"request blocked: port 50009 is not allowed"}}`))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	baseURL := upstream.URL
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret", BaseURL: &baseURL}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"status":"SUCCEEDED","object":"` + upstream.URL + `/oss/video.mp4"}`),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "vid_up",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusBadGateway, response.Code)
+	assert.Contains(t, response.Body.String(), "Failed to fetch video content")
+	assert.NotContains(t, response.Body.String(), "port 50009")
+	assert.NotContains(t, response.Body.String(), upstream.URL)
 }
 
 func TestVideoProxyRedirectsObjectStorageDirectURL(t *testing.T) {
