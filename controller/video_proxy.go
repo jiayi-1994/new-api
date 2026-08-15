@@ -30,7 +30,42 @@ var videoProxyResponseHeaders = [...]string{
 	"Last-Modified",
 }
 
-func copyVideoProxyHeaders(destination, source http.Header) error {
+// videoContentTypeAliases 把厂商方言 MIME 归一化为标准值:
+// S3/MinIO 系存储对未知对象默认吐 binary/octet-stream 等泛二进制类型,
+// application/mp4 是 RFC 4337 注册的 mp4 合法写法。
+var videoContentTypeAliases = map[string]string{
+	"binary/octet-stream":        "application/octet-stream",
+	"application/binary":         "application/octet-stream",
+	"application/x-octet-stream": "application/octet-stream",
+	"application/download":       "application/octet-stream",
+	"application/x-download":     "application/octet-stream",
+	"application/force-download": "application/octet-stream",
+	"application/mp4":            "video/mp4",
+}
+
+var videoExtensionContentTypes = map[string]string{
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".webm": "video/webm",
+	".mov":  "video/quicktime",
+	".mkv":  "video/x-matroska",
+}
+
+// videoContentTypeFromURL 仅在上游只给出泛二进制类型时使用:
+// 按直链路径后缀推断真实视频类型,推断不出保持 octet-stream。
+func videoContentTypeFromURL(videoURL string) string {
+	parsed, err := url.Parse(videoURL)
+	if err != nil {
+		return ""
+	}
+	dot := strings.LastIndex(parsed.Path, ".")
+	if dot < 0 {
+		return ""
+	}
+	return videoExtensionContentTypes[strings.ToLower(parsed.Path[dot:])]
+}
+
+func copyVideoProxyHeaders(destination, source http.Header, videoURL string) error {
 	contentTypes := source.Values("Content-Type")
 	if len(contentTypes) > 1 {
 		return fmt.Errorf("multiple content types")
@@ -42,10 +77,18 @@ func copyVideoProxyHeaders(destination, source http.Header) error {
 			return fmt.Errorf("invalid content type")
 		}
 		mediaType = strings.ToLower(mediaType)
+		if canonical, ok := videoContentTypeAliases[mediaType]; ok {
+			mediaType = canonical
+		}
 		if !strings.HasPrefix(mediaType, "video/") && mediaType != "application/octet-stream" {
 			return fmt.Errorf("unsupported content type")
 		}
 		contentType = mediaType
+	}
+	if contentType == "application/octet-stream" {
+		if inferred := videoContentTypeFromURL(videoURL); inferred != "" {
+			contentType = inferred
+		}
 	}
 
 	for _, key := range videoProxyResponseHeaders {
@@ -320,7 +363,7 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	if err := copyVideoProxyHeaders(c.Writer.Header(), resp.Header); err != nil {
+	if err := copyVideoProxyHeaders(c.Writer.Header(), resp.Header, videoURL); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned an unsafe content type for task %s", taskID))
 		videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 		return

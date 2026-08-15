@@ -37,7 +37,7 @@ func TestCopyVideoProxyHeadersAllowsOnlyDeliveryMetadata(t *testing.T) {
 	}
 	destination := make(http.Header)
 
-	require.NoError(t, copyVideoProxyHeaders(destination, upstream))
+	require.NoError(t, copyVideoProxyHeaders(destination, upstream, "https://storage.example/video.mp4"))
 
 	assert.Equal(t, "video/mp4", destination.Get("Content-Type"))
 	assert.Equal(t, "123", destination.Get("Content-Length"))
@@ -67,7 +67,7 @@ func TestCopyVideoProxyHeadersUsesMIMEAppropriateDownloadName(t *testing.T) {
 	} {
 		t.Run(testCase.contentType, func(t *testing.T) {
 			destination := make(http.Header)
-			require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{testCase.contentType}}))
+			require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{testCase.contentType}}, ""))
 			assert.Equal(t, `attachment; filename="`+testCase.filename+`"`, destination.Get("Content-Disposition"))
 		})
 	}
@@ -81,16 +81,71 @@ func TestCopyVideoProxyHeadersRejectsActiveContent(t *testing.T) {
 		"X-Provider-Request":  []string{"provider-request-id"},
 	}
 
-	err := copyVideoProxyHeaders(destination, upstream)
+	err := copyVideoProxyHeaders(destination, upstream, "https://storage.example/video.mp4")
 
 	assert.Error(t, err)
 	assert.Empty(t, destination)
 }
 
+func TestCopyVideoProxyHeadersNormalizesGenericBinaryAliases(t *testing.T) {
+	for _, alias := range []string{
+		"binary/octet-stream",
+		"application/binary",
+		"application/x-octet-stream",
+		"application/download",
+		"application/x-download",
+		"application/force-download",
+	} {
+		t.Run(alias, func(t *testing.T) {
+			destination := make(http.Header)
+			require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{alias}}, ""))
+			assert.Equal(t, "application/octet-stream", destination.Get("Content-Type"))
+			assert.Equal(t, `attachment; filename="video.bin"`, destination.Get("Content-Disposition"))
+		})
+	}
+}
+
+func TestCopyVideoProxyHeadersMapsApplicationMP4ToVideoMP4(t *testing.T) {
+	destination := make(http.Header)
+	require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{"application/mp4"}}, ""))
+	assert.Equal(t, "video/mp4", destination.Get("Content-Type"))
+	assert.Equal(t, `attachment; filename="video.mp4"`, destination.Get("Content-Disposition"))
+}
+
+func TestCopyVideoProxyHeadersInfersTypeFromURLForGenericBinary(t *testing.T) {
+	for _, testCase := range []struct {
+		videoURL    string
+		contentType string
+		filename    string
+	}{
+		{videoURL: "https://minio.example/bucket/2026/output_abc.mp4", contentType: "video/mp4", filename: "video.mp4"},
+		{videoURL: "https://minio.example/clip.m4v?signature=sig", contentType: "video/mp4", filename: "video.mp4"},
+		{videoURL: "https://minio.example/clip.webm", contentType: "video/webm", filename: "video.webm"},
+		{videoURL: "https://minio.example/clip.MOV", contentType: "video/quicktime", filename: "video.mov"},
+		{videoURL: "https://minio.example/clip.mkv", contentType: "video/x-matroska", filename: "video.mkv"},
+		{videoURL: "https://minio.example/clip.avi", contentType: "application/octet-stream", filename: "video.bin"},
+		{videoURL: "", contentType: "application/octet-stream", filename: "video.bin"},
+	} {
+		t.Run(testCase.videoURL, func(t *testing.T) {
+			destination := make(http.Header)
+			require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{"binary/octet-stream"}}, testCase.videoURL))
+			assert.Equal(t, testCase.contentType, destination.Get("Content-Type"))
+			assert.Equal(t, `attachment; filename="`+testCase.filename+`"`, destination.Get("Content-Disposition"))
+		})
+	}
+}
+
+func TestCopyVideoProxyHeadersURLDoesNotOverrideExplicitVideoType(t *testing.T) {
+	destination := make(http.Header)
+	require.NoError(t, copyVideoProxyHeaders(destination, http.Header{"Content-Type": []string{"video/webm"}}, "https://minio.example/clip.mp4"))
+	assert.Equal(t, "video/webm", destination.Get("Content-Type"))
+	assert.Equal(t, `attachment; filename="video.webm"`, destination.Get("Content-Disposition"))
+}
+
 func TestCopyVideoProxyHeadersDefaultsMissingContentType(t *testing.T) {
 	destination := make(http.Header)
 
-	err := copyVideoProxyHeaders(destination, make(http.Header))
+	err := copyVideoProxyHeaders(destination, make(http.Header), "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "application/octet-stream", destination.Get("Content-Type"))
