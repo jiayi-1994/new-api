@@ -166,7 +166,7 @@ func videoURLFromTaskData(task *model.Task) string {
 	}
 	// `object` last: meaicc-style relays put the signed direct link there instead
 	// of the official "video" literal; non-URL values fail the scheme check below.
-	for _, path := range []string{"url", "video_url", "metadata.url", "metadata.origin_video_url", "object"} {
+	for _, path := range []string{"url", "video_url", "output_url", "metadata.url", "metadata.origin_video_url", "object"} {
 		candidate := strings.TrimSpace(gjson.GetBytes(task.Data, path).String())
 		if candidate == "" {
 			continue

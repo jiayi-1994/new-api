@@ -62,13 +62,32 @@ func (s *flexString) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// flexInt tolerates upstreams that send a JSON float where the OpenAI video
+// API specifies an integer (e.g. `"progress": 0.0` / `"progress": 42.5` from
+// Python-backed relays). Fractions are truncated.
+type flexInt int
+
+func (i *flexInt) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*i = 0
+		return nil
+	}
+	var f float64
+	if err := common.Unmarshal(trimmed, &f); err != nil {
+		return err
+	}
+	*i = flexInt(f)
+	return nil
+}
+
 type responseTask struct {
 	ID                 string     `json:"id"`
 	TaskID             string     `json:"task_id,omitempty"` //兼容旧接口
 	Object             string     `json:"object"`
 	Model              string     `json:"model"`
 	Status             string     `json:"status"`
-	Progress           int        `json:"progress"`
+	Progress           flexInt    `json:"progress"`
 	CreatedAt          int64      `json:"created_at"`
 	CompletedAt        int64      `json:"completed_at,omitempty"`
 	ExpiresAt          int64      `json:"expires_at,omitempty"`
@@ -417,13 +436,20 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	// 浏览器 <video>/<a> 无法携带 Authorization 头也能访问。
 	// meaicc 类中转把签名直链塞在非标准 `object` 字段（官方值应为字面量 "video"），
 	// 仅当其值形如 http(s) URL 时一并改写，避免破坏正常的 "video" 字面量。
-	rewritePaths := []string{"url", "video_url", "result_url", "metadata.url", "metadata.origin_video_url"}
+	rewritePaths := []string{"url", "video_url", "result_url", "output_url", "metadata.url", "metadata.origin_video_url"}
 	if obj := strings.TrimSpace(gjson.GetBytes(data, "object").String()); strings.HasPrefix(obj, "http://") || strings.HasPrefix(obj, "https://") {
 		rewritePaths = append(rewritePaths, "object")
 	}
+	taskSucceeded := task.Status == model.TaskStatusSuccess
 	proxyURL := ""
 	for _, path := range rewritePaths {
-		if !gjson.GetBytes(data, path).Exists() {
+		field := gjson.GetBytes(data, path)
+		if !field.Exists() {
+			continue
+		}
+		// 部分中转在任务未完成时就带空的 url/result_url 占位键(官方完成前不带这些键)。
+		// 未成功且原值为空时保持空值,否则客户端会把 queued 任务误判为已出结果。
+		if !taskSucceeded && strings.TrimSpace(field.String()) == "" {
 			continue
 		}
 		if proxyURL == "" {

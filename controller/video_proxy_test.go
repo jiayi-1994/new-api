@@ -366,6 +366,40 @@ func TestVideoProxyOpenAICompatibleUsesDirectURLFromTaskData(t *testing.T) {
 	assert.Empty(t, gotAuth, "direct URL fetch must not carry the channel key")
 }
 
+func TestVideoProxyOpenAICompatibleUsesOutputURLDirectLink(t *testing.T) {
+	// MiniMax-style upstreams put the finished video direct link in
+	// `output_url`; it must be tried as an anonymous direct link
+	setupVideoProxyTest(t)
+	gin.SetMode(gin.TestMode)
+	var gotAuth, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	channel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Name: "video-proxy-test", Key: "channel-secret"}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := &model.Task{
+		TaskID:    "task-public-1",
+		UserId:    42,
+		ChannelId: channel.Id,
+		Status:    model.TaskStatusSuccess,
+		Data:      json.RawMessage(`{"id":"67ea6f2c","object":"video","status":"completed","progress":100.0,"output_url":"` + upstream.URL + `/files/final.mp4"}`),
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	response := serveVideoProxyRequest(42)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "hello", response.Body.String())
+	assert.Equal(t, "/files/final.mp4", gotPath)
+	assert.Empty(t, gotAuth, "direct URL fetch must not carry the channel key")
+}
+
 func TestVideoProxyOpenAICompatibleUsesObjectFieldURL(t *testing.T) {
 	// meaicc-style New-API relays put the signed direct video link in the
 	// non-standard `object` field and their official /content endpoint is broken

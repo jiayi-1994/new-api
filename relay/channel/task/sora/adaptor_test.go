@@ -1,13 +1,19 @@
 package sora
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -58,6 +64,71 @@ func TestParseTaskResultAcceptsNumericSeconds(t *testing.T) {
 	taskInfo, err = (&TaskAdaptor{}).ParseTaskResult(stringBody)
 	require.NoError(t, err)
 	assert.Equal(t, string(model.TaskStatusSuccess), taskInfo.Status)
+}
+
+func TestParseTaskResultAcceptsFloatProgress(t *testing.T) {
+	// Python-backed video upstreams serialize progress as a float
+	// (`"progress":0.0`, `"progress":42.5`) where the official API uses an
+	// integer — polling must not get stuck on parse errors
+	body := []byte(`{"id":"67ea6f2c","object":"video","status":"queued","model":"MiniMaxAI/MiniMax-H3","progress":0.0,"created_at":1787751034,"completed_at":null,"error":null}`)
+
+	taskInfo, err := (&TaskAdaptor{}).ParseTaskResult(body)
+	require.NoError(t, err)
+	assert.Equal(t, string(model.TaskStatusQueued), taskInfo.Status)
+
+	midBody := []byte(`{"id":"67ea6f2c","object":"video","status":"processing","progress":42.5}`)
+	taskInfo, err = (&TaskAdaptor{}).ParseTaskResult(midBody)
+	require.NoError(t, err)
+	assert.Equal(t, string(model.TaskStatusInProgress), taskInfo.Status)
+	assert.Equal(t, "42%", taskInfo.Progress)
+}
+
+func TestDoResponseAcceptsFloatProgressSubmitPayload(t *testing.T) {
+	// real submit response from a MiniMax-style upstream: float progress,
+	// null completed_at/error, plus non-standard billing fields to ignore
+	body := `{"id":"67ea6f2c-5948-4bcf-ba93-8aeee654928f","object":"video","status":"queued","model":"MiniMaxAI/MiniMax-H3","progress":0.0,"created_at":1787751034,"completed_at":null,"error":null,"project_id":"949368fc","credits_held":450,"queue_status":{"state":"status_unavailable"},"held_microcredits":450000000}`
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public456"}}
+
+	upstreamID, taskData, taskErr := (&TaskAdaptor{}).DoResponse(c, resp, info)
+	require.Nil(t, taskErr)
+	assert.Equal(t, "67ea6f2c-5948-4bcf-ba93-8aeee654928f", upstreamID)
+	assert.Equal(t, body, string(taskData))
+
+	// the client-facing response must carry the public task ID, not the upstream one
+	assert.Equal(t, "task_public456", gjson.Get(recorder.Body.String(), "id").String())
+}
+
+func TestConvertToOpenAIVideoRewritesOutputURL(t *testing.T) {
+	// MiniMax-style upstreams deliver the finished video via `output_url`;
+	// it must be hidden behind the signed proxy URL like url/result_url.
+	upstreamURL := "https://upstream.example.com/files/final.mp4?signature=abc"
+	data, err := common.Marshal(map[string]any{
+		"id":         "67ea6f2c",
+		"object":     "video",
+		"status":     "completed",
+		"output_url": upstreamURL,
+	})
+	require.NoError(t, err)
+
+	prevSecret := common.SessionSecret
+	common.SessionSecret = "sora-adaptor-test-secret"
+	t.Cleanup(func() { common.SessionSecret = prevSecret })
+
+	task := &model.Task{ID: 99, UserId: 42, TaskID: "task_public456", Status: model.TaskStatusSuccess, Data: data}
+	out, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(out), "upstream.example.com")
+	rewritten := gjson.GetBytes(out, "output_url").String()
+	parsed, err := url.Parse(rewritten)
+	require.NoError(t, err)
+	assert.Equal(t, taskcommon.BuildProxyURL(task.TaskID), parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	assert.NotEmpty(t, parsed.Query().Get("video_token"))
 }
 
 func TestConvertToOpenAIVideoHidesUpstreamURLsAndTaskID(t *testing.T) {
@@ -150,6 +221,41 @@ func TestConvertToOpenAIVideoLeavesPendingTaskWithoutURLs(t *testing.T) {
 	assert.Equal(t, "task_public456", gjson.GetBytes(out, "id").String())
 	assert.False(t, gjson.GetBytes(out, "url").Exists())
 	assert.False(t, gjson.GetBytes(out, "task_id").Exists())
+}
+
+func TestConvertToOpenAIVideoKeepsEmptyURLPlaceholdersWhilePending(t *testing.T) {
+	// Some relay upstreams include empty-string url/result_url/video_url keys
+	// while the task is still queued; they must stay empty instead of being
+	// rewritten into a signed proxy URL, or clients treat the task as done.
+	data, err := common.Marshal(map[string]any{
+		"id":         "task_upstream123",
+		"task_id":    "task_upstream123",
+		"object":     "video",
+		"status":     "queued",
+		"url":        "",
+		"video_url":  "",
+		"result_url": "",
+	})
+	require.NoError(t, err)
+
+	task := &model.Task{ID: 99, UserId: 42, TaskID: "task_public456", Status: model.TaskStatusQueued, Data: data}
+	out, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", gjson.GetBytes(out, "url").String())
+	assert.Equal(t, "", gjson.GetBytes(out, "video_url").String())
+	assert.Equal(t, "", gjson.GetBytes(out, "result_url").String())
+	assert.NotContains(t, string(out), "video_token")
+
+	// once the task succeeds the same empty placeholders must be rewritten
+	prevSecret := common.SessionSecret
+	common.SessionSecret = "sora-adaptor-test-secret"
+	t.Cleanup(func() { common.SessionSecret = prevSecret })
+
+	task.Status = model.TaskStatusSuccess
+	out, err = (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(gjson.GetBytes(out, "result_url").String(), taskcommon.BuildProxyURL("task_public456")+"?video_token="))
 }
 
 func TestWrapDashScopeVideoPayloadWrapsPromptImagesAndKnobs(t *testing.T) {
