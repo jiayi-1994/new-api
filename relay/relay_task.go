@@ -139,8 +139,6 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	return nil
 }
 
-var getTaskAdaptor = GetTaskAdaptor
-
 func videoResolutionNotSupported(modelName, resolution string) *dto.TaskError {
 	if resolution == "" {
 		resolution = "unknown"
@@ -152,12 +150,29 @@ func videoResolutionNotSupported(modelName, resolution string) *dto.TaskError {
 	)
 }
 
+type relayTaskSubmitDeps struct {
+	getTaskAdaptor func(constant.TaskPlatform) channel.TaskAdaptor
+	preConsume     func(*gin.Context, int, *relaycommon.RelayInfo) *dto.TaskError
+}
+
 // RelayTaskSubmit 完成 task 提交的全部流程（每次尝试调用一次）：
 // 刷新渠道元数据 → 确定 platform/adaptor → 验证请求 →
 // 估算计费(EstimateBilling) → 计算价格 → 预扣费（仅首次）→
 // 构建/发送/解析上游请求 → 提交后计费调整(AdjustBillingOnSubmit)。
 // 控制器负责 defer Refund 和成功后 Settle。
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
+	return relayTaskSubmitWithDeps(c, info, relayTaskSubmitDeps{
+		getTaskAdaptor: GetTaskAdaptor,
+		preConsume: func(c *gin.Context, quota int, info *relaycommon.RelayInfo) *dto.TaskError {
+			if apiErr := service.PreConsumeBilling(c, quota, info); apiErr != nil {
+				return service.TaskErrorFromAPIError(apiErr)
+			}
+			return nil
+		},
+	})
+}
+
+func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps relayTaskSubmitDeps) (*TaskSubmitResult, *dto.TaskError) {
 	info.InitChannelMeta(c)
 
 	// 1. 确定 platform → 创建适配器 → 验证请求
@@ -165,7 +180,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if platform == "" {
 		platform = GetTaskPlatform(c)
 	}
-	adaptor := getTaskAdaptor(platform)
+	adaptor := deps.getTaskAdaptor(platform)
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
@@ -251,8 +266,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
+		if taskErr := deps.preConsume(c, info.PriceData.Quota, info); taskErr != nil {
+			return nil, taskErr
 		}
 	}
 

@@ -134,12 +134,30 @@ func TestSoraBuildRequestBodyUsesResolvedBillingPayload(t *testing.T) {
 	assert.NotContains(t, decoded, "resolution")
 }
 
-func TestSoraBuildRequestBodyOverridesPrewrappedDashScopeBillingParameters(t *testing.T) {
+func TestSoraRejectsUnsupportedPrewrappedDashScopeBillingParameters(t *testing.T) {
 	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Model: "client-model", Prompt: "animate"})
 	c.Request = httptest.NewRequest(
 		http.MethodPost,
 		"/v1/videos",
 		strings.NewReader(`{"model":"client-model","prompt":"animate","input":{"prompt":"wrapped"},"parameters":{"resolution":"1080P","duration":3600}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.UpstreamModelName = "sora-2-pro"
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+}
+
+func TestSoraDashScopeNestedParametersSelect1024pAndEightSeconds(t *testing.T) {
+	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Model: "client-model", Prompt: "animate"})
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"client-model","prompt":"animate","input":{"prompt":"wrapped","negative_prompt":"blur"},"parameters":{"resolution":"1024P","duration":8,"seed":42}}`),
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 	info.UpstreamModelName = "sora-2-pro"
@@ -156,11 +174,147 @@ func TestSoraBuildRequestBodyOverridesPrewrappedDashScopeBillingParameters(t *te
 	require.NoError(t, common.Unmarshal(payload, &decoded))
 	parameters, ok := decoded["parameters"].(map[string]any)
 	require.True(t, ok)
+	input, ok := decoded["input"].(map[string]any)
+	require.True(t, ok)
 
-	assert.Equal(t, "720p", selection.EffectiveResolution)
-	assert.Equal(t, 4, selection.EffectiveDurationSeconds)
-	assert.Equal(t, "720P", parameters["resolution"])
-	assert.Equal(t, float64(4), parameters["duration"])
+	assert.Equal(t, "1024p", selection.EffectiveResolution)
+	assert.Equal(t, 8, selection.EffectiveDurationSeconds)
+	assert.Equal(t, "1024P", parameters["resolution"])
+	assert.Equal(t, float64(8), parameters["duration"])
+	assert.Equal(t, float64(42), parameters["seed"])
+	assert.Equal(t, "wrapped", input["prompt"])
+	assert.Equal(t, "blur", input["negative_prompt"])
+	assert.Equal(t, "1024x1792", decoded["size"])
+	assert.Equal(t, "8", decoded["seconds"])
+}
+
+func TestSoraDashScopePreservesPrewrappedInputWithoutNestedPrompt(t *testing.T) {
+	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Model: "client-model", Prompt: "animate"})
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"client-model","prompt":"animate","input":{"negative_prompt":"blur","media":[{"type":"reference_image","url":"https://example.test/a.png"}]},"parameters":{"resolution":"720P","duration":4,"seed":42}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.UpstreamModelName = "sora-2-pro"
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+	adaptor := &TaskAdaptor{}
+
+	_, taskErr := adaptor.ResolveVideoBilling(c, info)
+	require.Nil(t, taskErr)
+	body, err := adaptor.BuildRequestBody(c, info)
+	require.NoError(t, err)
+	payload, err := io.ReadAll(body)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, common.Unmarshal(payload, &decoded))
+	input, ok := decoded["input"].(map[string]any)
+	require.True(t, ok)
+
+	assert.Equal(t, "animate", input["prompt"])
+	assert.Equal(t, "blur", input["negative_prompt"])
+	media, ok := input["media"].([]any)
+	require.True(t, ok)
+	require.Len(t, media, 1)
+	assert.Equal(t, "https://example.test/a.png", media[0].(map[string]any)["url"])
+}
+
+func TestSoraDashScopeEquivalentTopLevelAndNestedParametersAreMerged(t *testing.T) {
+	req := relaycommon.TaskSubmitReq{
+		Model:      "sora-2-pro",
+		Prompt:     "animate",
+		Size:       "1792x1024",
+		Resolution: "1024p",
+		Seconds:    "8",
+		Duration:   8,
+	}
+	c, info := soraVideoBillingContext(t, req)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"sora-2-pro","prompt":"animate","size":"1792x1024","resolution":"1024p","seconds":"8","duration":8,"input":{"prompt":"wrapped"},"parameters":{"resolution":"1024P","duration":8,"seed":42}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+	adaptor := &TaskAdaptor{}
+
+	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+	require.Nil(t, taskErr)
+	body, err := adaptor.BuildRequestBody(c, info)
+	require.NoError(t, err)
+	payload, err := io.ReadAll(body)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, common.Unmarshal(payload, &decoded))
+	parameters := decoded["parameters"].(map[string]any)
+
+	assert.Equal(t, "1024p", selection.EffectiveResolution)
+	assert.Equal(t, 8, selection.EffectiveDurationSeconds)
+	assert.Equal(t, float64(42), parameters["seed"])
+}
+
+func TestSoraDashScopeRejectsConflictingTopLevelAndNestedResolution(t *testing.T) {
+	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{
+		Model:   "sora-2-pro",
+		Prompt:  "animate",
+		Size:    "720x1280",
+		Seconds: "8",
+	})
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"sora-2-pro","prompt":"animate","size":"720x1280","seconds":"8","input":{"prompt":"wrapped"},"parameters":{"resolution":"1024P","duration":8}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+}
+
+func TestSoraDashScopeRejectsConflictingTopLevelAndNestedDuration(t *testing.T) {
+	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{
+		Model:   "sora-2-pro",
+		Prompt:  "animate",
+		Size:    "1024x1792",
+		Seconds: "8",
+	})
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"sora-2-pro","prompt":"animate","size":"1024x1792","seconds":"8","input":{"prompt":"wrapped"},"parameters":{"resolution":"1024P","duration":7}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+}
+
+func TestSoraDashScopeRejectsOversizedNestedDuration(t *testing.T) {
+	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Model: "sora-2-pro", Prompt: "animate"})
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"sora-2-pro","prompt":"animate","input":{"prompt":"wrapped"},"parameters":{"resolution":"1024P","duration":3601,"seed":42}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	info.ChannelSetting.VideoPayloadFormat = "dashscope"
+
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
 }
 
 func TestSoraRemixVideoBillingRestoresSavedSelection(t *testing.T) {

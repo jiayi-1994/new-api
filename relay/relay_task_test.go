@@ -27,6 +27,7 @@ type taskSubmitTestAdaptor struct {
 	didAdjust       bool
 	didBuildRequest bool
 	didRequest      bool
+	requestCalls    int
 }
 
 func (a *taskSubmitTestAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -61,6 +62,7 @@ func (a *taskSubmitTestAdaptor) BuildRequestBody(*gin.Context, *relaycommon.Rela
 
 func (a *taskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
 	a.didRequest = true
+	a.requestCalls++
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewBufferString(`{"id":"upstream-task"}`)),
@@ -98,13 +100,16 @@ func (taskSubmitTestBilling) NeedsRefund() bool        { return false }
 func (taskSubmitTestBilling) GetPreConsumedQuota() int { return 0 }
 func (taskSubmitTestBilling) Reserve(int) error        { return nil }
 
-func taskSubmitVideoTestContext(t *testing.T, adaptor *taskSubmitTestAdaptor) (*gin.Context, *relaycommon.RelayInfo) {
+type taskSubmitTestState struct {
+	preConsumeCalls int
+}
+
+func taskSubmitVideoTestContext(
+	t *testing.T,
+	adaptor channel.TaskAdaptor,
+) (*gin.Context, *relaycommon.RelayInfo, relayTaskSubmitDeps, *taskSubmitTestState) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-
-	originalFactory := getTaskAdaptor
-	getTaskAdaptor = func(constant.TaskPlatform) channel.TaskAdaptor { return adaptor }
-	t.Cleanup(func() { getTaskAdaptor = originalFactory })
 
 	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
 	originalModelPrices := ratio_setting.ModelPrice2JSONString()
@@ -134,20 +139,27 @@ func taskSubmitVideoTestContext(t *testing.T, adaptor *taskSubmitTestAdaptor) (*
 		OriginModelName: "client-model",
 		UsingGroup:      "default",
 		UserGroup:       "default",
-		Billing:         taskSubmitTestBilling{},
 		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
 	}
-	return c, info
+	state := &taskSubmitTestState{}
+	deps := relayTaskSubmitDeps{
+		getTaskAdaptor: func(constant.TaskPlatform) channel.TaskAdaptor { return adaptor },
+		preConsume: func(_ *gin.Context, _ int, relayInfo *relaycommon.RelayInfo) *dto.TaskError {
+			state.preConsumeCalls++
+			relayInfo.Billing = taskSubmitTestBilling{}
+			return nil
+		},
+	}
+	return c, info, deps, state
 }
 
 func TestRelayTaskSubmitUsesOriginalModelForResolutionPrice(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 4}}
-	c, info := taskSubmitVideoTestContext(t, base)
-	getTaskAdaptor = func(constant.TaskPlatform) channel.TaskAdaptor { return &videoTaskSubmitTestAdaptor{base} }
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
 	c.Set("model_mapping", `{"client-model":"upstream-model"}`)
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1},"upstream-model":{"720p":0.9}}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	require.Nil(t, taskErr)
 	require.NotNil(t, result)
@@ -158,45 +170,47 @@ func TestRelayTaskSubmitUsesOriginalModelForResolutionPrice(t *testing.T) {
 	assert.False(t, base.didAdjust)
 	assert.True(t, base.didBuildRequest)
 	assert.True(t, base.didRequest)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 1, base.requestCalls)
 }
 
 func TestRelayTaskSubmitResolutionPriceAlwaysMultipliesDuration(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 8}}
-	c, info := taskSubmitVideoTestContext(t, base)
-	getTaskAdaptor = func(constant.TaskPlatform) channel.TaskAdaptor { return &videoTaskSubmitTestAdaptor{base} }
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	require.Nil(t, taskErr)
 	require.NotNil(t, result)
 	assert.Equal(t, 400, result.Quota)
 	assert.Empty(t, info.PriceData.OtherRatios())
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 1, base.requestCalls)
 }
 
 func TestRelayTaskSubmitResolutionPricingIgnoresLegacyPerCallMode(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 8}}
-	c, info := taskSubmitVideoTestContext(t, base)
-	getTaskAdaptor = func(constant.TaskPlatform) channel.TaskAdaptor { return &videoTaskSubmitTestAdaptor{base} }
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
 	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"client-model":"per_call"}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	require.Nil(t, taskErr)
 	require.NotNil(t, result)
 	assert.Equal(t, 400, result.Quota)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 1, base.requestCalls)
 }
 
 func TestRelayTaskSubmitRejectsUnconfiguredResolutionBeforeRequest(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 5}}
-	c, info := taskSubmitVideoTestContext(t, base)
-	getTaskAdaptor = func(constant.TaskPlatform) channel.TaskAdaptor { return &videoTaskSubmitTestAdaptor{base} }
-	info.Billing = nil
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.001}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	assert.Nil(t, result)
 	require.NotNil(t, taskErr)
@@ -207,15 +221,52 @@ func TestRelayTaskSubmitRejectsUnconfiguredResolutionBeforeRequest(t *testing.T)
 	assert.False(t, base.didEstimate)
 	assert.False(t, base.didBuildRequest)
 	assert.False(t, base.didRequest)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.Zero(t, base.requestCalls)
+}
+
+func TestRelayTaskSubmitRejectsUnconfiguredModelBeforePreConsume(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.001}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.False(t, base.didBuildRequest)
+	assert.False(t, base.didRequest)
+	assert.Zero(t, base.requestCalls)
+}
+
+func TestRelayTaskSubmitRejectsUnknownResolutionBeforePreConsume(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveDurationSeconds: 5}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Contains(t, taskErr.Message, "unknown")
+	assert.Zero(t, state.preConsumeCalls)
+	assert.False(t, base.didBuildRequest)
+	assert.False(t, base.didRequest)
+	assert.Zero(t, base.requestCalls)
 }
 
 func TestRelayTaskSubmitRejectsVideoAdaptorWithoutResolver(t *testing.T) {
 	base := &taskSubmitTestAdaptor{}
-	c, info := taskSubmitVideoTestContext(t, base)
-	info.Billing = nil
+	c, info, deps, state := taskSubmitVideoTestContext(t, base)
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	assert.Nil(t, result)
 	require.NotNil(t, taskErr)
@@ -226,20 +277,24 @@ func TestRelayTaskSubmitRejectsVideoAdaptorWithoutResolver(t *testing.T) {
 	assert.False(t, base.didEstimate)
 	assert.False(t, base.didBuildRequest)
 	assert.False(t, base.didRequest)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.Zero(t, base.requestCalls)
 }
 
 func TestRelayTaskSubmitKeepsLegacySunoPath(t *testing.T) {
 	base := &taskSubmitTestAdaptor{}
-	c, info := taskSubmitVideoTestContext(t, base)
+	c, info, deps, state := taskSubmitVideoTestContext(t, base)
 	c.Set("platform", string(constant.TaskPlatformSuno))
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
 	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{}`))
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.1}`))
 
-	result, taskErr := RelayTaskSubmit(c, info)
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	require.Nil(t, taskErr)
 	require.NotNil(t, result)
 	assert.True(t, base.didEstimate)
 	assert.True(t, base.didRequest)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 1, base.requestCalls)
 }
