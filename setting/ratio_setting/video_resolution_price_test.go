@@ -1,8 +1,10 @@
 package ratio_setting
 
 import (
+	"sync/atomic"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,6 +17,17 @@ func TestInvalidResolutionPriceDoesNotReplaceLiveConfig(t *testing.T) {
 	price, ok := GetVideoResolutionPrice("sora-2", "720p")
 	assert.True(t, ok)
 	assert.Equal(t, 0.1, price)
+}
+
+func TestVideoResolutionPriceRejectsIdenticalRawJSONKeys(t *testing.T) {
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.1}}`))
+	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })
+
+	err := UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.2,"720p":0.3}}`)
+	assert.Error(t, err)
+	assert.Equal(t, map[string]map[string]float64{
+		"sora-2": {"720p": 0.1},
+	}, GetVideoResolutionPriceMap())
 }
 
 func TestUpdateVideoResolutionPriceRejectsNonPositiveAndNonFinitePrices(t *testing.T) {
@@ -49,6 +62,24 @@ func TestGetVideoResolutionPriceUsesCompactWildcardModel(t *testing.T) {
 	price, ok := GetVideoResolutionPrice("sora-2-openai-compact", " 720P ")
 	assert.True(t, ok)
 	assert.Equal(t, 0.25, price)
+}
+
+func TestGetVideoResolutionBillingConfigDefaultsPerSecondDespiteTaskPricePatch(t *testing.T) {
+	originalPatches := constant.TaskPricePatches
+	constant.TaskPricePatches = []string{"sora-2"}
+	require.NoError(t, UpdateVideoResolutionPricingSnapshotByJSONString(
+		`{"sora-2":{"720p":0.1}}`,
+		`{}`,
+	))
+	t.Cleanup(func() {
+		constant.TaskPricePatches = originalPatches
+		require.NoError(t, UpdateVideoResolutionPricingSnapshotByJSONString("{}", "{}"))
+	})
+
+	price, mode, ok := GetVideoResolutionBillingConfig("sora-2", "720p")
+	assert.True(t, ok)
+	assert.Equal(t, 0.1, price)
+	assert.Equal(t, TaskBillingModePerSecond, mode)
 }
 
 func TestGetVideoResolutionPriceMapReturnsDeepCopy(t *testing.T) {
@@ -94,4 +125,40 @@ func TestExposedDataIncludesVideoResolutionPriceCopy(t *testing.T) {
 	next := GetExposedData()["video_resolution_price"].(map[string]map[string]float64)
 	assert.Equal(t, 0.1, next["sora-2"]["720p"])
 	assert.NotContains(t, next, "other")
+}
+
+func TestExposedDataInvalidationPreventsStaleRebuildPublication(t *testing.T) {
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.1}}`))
+	InvalidateExposedDataCache()
+	realBuilder := buildExposedDataSnapshot
+	firstSnapshotBuilt := make(chan struct{})
+	releaseFirstSnapshot := make(chan struct{})
+	var calls atomic.Int32
+	buildExposedDataSnapshot = func() map[string]any {
+		data := realBuilder()
+		if calls.Add(1) == 1 {
+			close(firstSnapshotBuilt)
+			<-releaseFirstSnapshot
+		}
+		return data
+	}
+	t.Cleanup(func() {
+		buildExposedDataSnapshot = realBuilder
+		require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}"))
+		InvalidateExposedDataCache()
+	})
+
+	result := make(chan map[string]any, 1)
+	go func() {
+		result <- GetExposedData()
+	}()
+	<-firstSnapshotBuilt
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.2}}`))
+	close(releaseFirstSnapshot)
+
+	got := <-result
+	prices := got["video_resolution_price"].(map[string]map[string]float64)
+	assert.Equal(t, 0.2, prices["sora-2"]["720p"])
+	next := GetExposedData()["video_resolution_price"].(map[string]map[string]float64)
+	assert.Equal(t, 0.2, next["sora-2"]["720p"])
 }

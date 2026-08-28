@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -190,8 +191,12 @@ func InitOptionMap() {
 }
 
 var publishVideoResolutionPricingSnapshot = ratio_setting.UpdateVideoResolutionPricingSnapshotByJSONString
+var videoResolutionOptionMu sync.Mutex
 
 func loadOptionsFromDatabase() {
+	videoResolutionOptionMu.Lock()
+	defer videoResolutionOptionMu.Unlock()
+
 	options, err := AllOption()
 	if err != nil {
 		common.SysLog("failed to load options from database: " + err.Error())
@@ -254,6 +259,10 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
+	if key == ratio_setting.VideoResolutionPriceOptionKey || key == "TaskBillingMode" {
+		videoResolutionOptionMu.Lock()
+		defer videoResolutionOptionMu.Unlock()
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -288,10 +297,15 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 	priceJSON, hasPrice := values[ratio_setting.VideoResolutionPriceOptionKey]
+	_, hasMode := values["TaskBillingMode"]
+	if hasPrice || hasMode {
+		videoResolutionOptionMu.Lock()
+		defer videoResolutionOptionMu.Unlock()
+	}
 	if !hasPrice {
 		priceJSON = ratio_setting.VideoResolutionPrice2JSONString()
 	}
-	modeJSON, hasMode := values["TaskBillingMode"]
+	modeJSON := values["TaskBillingMode"]
 	if !hasMode {
 		modeJSON = ratio_setting.TaskBillingMode2JSONString()
 	}

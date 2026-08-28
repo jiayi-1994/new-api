@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 )
 
 const VideoResolutionPriceOptionKey = "VideoResolutionPrice"
@@ -21,6 +20,9 @@ var (
 
 func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64, error) {
 	rawValue := json.RawMessage(strings.TrimSpace(value))
+	if err := common.ValidateJSONNoDuplicateKeys(rawValue); err != nil {
+		return nil, fmt.Errorf("parse video resolution prices: %w", err)
+	}
 	if common.GetJsonType(rawValue) != "object" {
 		return nil, fmt.Errorf("video resolution prices must be a JSON object")
 	}
@@ -68,6 +70,9 @@ func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64,
 
 func parseTaskBillingModeJSON(value string) (map[string]string, error) {
 	rawValue := json.RawMessage(strings.TrimSpace(value))
+	if err := common.ValidateJSONNoDuplicateKeys(rawValue); err != nil {
+		return nil, fmt.Errorf("parse task billing modes: %w", err)
+	}
 	if common.GetJsonType(rawValue) != "object" {
 		return nil, fmt.Errorf("task billing modes must be a JSON object")
 	}
@@ -233,9 +238,6 @@ func GetVideoResolutionBillingConfig(model, resolution string) (price float64, m
 	mode, found = matchingTaskBillingModeLocked(model)
 	if found {
 		return price, mode, true
-	}
-	if common.StringsContains(constant.TaskPricePatches, model) {
-		return price, TaskBillingModePerCall, true
 	}
 	return price, TaskBillingModePerSecond, true
 }

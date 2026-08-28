@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -197,4 +198,59 @@ func TestLoadOptionsFromDatabasePublishesVideoPriceAndUnitTogether(t *testing.T)
 	for _, got := range readConcurrently() {
 		assert.Equal(t, observed{price: 0.2, mode: ratio_setting.TaskBillingModePerCall, ok: true}, got)
 	}
+}
+
+func TestConcurrentSingleSidedVideoPricingUpdatesPublishLatestDatabaseSnapshot(t *testing.T) {
+	setupVideoResolutionOptionTest(t)
+	require.NoError(t, UpdateOptionsBulk(map[string]string{
+		ratio_setting.VideoResolutionPriceOptionKey: `{"sora-2":{"720p":0.1}}`,
+		"TaskBillingMode": `{"sora-2":"per_second"}`,
+	}))
+
+	firstPublishEntered := make(chan struct{})
+	releaseFirstPublish := make(chan struct{})
+	secondPublishEntered := make(chan struct{})
+	realPublisher := publishVideoResolutionPricingSnapshot
+	publishVideoResolutionPricingSnapshot = func(priceJSON, modeJSON string) error {
+		if priceJSON == `{"sora-2":{"720p":0.2}}` && modeJSON == `{"sora-2":"per_second"}` {
+			close(firstPublishEntered)
+			<-releaseFirstPublish
+		}
+		if priceJSON == `{"sora-2":{"720p":0.1}}` && modeJSON == `{"sora-2":"per_call"}` {
+			close(secondPublishEntered)
+		}
+		return realPublisher(priceJSON, modeJSON)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- UpdateOptionsBulk(map[string]string{
+			ratio_setting.VideoResolutionPriceOptionKey: `{"sora-2":{"720p":0.2}}`,
+		})
+	}()
+	<-firstPublishEntered
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- UpdateOptionsBulk(map[string]string{
+			"TaskBillingMode": `{"sora-2":"per_call"}`,
+		})
+	}()
+	select {
+	case <-secondPublishEntered:
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(releaseFirstPublish)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+
+	var storedPrice, storedMode Option
+	require.NoError(t, DB.First(&storedPrice, "key = ?", ratio_setting.VideoResolutionPriceOptionKey).Error)
+	require.NoError(t, DB.First(&storedMode, "key = ?", "TaskBillingMode").Error)
+	assert.Equal(t, `{"sora-2":{"720p":0.2}}`, storedPrice.Value)
+	assert.Equal(t, `{"sora-2":"per_call"}`, storedMode.Value)
+	price, mode, ok := ratio_setting.GetVideoResolutionBillingConfig("sora-2", "720p")
+	assert.True(t, ok)
+	assert.Equal(t, 0.2, price)
+	assert.Equal(t, ratio_setting.TaskBillingModePerCall, mode)
 }

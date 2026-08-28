@@ -395,6 +395,13 @@ func UpdateOptionsBulk(c *gin.Context) {
 
 	values := make(map[string]string, len(options))
 	for _, option := range options {
+		if option.Key != ratio_setting.VideoResolutionPriceOptionKey && option.Key != "TaskBillingMode" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "bulk option update only supports VideoResolutionPrice and TaskBillingMode",
+			})
+			return
+		}
 		if _, exists := values[option.Key]; exists {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"success": false,
@@ -403,6 +410,13 @@ func UpdateOptionsBulk(c *gin.Context) {
 			return
 		}
 		values[option.Key] = optionUpdateValueString(option.Value)
+	}
+	if len(values) != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "bulk option update requires VideoResolutionPrice and TaskBillingMode",
+		})
+		return
 	}
 	if err := model.UpdateOptionsBulk(values); err != nil {
 		common.ApiError(c, err)
