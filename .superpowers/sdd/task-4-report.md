@@ -102,7 +102,7 @@ Fix commit: `915ccf57` (`fix(video): reject retired Gemini and normalize Vidu re
 
 ## Third Review Correction
 
-Fix commit: `fix(video): reject retired Vertex models`; the final SHA is recorded after the implementation commit.
+Fix commit: `61de14f4` (`fix(video): reject retired Vertex models`).
 
 ### RED Evidence
 
