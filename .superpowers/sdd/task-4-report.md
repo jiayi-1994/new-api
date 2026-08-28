@@ -75,7 +75,7 @@ Fix commit: `c0d9f811` (`fix(video): enforce provider capability contracts`).
 
 ## Second Review Correction
 
-Fix commit: `fix(video): reject retired Gemini and normalize Vidu references`; the final SHA is recorded below after the implementation commit.
+Fix commit: `915ccf57` (`fix(video): reject retired Gemini and normalize Vidu references`).
 
 ### RED Evidence
 
