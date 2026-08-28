@@ -4,7 +4,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,24 +61,6 @@ func TestGetVideoResolutionPriceUsesCompactWildcardModel(t *testing.T) {
 	price, ok := GetVideoResolutionPrice("sora-2-openai-compact", " 720P ")
 	assert.True(t, ok)
 	assert.Equal(t, 0.25, price)
-}
-
-func TestGetVideoResolutionBillingConfigDefaultsPerSecondDespiteTaskPricePatch(t *testing.T) {
-	originalPatches := constant.TaskPricePatches
-	constant.TaskPricePatches = []string{"sora-2"}
-	require.NoError(t, UpdateVideoResolutionPricingSnapshotByJSONString(
-		`{"sora-2":{"720p":0.1}}`,
-		`{}`,
-	))
-	t.Cleanup(func() {
-		constant.TaskPricePatches = originalPatches
-		require.NoError(t, UpdateVideoResolutionPricingSnapshotByJSONString("{}", "{}"))
-	})
-
-	price, mode, ok := GetVideoResolutionBillingConfig("sora-2", "720p")
-	assert.True(t, ok)
-	assert.Equal(t, 0.1, price)
-	assert.Equal(t, TaskBillingModePerSecond, mode)
 }
 
 func TestGetVideoResolutionPriceMapReturnsDeepCopy(t *testing.T) {

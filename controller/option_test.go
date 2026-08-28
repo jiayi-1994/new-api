@@ -35,9 +35,11 @@ func setupOptionControllerTest(t *testing.T) *gorm.DB {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = map[string]string{}
 	common.OptionMapRWMutex.Unlock()
-	require.NoError(t, ratio_setting.UpdateVideoResolutionPricingSnapshotByJSONString("{}", "{}"))
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString("{}"))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString("{}"))
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateVideoResolutionPricingSnapshotByJSONString("{}", "{}"))
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString("{}"))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString("{}"))
 		model.DB = originalDB
 		model.LOG_DB = originalLogDB
 		common.RedisEnabled = originalRedisEnabled
@@ -71,83 +73,6 @@ func TestUpdateOptionRejectsInvalidVideoResolutionPriceWithoutPersisting(t *test
 	price, ok := ratio_setting.GetVideoResolutionPrice("sora-2", "720p")
 	assert.True(t, ok)
 	assert.Equal(t, 0.1, price)
-}
-
-func TestUpdateOptionsBulkRejectsDuplicateKeys(t *testing.T) {
-	setupOptionControllerTest(t)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/option/bulk", strings.NewReader(`[
-		{"key":"TaskBillingMode","value":"{\"sora-2\":\"per_call\"}"},
-		{"key":"TaskBillingMode","value":"{\"sora-2\":\"per_second\"}"}
-	]`))
-
-	UpdateOptionsBulk(ctx)
-
-	assert.Equal(t, http.StatusBadRequest, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), "duplicate option key")
-}
-
-func TestUpdateOptionsBulkRequiresExactVideoPricingPair(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-	}{
-		{
-			name: "missing task billing mode",
-			body: `[{"key":"VideoResolutionPrice","value":"{\"sora-2\":{\"720p\":0.1}}"}]`,
-		},
-		{
-			name: "missing video resolution price",
-			body: `[{"key":"TaskBillingMode","value":"{\"sora-2\":\"per_call\"}"}]`,
-		},
-		{
-			name: "includes unrelated option",
-			body: `[
-				{"key":"VideoResolutionPrice","value":"{\"sora-2\":{\"720p\":0.1}}"},
-				{"key":"TaskBillingMode","value":"{\"sora-2\":\"per_call\"}"},
-				{"key":"QuotaForInviter","value":"100"}
-			]`,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			db := setupOptionControllerTest(t)
-			recorder := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(recorder)
-			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/option/bulk", strings.NewReader(tc.body))
-
-			UpdateOptionsBulk(ctx)
-
-			assert.Equal(t, http.StatusBadRequest, recorder.Code)
-			var count int64
-			require.NoError(t, db.Model(&model.Option{}).Count(&count).Error)
-			assert.Zero(t, count)
-		})
-	}
-}
-
-func TestUpdateOptionsBulkAcceptsExactVideoPricingPair(t *testing.T) {
-	db := setupOptionControllerTest(t)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/option/bulk", strings.NewReader(`[
-		{"key":"VideoResolutionPrice","value":"{\"sora-2\":{\"720p\":0.1}}"},
-		{"key":"TaskBillingMode","value":"{\"sora-2\":\"per_call\"}"}
-	]`))
-
-	UpdateOptionsBulk(ctx)
-
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	var count int64
-	require.NoError(t, db.Model(&model.Option{}).Count(&count).Error)
-	assert.EqualValues(t, 2, count)
-	price, mode, ok := ratio_setting.GetVideoResolutionBillingConfig("sora-2", "720p")
-	assert.True(t, ok)
-	assert.Equal(t, 0.1, price)
-	assert.Equal(t, ratio_setting.TaskBillingModePerCall, mode)
 }
 
 func TestBuildCompletionRatioMetaIncludesVideoResolutionPriceModels(t *testing.T) {

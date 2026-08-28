@@ -190,30 +190,36 @@ func InitOptionMap() {
 	loadOptionsFromDatabase()
 }
 
-var publishVideoResolutionPricingSnapshot = ratio_setting.UpdateVideoResolutionPricingSnapshotByJSONString
-var videoResolutionOptionMu sync.Mutex
+var videoResolutionPriceOptionMu sync.Mutex
+
+var publishVideoResolutionPriceOption = func(value string) error {
+	if err := updateOptionMap(ratio_setting.VideoResolutionPriceOptionKey, value); err != nil {
+		return err
+	}
+	InvalidatePricingCache()
+	return nil
+}
 
 func loadOptionsFromDatabase() {
-	videoResolutionOptionMu.Lock()
-	defer videoResolutionOptionMu.Unlock()
+	videoResolutionPriceOptionMu.Lock()
+	var priceOption Option
+	priceResult := DB.Where("key = ?", ratio_setting.VideoResolutionPriceOptionKey).Find(&priceOption)
+	if priceResult.Error != nil {
+		common.SysLog("failed to load video resolution prices from database: " + priceResult.Error.Error())
+	} else if priceResult.RowsAffected > 0 {
+		if err := publishVideoResolutionPriceOption(priceOption.Value); err != nil {
+			common.SysLog("failed to publish video resolution prices: " + err.Error())
+		}
+	}
+	videoResolutionPriceOptionMu.Unlock()
 
 	options, err := AllOption()
 	if err != nil {
 		common.SysLog("failed to load options from database: " + err.Error())
 		return
 	}
-	priceJSON := ratio_setting.VideoResolutionPrice2JSONString()
-	modeJSON := ratio_setting.TaskBillingMode2JSONString()
-	hasVideoPricingOption := false
 	for _, option := range options {
-		switch option.Key {
-		case ratio_setting.VideoResolutionPriceOptionKey:
-			priceJSON = option.Value
-			hasVideoPricingOption = true
-			continue
-		case "TaskBillingMode":
-			modeJSON = option.Value
-			hasVideoPricingOption = true
+		if option.Key == ratio_setting.VideoResolutionPriceOptionKey {
 			continue
 		}
 		err := updateOptionMap(option.Key, option.Value)
@@ -221,18 +227,6 @@ func loadOptionsFromDatabase() {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
-	if !hasVideoPricingOption {
-		return
-	}
-	if err := publishVideoResolutionPricingSnapshot(priceJSON, modeJSON); err != nil {
-		common.SysLog("failed to publish video resolution pricing options: " + err.Error())
-		return
-	}
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey] = priceJSON
-	common.OptionMap["TaskBillingMode"] = modeJSON
-	common.OptionMapRWMutex.Unlock()
-	InvalidatePricingCache()
 }
 
 func SyncOptions(frequency int) {
@@ -249,8 +243,6 @@ func validateOptionValue(key string, value string) error {
 		return operation_setting.ValidateToolPricesJSON(value)
 	case ratio_setting.VideoResolutionPriceOptionKey:
 		return ratio_setting.ValidateVideoResolutionPriceByJSONString(value)
-	case "TaskBillingMode":
-		return ratio_setting.ValidateTaskBillingModeByJSONString(value)
 	}
 	return nil
 }
@@ -259,9 +251,9 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
-	if key == ratio_setting.VideoResolutionPriceOptionKey || key == "TaskBillingMode" {
-		videoResolutionOptionMu.Lock()
-		defer videoResolutionOptionMu.Unlock()
+	if key == ratio_setting.VideoResolutionPriceOptionKey {
+		videoResolutionPriceOptionMu.Lock()
+		defer videoResolutionPriceOptionMu.Unlock()
 	}
 	// Save to database first
 	option := Option{
@@ -278,7 +270,9 @@ func UpdateOption(key string, value string) error {
 	if err := DB.Save(&option).Error; err != nil {
 		return err
 	}
-	// Update OptionMap
+	if key == ratio_setting.VideoResolutionPriceOptionKey {
+		return publishVideoResolutionPriceOption(value)
+	}
 	return updateOptionMap(key, value)
 }
 
@@ -296,26 +290,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
-	priceJSON, hasPrice := values[ratio_setting.VideoResolutionPriceOptionKey]
-	_, hasMode := values["TaskBillingMode"]
-	if hasPrice || hasMode {
-		videoResolutionOptionMu.Lock()
-		defer videoResolutionOptionMu.Unlock()
-	}
-	if !hasPrice {
-		priceJSON = ratio_setting.VideoResolutionPrice2JSONString()
-	}
-	modeJSON := values["TaskBillingMode"]
-	if !hasMode {
-		modeJSON = ratio_setting.TaskBillingMode2JSONString()
-	}
-	if hasPrice || hasMode {
-		if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(priceJSON); err != nil {
-			return err
-		}
-		if err := ratio_setting.ValidateTaskBillingModeByJSONString(modeJSON); err != nil {
-			return err
-		}
+	_, hasPrice := values[ratio_setting.VideoResolutionPriceOptionKey]
+	if hasPrice {
+		videoResolutionPriceOptionMu.Lock()
+		defer videoResolutionPriceOptionMu.Unlock()
 	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -323,13 +301,12 @@ func UpdateOptionsBulk(values map[string]string) error {
 	}
 	sort.Strings(keys)
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for _, k := range keys {
-			v := values[k]
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
 				return err
 			}
-			option.Value = v
+			option.Value = values[key]
 			if err := tx.Save(&option).Error; err != nil {
 				return err
 			}
@@ -339,22 +316,16 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if hasPrice || hasMode {
-		if err := publishVideoResolutionPricingSnapshot(priceJSON, modeJSON); err != nil {
+	if hasPrice {
+		if err := publishVideoResolutionPriceOption(values[ratio_setting.VideoResolutionPriceOptionKey]); err != nil {
 			return err
 		}
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey] = priceJSON
-		common.OptionMap["TaskBillingMode"] = modeJSON
-		common.OptionMapRWMutex.Unlock()
-		InvalidatePricingCache()
 	}
 	for _, k := range keys {
-		if k == ratio_setting.VideoResolutionPriceOptionKey || k == "TaskBillingMode" {
+		if k == ratio_setting.VideoResolutionPriceOptionKey {
 			continue
 		}
-		v := values[k]
-		if err := updateOptionMap(k, v); err != nil {
+		if err := updateOptionMap(k, values[k]); err != nil {
 			return err
 		}
 	}
@@ -690,9 +661,6 @@ func updateOptionMap(key string, value string) (err error) {
 		// WaffoPayMethods is read directly from OptionMap via setting.GetWaffoPayMethods().
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
 		// No additional in-memory variable to update.
-	}
-	if err == nil && (key == ratio_setting.VideoResolutionPriceOptionKey || key == "TaskBillingMode") {
-		InvalidatePricingCache()
 	}
 	return err
 }

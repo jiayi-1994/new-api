@@ -13,9 +13,8 @@ import (
 const VideoResolutionPriceOptionKey = "VideoResolutionPrice"
 
 var (
-	videoResolutionPricingMu sync.RWMutex
-	videoResolutionPrices    = make(map[string]map[string]float64)
-	videoTaskBillingModes    = make(map[string]string)
+	videoResolutionPriceMu sync.RWMutex
+	videoResolutionPrices  = make(map[string]map[string]float64)
 )
 
 func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64, error) {
@@ -68,26 +67,6 @@ func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64,
 	return prices, nil
 }
 
-func parseTaskBillingModeJSON(value string) (map[string]string, error) {
-	rawValue := json.RawMessage(strings.TrimSpace(value))
-	if err := common.ValidateJSONNoDuplicateKeys(rawValue); err != nil {
-		return nil, fmt.Errorf("parse task billing modes: %w", err)
-	}
-	if common.GetJsonType(rawValue) != "object" {
-		return nil, fmt.Errorf("task billing modes must be a JSON object")
-	}
-	var modes map[string]string
-	if err := common.Unmarshal(rawValue, &modes); err != nil {
-		return nil, fmt.Errorf("parse task billing modes: %w", err)
-	}
-	for model, mode := range modes {
-		if mode != TaskBillingModePerCall && mode != TaskBillingModePerSecond {
-			return nil, fmt.Errorf("invalid task billing mode %q for model %q", mode, model)
-		}
-	}
-	return modes, nil
-}
-
 func cloneVideoResolutionPriceMap(source map[string]map[string]float64) map[string]map[string]float64 {
 	clone := make(map[string]map[string]float64, len(source))
 	for model, resolutions := range source {
@@ -96,14 +75,6 @@ func cloneVideoResolutionPriceMap(source map[string]map[string]float64) map[stri
 			resolutionClone[resolution] = price
 		}
 		clone[model] = resolutionClone
-	}
-	return clone
-}
-
-func cloneTaskBillingModeMap(source map[string]string) map[string]string {
-	clone := make(map[string]string, len(source))
-	for model, mode := range source {
-		clone[model] = mode
 	}
 	return clone
 }
@@ -117,41 +88,9 @@ func matchingVideoResolutionPricesLocked(model string) (map[string]float64, bool
 	return prices, ok
 }
 
-func matchingTaskBillingModeLocked(model string) (string, bool) {
-	matchName := FormatMatchingModelName(model)
-	mode, ok := videoTaskBillingModes[matchName]
-	if !ok && strings.HasSuffix(matchName, CompactModelSuffix) {
-		mode, ok = videoTaskBillingModes[CompactWildcardModelKey]
-	}
-	return mode, ok
-}
-
 func ValidateVideoResolutionPriceByJSONString(value string) error {
 	_, err := parseVideoResolutionPriceJSON(value)
 	return err
-}
-
-func ValidateTaskBillingModeByJSONString(value string) error {
-	_, err := parseTaskBillingModeJSON(value)
-	return err
-}
-
-func UpdateVideoResolutionPricingSnapshotByJSONString(priceJSON, modeJSON string) error {
-	prices, err := parseVideoResolutionPriceJSON(priceJSON)
-	if err != nil {
-		return err
-	}
-	modes, err := parseTaskBillingModeJSON(modeJSON)
-	if err != nil {
-		return err
-	}
-
-	videoResolutionPricingMu.Lock()
-	videoResolutionPrices = prices
-	videoTaskBillingModes = modes
-	videoResolutionPricingMu.Unlock()
-	InvalidateExposedDataCache()
-	return nil
 }
 
 func UpdateVideoResolutionPriceByJSONString(value string) error {
@@ -159,17 +98,17 @@ func UpdateVideoResolutionPriceByJSONString(value string) error {
 	if err != nil {
 		return err
 	}
-	videoResolutionPricingMu.Lock()
+	videoResolutionPriceMu.Lock()
 	videoResolutionPrices = prices
-	videoResolutionPricingMu.Unlock()
+	videoResolutionPriceMu.Unlock()
 	InvalidateExposedDataCache()
 	return nil
 }
 
 func VideoResolutionPrice2JSONString() string {
-	videoResolutionPricingMu.RLock()
+	videoResolutionPriceMu.RLock()
 	prices := cloneVideoResolutionPriceMap(videoResolutionPrices)
-	videoResolutionPricingMu.RUnlock()
+	videoResolutionPriceMu.RUnlock()
 	data, err := common.Marshal(prices)
 	if err != nil {
 		return "{}"
@@ -178,14 +117,14 @@ func VideoResolutionPrice2JSONString() string {
 }
 
 func GetVideoResolutionPriceMap() map[string]map[string]float64 {
-	videoResolutionPricingMu.RLock()
-	defer videoResolutionPricingMu.RUnlock()
+	videoResolutionPriceMu.RLock()
+	defer videoResolutionPriceMu.RUnlock()
 	return cloneVideoResolutionPriceMap(videoResolutionPrices)
 }
 
 func GetVideoResolutionPrices(model string) (map[string]float64, bool) {
-	videoResolutionPricingMu.RLock()
-	defer videoResolutionPricingMu.RUnlock()
+	videoResolutionPriceMu.RLock()
+	defer videoResolutionPriceMu.RUnlock()
 	prices, ok := matchingVideoResolutionPricesLocked(model)
 	if !ok {
 		return nil, false
@@ -198,8 +137,8 @@ func GetVideoResolutionPrices(model string) (map[string]float64, bool) {
 }
 
 func HasVideoResolutionPrice(model string) bool {
-	videoResolutionPricingMu.RLock()
-	defer videoResolutionPricingMu.RUnlock()
+	videoResolutionPriceMu.RLock()
+	defer videoResolutionPriceMu.RUnlock()
 	_, ok := matchingVideoResolutionPricesLocked(model)
 	return ok
 }
@@ -209,35 +148,12 @@ func GetVideoResolutionPrice(model, resolution string) (float64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	videoResolutionPricingMu.RLock()
-	defer videoResolutionPricingMu.RUnlock()
+	videoResolutionPriceMu.RLock()
+	defer videoResolutionPriceMu.RUnlock()
 	prices, ok := matchingVideoResolutionPricesLocked(model)
 	if !ok {
 		return 0, false
 	}
 	price, ok := prices[normalized]
 	return price, ok
-}
-
-// GetVideoResolutionBillingConfig returns price and unit from one configuration snapshot.
-func GetVideoResolutionBillingConfig(model, resolution string) (price float64, mode string, ok bool) {
-	normalized, err := common.NormalizeVideoResolutionKey(resolution)
-	if err != nil {
-		return 0, "", false
-	}
-	videoResolutionPricingMu.RLock()
-	defer videoResolutionPricingMu.RUnlock()
-	prices, found := matchingVideoResolutionPricesLocked(model)
-	if !found {
-		return 0, "", false
-	}
-	price, found = prices[normalized]
-	if !found {
-		return 0, "", false
-	}
-	mode, found = matchingTaskBillingModeLocked(model)
-	if found {
-		return price, mode, true
-	}
-	return price, TaskBillingModePerSecond, true
 }
