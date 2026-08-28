@@ -1,6 +1,8 @@
 package common
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -75,6 +77,43 @@ func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://example.com/first.png"}, storedReq.Images)
 	require.Equal(t, constant.TaskActionGenerate, info.Action)
+}
+
+func TestValidateMultipartDirectStoresTopLevelResolution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := strings.NewReader(`{"model":"sora-2","prompt":"animate","resolution":"1080p"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", body)
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+
+	taskErr := ValidateMultipartDirect(context, info)
+
+	require.Nil(t, taskErr)
+	storedReq, err := GetTaskRequest(context)
+	require.NoError(t, err)
+	assert.Equal(t, "1080p", storedReq.Resolution)
+}
+
+func TestMultipartTaskRequestStoresTopLevelResolution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "video-model"))
+	require.NoError(t, writer.WriteField("prompt", "animate"))
+	require.NoError(t, writer.WriteField("resolution", "720p"))
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+
+	storedReq, err := validateMultipartTaskRequest(context, &RelayInfo{}, constant.TaskActionGenerate)
+	require.NoError(t, err)
+	assert.Equal(t, "720p", storedReq.Resolution)
+	assert.Equal(t, "720p", storedReq.Metadata["resolution"])
 }
 
 // TestTaskDurationBounds guards the billing invariant that user-supplied

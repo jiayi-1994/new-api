@@ -828,6 +828,8 @@ type TaskRelayInfo struct {
 
 	ConsumeQuota bool
 
+	ResolvedVideoBilling *ResolvedVideoBilling
+
 	// LockedChannel holds the full channel object when the request is bound to
 	// a specific channel (e.g., remix on origin task's channel). Stored as any
 	// to avoid an import cycle with model; callers type-assert to *model.Channel.
@@ -841,6 +843,7 @@ type TaskSubmitReq struct {
 	Image          string                 `json:"image,omitempty"`
 	Images         []string               `json:"images,omitempty"`
 	Size           string                 `json:"size,omitempty"`
+	Resolution     string                 `json:"resolution,omitempty"`
 	Duration       int                    `json:"duration,omitempty"`
 	Seconds        string                 `json:"seconds,omitempty"`
 	InputReference string                 `json:"input_reference,omitempty"`
@@ -917,15 +920,16 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	Code                     int    `json:"code"`
+	TaskID                   string `json:"task_id"`
+	Status                   string `json:"status"`
+	Reason                   string `json:"reason,omitempty"`
+	Url                      string `json:"url,omitempty"`
+	RemoteUrl                string `json:"remote_url,omitempty"`
+	Progress                 string `json:"progress,omitempty"`
+	CompletionTokens         int    `json:"completion_tokens,omitempty"`          // 用于按倍率计费
+	TotalTokens              int    `json:"total_tokens,omitempty"`               // 用于按倍率计费
+	EffectiveDurationSeconds int    `json:"effective_duration_seconds,omitempty"` // 上游明确返回的实际视频时长
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

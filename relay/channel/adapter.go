@@ -79,6 +79,15 @@ type TaskAdaptor interface {
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
 }
 
+// VideoBillingResolver is implemented only by video task adapters that can
+// resolve the canonical output tier and bounded duration used upstream.
+type VideoBillingResolver interface {
+	ResolveVideoBilling(
+		c *gin.Context,
+		info *relaycommon.RelayInfo,
+	) (relaycommon.VideoBillingSelection, *taskdto.TaskError)
+}
+
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
