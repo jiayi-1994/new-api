@@ -17,10 +17,9 @@ const (
 )
 
 type veoVideoCapability struct {
-	resolutions                   map[string]bool
-	durations                     map[int]bool
-	portraitUnsupportedResolution map[string]bool
-	highResEight                  bool
+	resolutions  map[string]bool
+	durations    map[int]bool
+	highResEight bool
 }
 
 var veoVideoCapabilities = map[VeoProvider]map[string]veoVideoCapability{
@@ -40,22 +39,6 @@ var veoVideoCapabilities = map[VeoProvider]map[string]veoVideoCapability{
 			durations:   map[int]bool{4: true, 6: true, 8: true},
 		},
 		"veo-3.1-fast-generate-001": {
-			resolutions: map[string]bool{"720p": true, "1080p": true},
-			durations:   map[int]bool{4: true, 6: true, 8: true},
-		},
-		"veo-3.0-generate-001": {
-			resolutions: map[string]bool{"720p": true, "1080p": true},
-			durations:   map[int]bool{4: true, 6: true, 8: true},
-		},
-		"veo-3.0-fast-generate-001": {
-			resolutions: map[string]bool{"720p": true, "1080p": true},
-			durations:   map[int]bool{4: true, 6: true, 8: true},
-		},
-		"veo-3.1-generate-preview": {
-			resolutions: map[string]bool{"720p": true, "1080p": true},
-			durations:   map[int]bool{4: true, 6: true, 8: true},
-		},
-		"veo-3.1-fast-generate-preview": {
 			resolutions: map[string]bool{"720p": true, "1080p": true},
 			durations:   map[int]bool{4: true, 6: true, 8: true},
 		},
@@ -127,9 +110,6 @@ func ResolveVeoVideoRequest(req relaycommon.TaskSubmitReq, upstreamModel string,
 	}
 	if params.AspectRatio != "" && params.AspectRatio != "16:9" && params.AspectRatio != "9:16" {
 		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported %s Veo aspect ratio %q", provider, params.AspectRatio)
-	}
-	if capability.portraitUnsupportedResolution[resolution] && params.AspectRatio == "9:16" {
-		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported %s Veo portrait output at %s for model %s", provider, resolution, upstreamModel)
 	}
 	params.Resolution = resolution
 	params.DurationSeconds = duration

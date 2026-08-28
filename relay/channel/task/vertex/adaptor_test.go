@@ -34,7 +34,7 @@ func vertexBillingContext(t *testing.T, req relaycommon.TaskSubmitReq, upstreamM
 func TestVertexVideoBillingMatchesSharedVeoPayload(t *testing.T) {
 	c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "client-price-key", Prompt: "animate", Size: "1080x1920", Seconds: "6",
-	}, "veo-3.1-fast-generate-preview")
+	}, "veo-3.1-fast-generate-001")
 	adaptor := &TaskAdaptor{}
 
 	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
@@ -60,7 +60,7 @@ func TestVertexVeoVideoBillingUsesVertexDurationAndResolutionMatrix(t *testing.T
 		t.Run("1080p-portrait-"+strconv.Itoa(duration), func(t *testing.T) {
 			c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
 				Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: duration,
-			}, "veo-3.0-generate-001")
+			}, "veo-3.1-generate-001")
 			adaptor := &TaskAdaptor{}
 			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
 			require.Nil(t, taskErr)
@@ -82,7 +82,7 @@ func TestVertexVeoVideoBillingUsesVertexDurationAndResolutionMatrix(t *testing.T
 	t.Run("reject-4k", func(t *testing.T) {
 		c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
 			Model: "alias", Prompt: "animate", Size: "3840x2160", Duration: 8,
-		}, "veo-3.1-generate-preview")
+		}, "veo-3.1-generate-001")
 		selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 		assert.Zero(t, selection)
 		require.NotNil(t, taskErr)
@@ -93,7 +93,7 @@ func TestVertexVeoVideoBillingUsesVertexDurationAndResolutionMatrix(t *testing.T
 func TestVertexVideoBillingRejectsDimensionHeuristicAliases(t *testing.T) {
 	c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "client-price-key", Prompt: "animate", Size: "2000x1000", Duration: 4,
-	}, "veo-3.0-generate-001")
+	}, "veo-3.1-generate-001")
 
 	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 	assert.Zero(t, selection)
@@ -120,6 +120,42 @@ func TestVertexVideoBillingSupportsCurrentVeo31GAModels(t *testing.T) {
 			assert.Equal(t, "1080p", selection.EffectiveResolution)
 			assert.Equal(t, 6, selection.EffectiveDurationSeconds)
 			assert.Equal(t, "9:16", payload.Parameters.AspectRatio)
+		})
+	}
+}
+
+func TestVertexAdvertisedModelsExcludeRetiredAndAllResolve(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	assert.ElementsMatch(t, []string{"veo-3.1-generate-001", "veo-3.1-fast-generate-001"}, adaptor.GetModelList())
+	for _, model := range adaptor.GetModelList() {
+		t.Run("advertised-"+model, func(t *testing.T) {
+			c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: 6,
+			}, model)
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			assert.Equal(t, "1080p", selection.EffectiveResolution)
+			assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+		})
+	}
+
+	retiredModels := []string{
+		"veo-3.0-generate-001",
+		"veo-3.0-fast-generate-001",
+		"veo-3.1-generate-preview",
+		"veo-3.1-fast-generate-preview",
+	}
+	for _, model := range retiredModels {
+		t.Run("retired-"+model, func(t *testing.T) {
+			c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1280x720", Duration: 8,
+			}, model)
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+			_, err := adaptor.BuildRequestBody(c, info)
+			require.Error(t, err)
 		})
 	}
 }

@@ -71,7 +71,7 @@ Fix commit: `c0d9f811` (`fix(video): enforce provider capability contracts`).
 
 ### Lifecycle Concern
 
-- Official lifecycle pages mark Gemini/Vertex Veo 3.0 IDs and Vertex 3.1 preview IDs as retired by the current date. Current Vertex 3.1 GA IDs were added and only those live IDs are advertised by Vertex. Historical Vertex entries remain resolver-compatible for explicit tuple regression tests but are not advertised. The second review correction below makes Gemini stricter by removing its retired 3.0 production capabilities entirely.
+- Official lifecycle pages mark Gemini/Vertex Veo 3.0 IDs and Vertex 3.1 preview IDs as retired by the current date. Current Vertex 3.1 GA IDs were added and only those live IDs are advertised. The second and third review corrections below remove the retired Gemini and Vertex production capabilities entirely.
 
 ## Second Review Correction
 
@@ -97,5 +97,30 @@ Fix commit: `915ccf57` (`fix(video): reject retired Gemini and normalize Vidu re
 - Task 4 focused command across relay and all six providers: exit 0.
 - `go test ./relay/... -count=1`: exit 0.
 - `go build . ./relay ./relay/channel/task/gemini ./relay/channel/task/vidu`: exit 0.
+- `git diff --check`: exit 0.
+- Independent official-protocol review: no remaining P1/P2.
+
+## Third Review Correction
+
+Fix commit: `fix(video): reject retired Vertex models`; the final SHA is recorded after the implementation commit.
+
+### RED Evidence
+
+- Each of the four retired Vertex IDs (`veo-3.0-generate-001`, `veo-3.0-fast-generate-001`, `veo-3.1-generate-preview`, and `veo-3.1-fast-generate-preview`) still resolved a historical 720p x 8-second production tuple.
+- The relay integration reproduced all four unsafe paths: each request completed pre-consume, payload construction, and a mocked upstream invocation instead of returning HTTP 400.
+
+### GREEN Decisions
+
+- Vertex production capability lookup now contains only `veo-3.1-generate-001` and `veo-3.1-fast-generate-001`, matching its advertised list exactly.
+- All four retired mappings return `video_resolution_not_supported` before pre-consume, build, or upstream request. Existing duration/aspect/payload parity tests now exercise current GA models rather than maintaining a production-compatible historical fixture.
+- Source: [Vertex AI release notes](https://docs.cloud.google.com/vertex-ai/docs/release-notes).
+
+### Third Review Verification
+
+- Four retired-ID provider cases and four relay boundary cases failed before implementation and passed after removing the production entries.
+- Vertex and Gemini full packages: exit 0.
+- Task 4 focused command and all six provider packages: exit 0.
+- `go test ./relay/... -count=1`: exit 0.
+- `go build . ./relay ./relay/channel/task/gemini ./relay/channel/task/vertex`: exit 0.
 - `git diff --check`: exit 0.
 - Independent official-protocol review: no remaining P1/P2.

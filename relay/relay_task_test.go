@@ -426,8 +426,28 @@ func TestVeoProviderCapabilitiesApplyBeforePreConsumeAndMatchBuiltPayload(t *tes
 			wantAccepted:  true, wantResolution: "720p", wantDuration: 4,
 		},
 		{
-			name: "vertex accepts four second portrait tuple", channelType: constant.ChannelTypeVertexAi,
+			name: "vertex rejects retired veo30 standard", channelType: constant.ChannelTypeVertexAi,
 			upstreamModel: "veo-3.0-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+		},
+		{
+			name: "vertex rejects retired veo30 fast", channelType: constant.ChannelTypeVertexAi,
+			upstreamModel: "veo-3.0-fast-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+		},
+		{
+			name: "vertex rejects retired veo31 preview", channelType: constant.ChannelTypeVertexAi,
+			upstreamModel: "veo-3.1-generate-preview",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+		},
+		{
+			name: "vertex rejects retired veo31 fast preview", channelType: constant.ChannelTypeVertexAi,
+			upstreamModel: "veo-3.1-fast-generate-preview",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+		},
+		{
+			name: "vertex accepts current ga portrait tuple", channelType: constant.ChannelTypeVertexAi,
+			upstreamModel: "veo-3.1-generate-001",
 			requestBody:   `{"model":"client-model","prompt":"animate","size":"1080x1920","duration":4}`,
 			wantAccepted:  true, wantResolution: "1080p", wantDuration: 4,
 		},
