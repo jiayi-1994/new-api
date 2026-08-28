@@ -41,7 +41,7 @@ Implementation commit: `ac83da19` (`feat(video): resolve provider pricing tiers`
 
 ## Follow-up Capability Correction
 
-Fix commit: this report is included in `fix(video): enforce provider capability contracts`; the final SHA is recorded in the task handoff.
+Fix commit: `c0d9f811` (`fix(video): enforce provider capability contracts`).
 
 ### RED Evidence
 
@@ -67,6 +67,7 @@ Fix commit: this report is included in `fix(video): enforce provider capability 
 - Full `go test ./relay/... -count=1`: exit 0.
 - `go build . ./relay` plus all six affected provider packages: exit 0. The monolithic `go build ./...` produced no diagnostics but was safely interrupted after 60 seconds twice on Windows as directed; it is not claimed as passed.
 - Final `git diff --check`: exit 0.
+- Final independent official-protocol review: no remaining P1/P2.
 
 ### Lifecycle Concern
 
