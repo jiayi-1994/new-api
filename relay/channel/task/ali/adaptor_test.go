@@ -278,6 +278,65 @@ func TestAliVideoBillingRejectsUnknownDefault(t *testing.T) {
 	assert.Contains(t, taskErr.Message, "unknown")
 }
 
+func TestAliVideoBillingUsesExactModelDefaults(t *testing.T) {
+	tests := []struct {
+		model      string
+		resolution string
+		duration   int
+	}{
+		{"wan2.7-i2v", "1080p", 5},
+		{"wan2.5-i2v-preview", "1080p", 5},
+		{"wan2.2-i2v-flash", "720p", 5},
+		{"wan2.2-i2v-plus", "1080p", 5},
+		{"wanx2.1-i2v-plus", "720p", 5},
+		{"wanx2.1-i2v-turbo", "720p", 5},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			c, info := aliBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Image: "https://example.com/frame.png",
+			}, tc.model)
+			adaptor := &TaskAdaptor{}
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			payload := decodeAliPayload(t, adaptor, c, info)
+			assert.Equal(t, tc.resolution, selection.EffectiveResolution)
+			assert.Equal(t, tc.duration, selection.EffectiveDurationSeconds)
+			assert.Equal(t, strings.ToUpper(tc.resolution), payload.Parameters.Resolution)
+			assert.Equal(t, tc.duration, payload.Parameters.Duration)
+		})
+	}
+}
+
+func TestAliVideoBillingRejectsUnsupportedModelTuples(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		resolution string
+		duration   int
+	}{
+		{"wan27 i2v 480p", "wan2.7-i2v", "480p", 5},
+		{"wan25 duration six", "wan2.5-i2v-preview", "1080p", 6},
+		{"wan22 flash cross-region 1080p", "wan2.2-i2v-flash", "1080p", 5},
+		{"wan22 plus 720p ten seconds", "wan2.2-i2v-plus", "720p", 10},
+		{"wan21 plus 480p", "wanx2.1-i2v-plus", "480p", 5},
+		{"wan21 turbo 1080p", "wanx2.1-i2v-turbo", "1080p", 5},
+		{"wan21 turbo ten seconds", "wanx2.1-i2v-turbo", "720p", 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := aliBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Image: "https://example.com/frame.png",
+				Resolution: tc.resolution, Duration: tc.duration,
+			}, tc.model)
+			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+		})
+	}
+}
+
 func TestAliVideoBillingRejectsUnboundedMetadataDuration(t *testing.T) {
 	c, info := aliBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "alias", Prompt: "animate", Size: "1920*1080",
@@ -305,18 +364,15 @@ func TestAliWan27TextToVideoUsesResolutionProtocolAndPreservesAspectRatio(t *tes
 	assert.Equal(t, "9:16", payload.Parameters.Ratio)
 }
 
-func TestAliVideoBillingPreservesLegacyPortraitPayloadSize(t *testing.T) {
+func TestAliVideoBillingRejectsLegacyOnlyModelWithoutVerifiedCapability(t *testing.T) {
 	c, info := aliBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "alias", Prompt: "animate", Size: "720*1280", Duration: 5,
 	}, "wan2.5-t2v-preview")
-	adaptor := &TaskAdaptor{}
 
-	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
-	require.Nil(t, taskErr)
-	payload := decodeAliPayload(t, adaptor, c, info)
-	assert.Equal(t, "720p", selection.EffectiveResolution)
-	assert.Equal(t, "720*1280", payload.Parameters.Size)
-	assert.Empty(t, payload.Parameters.Resolution)
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 }
 
 func TestAliWan27MetadataSizeControlsFinalAspectRatio(t *testing.T) {
@@ -340,6 +396,18 @@ func TestAliWan27VideoBillingRejectsUnsupportedMetadataRatio(t *testing.T) {
 		Model: "alias", Prompt: "animate", Duration: 5,
 		Metadata: map[string]any{"parameters": map[string]any{"resolution": "1080P", "ratio": "2:1"}},
 	}, "wan2.7-t2v")
+
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+}
+
+func TestAliWan27ImageToVideoRejectsTextOnlyRatioSelector(t *testing.T) {
+	c, info := aliBillingContext(t, relaycommon.TaskSubmitReq{
+		Model: "alias", Prompt: "animate", Images: []string{"https://example.com/frame.png"}, Duration: 5,
+		Metadata: map[string]any{"parameters": map[string]any{"resolution": "1080P", "ratio": "16:9"}},
+	}, "wan2.7-i2v")
 
 	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 	assert.Zero(t, selection)
@@ -371,4 +439,34 @@ func TestAliParseTaskResultUsesOnlyBoundedActualDuration(t *testing.T) {
 	absent, err := adaptor.ParseTaskResult([]byte(`{"output":{"task_status":"SUCCEEDED"}}`))
 	require.NoError(t, err)
 	assert.Zero(t, absent.EffectiveDurationSeconds)
+}
+
+func TestAliParseTaskResultAcceptsWan21VideoDurationSchema(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{"output":{"task_status":"SUCCEEDED"},"usage":{"video_duration":"5"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, 5, result.EffectiveDurationSeconds)
+}
+
+func TestAliParseTaskResultAcceptsWan26DurationSchema(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{"output":{"task_status":"SUCCEEDED"},"usage":{"duration":9.0}}`))
+	require.NoError(t, err)
+	assert.Equal(t, 9, result.EffectiveDurationSeconds)
+}
+
+func TestAliParseTaskResultIgnoresInvalidActualDurationWithoutFailingPolling(t *testing.T) {
+	for _, usage := range []string{
+		`{"duration":9.5}`,
+		`{"duration":"9.5"}`,
+		`{"duration":-1}`,
+		`{"duration":0}`,
+		`{"duration":999999}`,
+		`{"video_duration":"not-a-number"}`,
+	} {
+		t.Run(usage, func(t *testing.T) {
+			response := `{"output":{"task_status":"SUCCEEDED"},"usage":` + usage + `}`
+			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(response))
+			require.NoError(t, err)
+			assert.Zero(t, result.EffectiveDurationSeconds)
+		})
+	}
 }

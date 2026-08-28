@@ -31,6 +31,66 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+type hailuoVideoCapability struct {
+	defaultResolution     string
+	durationsByResolution map[string][]int
+}
+
+type hailuoVideoCapabilityKey struct {
+	model string
+	mode  string
+}
+
+const (
+	hailuoTextToVideo  = "text-to-video"
+	hailuoImageToVideo = "image-to-video"
+)
+
+var hailuoVideoCapabilities = map[hailuoVideoCapabilityKey]hailuoVideoCapability{
+	{model: "MiniMax-Hailuo-2.3", mode: hailuoTextToVideo}: {
+		defaultResolution:     Resolution768P,
+		durationsByResolution: map[string][]int{Resolution768P: {6, 10}, Resolution1080P: {6}},
+	},
+	{model: "MiniMax-Hailuo-2.3", mode: hailuoImageToVideo}: {
+		defaultResolution:     Resolution768P,
+		durationsByResolution: map[string][]int{Resolution768P: {6, 10}, Resolution1080P: {6}},
+	},
+	{model: "MiniMax-Hailuo-2.3-Fast", mode: hailuoImageToVideo}: {
+		defaultResolution:     Resolution768P,
+		durationsByResolution: map[string][]int{Resolution768P: {6, 10}, Resolution1080P: {6}},
+	},
+	{model: "MiniMax-Hailuo-02", mode: hailuoTextToVideo}: {
+		defaultResolution:     Resolution768P,
+		durationsByResolution: map[string][]int{Resolution768P: {6, 10}, Resolution1080P: {6}},
+	},
+	{model: "MiniMax-Hailuo-02", mode: hailuoImageToVideo}: {
+		defaultResolution: Resolution768P,
+		durationsByResolution: map[string][]int{
+			Resolution512P: {6, 10}, Resolution768P: {6, 10}, Resolution1080P: {6},
+		},
+	},
+	{model: "T2V-01-Director", mode: hailuoTextToVideo}: {
+		defaultResolution:     Resolution720P,
+		durationsByResolution: map[string][]int{Resolution720P: {6}},
+	},
+	{model: "T2V-01", mode: hailuoTextToVideo}: {
+		defaultResolution:     Resolution720P,
+		durationsByResolution: map[string][]int{Resolution720P: {6}},
+	},
+	{model: "I2V-01-Director", mode: hailuoImageToVideo}: {
+		defaultResolution:     Resolution720P,
+		durationsByResolution: map[string][]int{Resolution720P: {6}},
+	},
+	{model: "I2V-01-live", mode: hailuoImageToVideo}: {
+		defaultResolution:     Resolution720P,
+		durationsByResolution: map[string][]int{Resolution720P: {6}},
+	},
+	{model: "I2V-01", mode: hailuoImageToVideo}: {
+		defaultResolution:     Resolution720P,
+		durationsByResolution: map[string][]int{Resolution720P: {6}},
+	},
+}
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
@@ -147,12 +207,27 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	if !contains(ModelList, info.UpstreamModelName) {
 		return nil, fmt.Errorf("unsupported Hailuo model %q", info.UpstreamModelName)
 	}
-	modelConfig := GetModelConfig(info.UpstreamModelName)
 	duration := DefaultDuration
 	if req.Duration > 0 {
 		duration = req.Duration
 	}
-	resolution := modelConfig.DefaultResolution
+	videoRequest := &VideoRequest{
+		Model:    info.UpstreamModelName,
+		Prompt:   req.Prompt,
+		Duration: &duration,
+	}
+	if err := req.UnmarshalMetadata(&videoRequest); err != nil {
+		return nil, errors.Wrap(err, "unmarshal metadata to video request failed")
+	}
+	mode := hailuoTextToVideo
+	if strings.TrimSpace(videoRequest.FirstFrameImage) != "" {
+		mode = hailuoImageToVideo
+	}
+	capability, ok := hailuoVideoCapabilities[hailuoVideoCapabilityKey{model: info.UpstreamModelName, mode: mode}]
+	if !ok {
+		return nil, fmt.Errorf("unsupported Hailuo %s mode for model %q", mode, info.UpstreamModelName)
+	}
+	resolution := capability.defaultResolution
 	requestedResolution := req.Size
 	if strings.TrimSpace(req.Resolution) != "" {
 		requestedResolution = req.Resolution
@@ -164,22 +239,16 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 			return nil, err
 		}
 	}
-
-	videoRequest := &VideoRequest{
-		Model:      info.UpstreamModelName,
-		Prompt:     req.Prompt,
-		Duration:   &duration,
-		Resolution: resolution,
-	}
-	if err := req.UnmarshalMetadata(&videoRequest); err != nil {
-		return nil, errors.Wrap(err, "unmarshal metadata to video request failed")
+	if strings.TrimSpace(videoRequest.Resolution) == "" {
+		videoRequest.Resolution = resolution
 	}
 	videoRequest.Model = info.UpstreamModelName
 	videoRequest.Resolution = strings.ToUpper(strings.TrimSpace(videoRequest.Resolution))
-	if !contains(modelConfig.SupportedResolutions, videoRequest.Resolution) {
+	supportedDurations, ok := capability.durationsByResolution[videoRequest.Resolution]
+	if !ok {
 		return nil, fmt.Errorf("resolution %q is not supported by Hailuo model %s", videoRequest.Resolution, info.UpstreamModelName)
 	}
-	if videoRequest.Duration == nil || *videoRequest.Duration < 1 || *videoRequest.Duration > relaycommon.MaxTaskDurationSeconds || !containsInt(modelConfig.SupportedDurations, *videoRequest.Duration) {
+	if videoRequest.Duration == nil || *videoRequest.Duration < 1 || *videoRequest.Duration > relaycommon.MaxTaskDurationSeconds || !containsInt(supportedDurations, *videoRequest.Duration) {
 		return nil, fmt.Errorf("duration is not supported by Hailuo model %s", info.UpstreamModelName)
 	}
 

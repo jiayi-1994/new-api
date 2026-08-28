@@ -93,16 +93,40 @@ type unsupportedVideoAdaptorSpy struct {
 	channel.TaskAdaptor
 	buildCalls   int
 	requestCalls int
+	builtBody    []byte
+	responseBody string
 }
 
 func (a *unsupportedVideoAdaptorSpy) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	a.buildCalls++
-	return a.TaskAdaptor.BuildRequestBody(c, info)
+	body, err := a.TaskAdaptor.BuildRequestBody(c, info)
+	if err != nil {
+		return nil, err
+	}
+	a.builtBody, err = io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(a.builtBody), nil
 }
 
 func (a *unsupportedVideoAdaptorSpy) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (*http.Response, error) {
 	a.requestCalls++
+	if a.responseBody != "" {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(a.responseBody)),
+		}, nil
+	}
 	return a.TaskAdaptor.DoRequest(c, info, body)
+}
+
+func (a *unsupportedVideoAdaptorSpy) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *dto.TaskError) {
+	resolver, ok := a.TaskAdaptor.(channel.VideoBillingResolver)
+	if !ok {
+		return relaycommon.VideoBillingSelection{}, nil
+	}
+	return resolver.ResolveVideoBilling(c, info)
 }
 
 func (a *videoTaskSubmitTestAdaptor) ResolveVideoBilling(*gin.Context, *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *dto.TaskError) {
@@ -363,4 +387,108 @@ func TestUnsupportedVideoAdaptorRejectsKlingAndJimengBeforeRequest(t *testing.T)
 			assert.Zero(t, spy.requestCalls)
 		})
 	}
+}
+
+func TestVeoProviderCapabilitiesApplyBeforePreConsumeAndMatchBuiltPayload(t *testing.T) {
+	tests := []struct {
+		name           string
+		channelType    int
+		upstreamModel  string
+		requestBody    string
+		wantAccepted   bool
+		wantResolution string
+		wantDuration   int
+	}{
+		{
+			name: "gemini rejects 720p four seconds", channelType: constant.ChannelTypeGemini,
+			upstreamModel: "veo-3.0-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":4}`,
+		},
+		{
+			name: "gemini rejects 1080p portrait", channelType: constant.ChannelTypeGemini,
+			upstreamModel: "veo-3.0-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1080x1920","duration":8}`,
+		},
+		{
+			name: "gemini accepts its eight second tuple", channelType: constant.ChannelTypeGemini,
+			upstreamModel: "veo-3.0-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+			wantAccepted:  true, wantResolution: "720p", wantDuration: 8,
+		},
+		{
+			name: "vertex accepts four second portrait tuple", channelType: constant.ChannelTypeVertexAi,
+			upstreamModel: "veo-3.0-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1080x1920","duration":4}`,
+			wantAccepted:  true, wantResolution: "1080p", wantDuration: 4,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(tc.channelType)))
+			require.NotNil(t, actual)
+			spy := &unsupportedVideoAdaptorSpy{TaskAdaptor: actual, responseBody: `{"name":"operations/provider-test"}`}
+			c, info, deps, state := taskSubmitVideoTestContext(t, spy)
+			c.Set("platform", strconv.Itoa(tc.channelType))
+			common.SetContextKey(c, constant.ContextKeyChannelType, tc.channelType)
+			c.Set("model_mapping", `{"client-model":"`+tc.upstreamModel+`"}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewBufferString(tc.requestBody))
+			c.Request.Header.Set("Content-Type", "application/json")
+			require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(
+				`{"client-model":{"720p":0.1,"1080p":0.2}}`,
+			))
+
+			result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+			if !tc.wantAccepted {
+				assert.Nil(t, result)
+				require.NotNil(t, taskErr)
+				assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+				assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+				assert.Zero(t, state.preConsumeCalls)
+				assert.Zero(t, spy.buildCalls)
+				assert.Zero(t, spy.requestCalls)
+				return
+			}
+
+			require.Nil(t, taskErr)
+			require.NotNil(t, result)
+			assert.Equal(t, 1, state.preConsumeCalls)
+			assert.Equal(t, 1, spy.buildCalls)
+			assert.Equal(t, 1, spy.requestCalls)
+			var payload struct {
+				Parameters struct {
+					Resolution      string `json:"resolution"`
+					DurationSeconds int    `json:"durationSeconds"`
+				} `json:"parameters"`
+			}
+			require.NoError(t, common.Unmarshal(spy.builtBody, &payload))
+			assert.Equal(t, tc.wantResolution, payload.Parameters.Resolution)
+			assert.Equal(t, tc.wantDuration, payload.Parameters.DurationSeconds)
+		})
+	}
+}
+
+func TestViduReferenceImageLimitAppliesBeforePreConsume(t *testing.T) {
+	actual := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeVidu)))
+	require.NotNil(t, actual)
+	spy := &unsupportedVideoAdaptorSpy{TaskAdaptor: actual}
+	c, info, deps, state := taskSubmitVideoTestContext(t, spy)
+	c.Set("platform", strconv.Itoa(constant.ChannelTypeVidu))
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeVidu)
+	c.Set("model_mapping", `{"client-model":"viduq2"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewBufferString(
+		`{"model":"client-model","prompt":"animate","duration":5,"resolution":"720p","images":["1","2","3","4","5","6","7","8"]}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.Zero(t, spy.buildCalls)
+	assert.Zero(t, spy.requestCalls)
 }

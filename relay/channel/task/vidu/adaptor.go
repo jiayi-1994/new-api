@@ -29,16 +29,22 @@ import (
 // ============================
 
 type requestPayload struct {
-	Model             string   `json:"model"`
-	Images            []string `json:"images"`
-	Prompt            string   `json:"prompt,omitempty"`
-	Duration          int      `json:"duration,omitempty"`
-	Seed              int      `json:"seed,omitempty"`
-	Resolution        string   `json:"resolution,omitempty"`
-	MovementAmplitude string   `json:"movement_amplitude,omitempty"`
-	Bgm               bool     `json:"bgm,omitempty"`
-	Payload           string   `json:"payload,omitempty"`
-	CallbackUrl       string   `json:"callback_url,omitempty"`
+	Model             string    `json:"model"`
+	Images            []string  `json:"images,omitempty"`
+	Subjects          []subject `json:"subjects,omitempty"`
+	Prompt            string    `json:"prompt,omitempty"`
+	Duration          int       `json:"duration,omitempty"`
+	Seed              int       `json:"seed,omitempty"`
+	Resolution        string    `json:"resolution,omitempty"`
+	MovementAmplitude string    `json:"movement_amplitude,omitempty"`
+	Bgm               bool      `json:"bgm,omitempty"`
+	Payload           string    `json:"payload,omitempty"`
+	CallbackUrl       string    `json:"callback_url,omitempty"`
+}
+
+type subject struct {
+	Name   string   `json:"name"`
+	Images []string `json:"images"`
 }
 
 type responsePayload struct {
@@ -224,23 +230,28 @@ func (a *TaskAdaptor) GetChannelName() string {
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
 	model := taskcommon.DefaultString(info.UpstreamModelName, "viduq1")
-	if info.Action == constant.TaskActionReferenceGenerate && strings.Contains(model, "viduq2") {
+	if info.Action == constant.TaskActionReferenceGenerate && model == "viduq2" {
 		// 参考图生视频只能用 viduq2 模型, 不能带有pro或turbo后缀 https://platform.vidu.cn/docs/reference-to-video
 		model = "viduq2"
 	}
-	defaultResolution, defaultDuration, err := viduVideoDefaults(model)
-	if err != nil {
-		return nil, err
+	capability, ok := viduVideoCapabilities[viduVideoCapabilityKey{action: info.Action, model: model}]
+	if !ok {
+		return nil, fmt.Errorf("unsupported Vidu action %q for model %s", info.Action, model)
 	}
 	requestedResolution := req.Size
 	if strings.TrimSpace(req.Resolution) != "" {
 		requestedResolution = req.Resolution
 	}
+	duration := taskcommon.DefaultInt(req.Duration, capability.defaultDuration)
+	defaultResolution := capability.defaultResolution
+	if resolution, ok := capability.defaultResolutionByDuration[duration]; ok {
+		defaultResolution = resolution
+	}
 	r := requestPayload{
 		Model:             model,
 		Images:            req.Images,
 		Prompt:            req.Prompt,
-		Duration:          taskcommon.DefaultInt(req.Duration, defaultDuration),
+		Duration:          duration,
 		Resolution:        taskcommon.DefaultString(requestedResolution, defaultResolution),
 		MovementAmplitude: "auto",
 		Bgm:               false,
@@ -251,13 +262,63 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	r.Model = model
 	r.Resolution = strings.ToLower(strings.TrimSpace(r.Resolution))
 	_, metadataResolution := req.Metadata["resolution"]
-	if model == "vidu2.0" && r.Duration == 8 && strings.TrimSpace(requestedResolution) == "" && !metadataResolution {
-		r.Resolution = "720p"
+	if strings.TrimSpace(requestedResolution) == "" && !metadataResolution {
+		if resolution, ok := capability.defaultResolutionByDuration[r.Duration]; ok {
+			r.Resolution = resolution
+		}
 	}
-	if err := validateViduVideoPayload(&r); err != nil {
+	if info.Action == constant.TaskActionReferenceGenerate {
+		if len(r.Subjects) == 0 && len(r.Images) > 0 {
+			r.Subjects = []subject{{Name: "subject1", Images: append([]string(nil), r.Images...)}}
+		}
+		r.Images = nil
+	}
+	if err := validateViduVideoInputs(&r, info.Action); err != nil {
+		return nil, err
+	}
+	if err := validateViduVideoPayload(&r, capability); err != nil {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func validateViduVideoInputs(body *requestPayload, action string) error {
+	switch action {
+	case constant.TaskActionTextGenerate:
+		if len(body.Images) != 0 || len(body.Subjects) != 0 {
+			return fmt.Errorf("Vidu text-to-video does not accept image inputs")
+		}
+	case constant.TaskActionGenerate:
+		if len(body.Images) != 1 || len(body.Subjects) != 0 {
+			return fmt.Errorf("Vidu image-to-video requires exactly one image")
+		}
+	case constant.TaskActionFirstTailGenerate:
+		if len(body.Images) != 2 || len(body.Subjects) != 0 {
+			return fmt.Errorf("Vidu start-end-to-video requires exactly two images")
+		}
+	case constant.TaskActionReferenceGenerate:
+		if len(body.Images) != 0 || len(body.Subjects) == 0 {
+			return fmt.Errorf("Vidu reference-to-video requires subjects")
+		}
+		totalImages := 0
+		for _, subject := range body.Subjects {
+			if strings.TrimSpace(subject.Name) == "" || len(subject.Images) == 0 {
+				return fmt.Errorf("Vidu reference-to-video subjects require a name and images")
+			}
+			for _, image := range subject.Images {
+				if strings.TrimSpace(image) == "" {
+					return fmt.Errorf("Vidu reference-to-video images cannot be empty")
+				}
+				totalImages++
+			}
+		}
+		if totalImages < 1 || totalImages > 7 {
+			return fmt.Errorf("Vidu reference-to-video supports between one and seven images")
+		}
+	default:
+		return fmt.Errorf("unsupported Vidu action %q", action)
+	}
+	return nil
 }
 
 func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
@@ -279,47 +340,84 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 	)
 }
 
-func viduVideoDefaults(model string) (string, int, error) {
-	switch {
-	case strings.HasPrefix(model, "viduq1"):
-		return "1080p", 5, nil
-	case strings.HasPrefix(model, "viduq2"):
-		return "720p", 5, nil
-	case model == "vidu2.0":
-		return "360p", 4, nil
-	default:
-		return "", 0, fmt.Errorf("unknown Vidu defaults for model %s", model)
-	}
+type viduVideoCapabilityKey struct {
+	action string
+	model  string
 }
 
-func validateViduVideoPayload(body *requestPayload) error {
+type viduVideoCapability struct {
+	defaultResolution           string
+	defaultDuration             int
+	defaultResolutionByDuration map[int]string
+	minDuration                 int
+	maxDuration                 int
+	resolutions                 map[string]bool
+	resolutionsByDuration       map[int]map[string]bool
+}
+
+var viduVideoCapabilities = map[viduVideoCapabilityKey]viduVideoCapability{
+	{action: constant.TaskActionTextGenerate, model: "viduq2"}: {
+		defaultResolution: "720p", defaultDuration: 5, minDuration: 1, maxDuration: 10,
+		resolutions: map[string]bool{"540p": true, "720p": true, "1080p": true},
+	},
+	{action: constant.TaskActionReferenceGenerate, model: "viduq2"}: {
+		defaultResolution: "720p", defaultDuration: 5, minDuration: 1, maxDuration: 10,
+		resolutions: map[string]bool{"540p": true, "720p": true, "1080p": true},
+	},
+	{action: constant.TaskActionTextGenerate, model: "viduq1"}: {
+		defaultResolution: "1080p", defaultDuration: 5,
+		resolutionsByDuration: map[int]map[string]bool{5: {"1080p": true}},
+	},
+	{action: constant.TaskActionGenerate, model: "viduq1"}: {
+		defaultResolution: "1080p", defaultDuration: 5,
+		resolutionsByDuration: map[int]map[string]bool{5: {"1080p": true}},
+	},
+	{action: constant.TaskActionFirstTailGenerate, model: "viduq1"}: {
+		defaultResolution: "1080p", defaultDuration: 5,
+		resolutionsByDuration: map[int]map[string]bool{5: {"1080p": true}},
+	},
+	{action: constant.TaskActionReferenceGenerate, model: "viduq1"}: {
+		defaultResolution: "1080p", defaultDuration: 5,
+		resolutionsByDuration: map[int]map[string]bool{5: {"1080p": true}},
+	},
+	{action: constant.TaskActionGenerate, model: "vidu2.0"}: {
+		defaultResolution: "360p", defaultDuration: 4,
+		defaultResolutionByDuration: map[int]string{4: "360p", 8: "720p"},
+		resolutionsByDuration: map[int]map[string]bool{
+			4: {"360p": true, "720p": true, "1080p": true},
+			8: {"720p": true},
+		},
+	},
+	{action: constant.TaskActionFirstTailGenerate, model: "vidu2.0"}: {
+		defaultResolution: "360p", defaultDuration: 4,
+		defaultResolutionByDuration: map[int]string{4: "360p", 8: "720p"},
+		resolutionsByDuration: map[int]map[string]bool{
+			4: {"360p": true, "720p": true, "1080p": true},
+			8: {"720p": true},
+		},
+	},
+	{action: constant.TaskActionReferenceGenerate, model: "vidu2.0"}: {
+		defaultResolution: "360p", defaultDuration: 4,
+		resolutionsByDuration: map[int]map[string]bool{4: {"360p": true, "720p": true}},
+	},
+}
+
+func validateViduVideoPayload(body *requestPayload, capability viduVideoCapability) error {
 	if body.Duration < 1 || body.Duration > relaycommon.MaxTaskDurationSeconds {
 		return fmt.Errorf("Vidu duration must be between 1 and %d", relaycommon.MaxTaskDurationSeconds)
 	}
-	switch {
-	case strings.HasPrefix(body.Model, "viduq1"):
-		if body.Resolution != "1080p" || body.Duration != 5 {
-			return fmt.Errorf("unsupported viduq1 resolution or duration")
+	if capability.resolutionsByDuration != nil {
+		resolutions, ok := capability.resolutionsByDuration[body.Duration]
+		if !ok || !resolutions[body.Resolution] {
+			return fmt.Errorf("unsupported %s resolution %q at %d seconds", body.Model, body.Resolution, body.Duration)
 		}
-	case strings.HasPrefix(body.Model, "viduq2"):
-		if body.Resolution != "540p" && body.Resolution != "720p" && body.Resolution != "1080p" {
-			return fmt.Errorf("unsupported viduq2 resolution %q", body.Resolution)
-		}
-		if body.Duration > 10 {
-			return fmt.Errorf("unsupported viduq2 duration %d", body.Duration)
-		}
-	case body.Model == "vidu2.0":
-		if body.Resolution != "360p" && body.Resolution != "720p" && body.Resolution != "1080p" {
-			return fmt.Errorf("unsupported vidu2.0 resolution %q", body.Resolution)
-		}
-		if body.Duration != 4 && body.Duration != 8 {
-			return fmt.Errorf("unsupported vidu2.0 duration %d", body.Duration)
-		}
-		if body.Duration == 8 && body.Resolution != "720p" {
-			return fmt.Errorf("vidu2.0 only supports 720p at eight seconds")
-		}
-	default:
-		return fmt.Errorf("unsupported Vidu model %s", body.Model)
+		return nil
+	}
+	if body.Duration < capability.minDuration || body.Duration > capability.maxDuration {
+		return fmt.Errorf("unsupported %s duration %d", body.Model, body.Duration)
+	}
+	if !capability.resolutions[body.Resolution] {
+		return fmt.Errorf("unsupported %s resolution %q", body.Model, body.Resolution)
 	}
 	return nil
 }

@@ -158,7 +158,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	params, _, err := geminitask.ResolveVeoVideoRequest(req, info.UpstreamModelName)
+	params, _, err := geminitask.ResolveVeoVideoRequest(req, info.UpstreamModelName, geminitask.VeoProviderVertex)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Veo parameters failed: %w", err)
 	}
@@ -178,7 +178,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err == nil {
-		_, selection, resolveErr := geminitask.ResolveVeoVideoRequest(req, info.UpstreamModelName)
+		_, selection, resolveErr := geminitask.ResolveVeoVideoRequest(req, info.UpstreamModelName, geminitask.VeoProviderVertex)
 		if resolveErr == nil {
 			return selection, nil
 		}
@@ -223,10 +223,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 func (a *TaskAdaptor) GetModelList() []string {
 	return []string{
-		"veo-3.0-generate-001",
-		"veo-3.0-fast-generate-001",
-		"veo-3.1-generate-preview",
-		"veo-3.1-fast-generate-preview",
+		"veo-3.1-generate-001",
+		"veo-3.1-fast-generate-001",
 	}
 }
 func (a *TaskAdaptor) GetChannelName() string { return "vertex" }

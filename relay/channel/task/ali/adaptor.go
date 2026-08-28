@@ -2,8 +2,10 @@ package ali
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -89,9 +91,10 @@ type AliVideoOutput struct {
 
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration   dto.IntValue `json:"duration,omitempty"`
-	VideoCount dto.IntValue `json:"video_count,omitempty"`
-	SR         dto.IntValue `json:"SR,omitempty"`
+	Duration      json.RawMessage `json:"duration,omitempty"`
+	VideoDuration json.RawMessage `json:"video_duration,omitempty"`
+	VideoCount    dto.IntValue    `json:"video_count,omitempty"`
+	SR            dto.IntValue    `json:"SR,omitempty"`
 }
 
 type AliMetadata struct {
@@ -486,9 +489,60 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 	)
 }
 
+type aliVideoCapability struct {
+	defaultResolution  string
+	allowedResolutions map[string]bool
+	allowedDurations   map[int]bool
+	minDuration        int
+	maxDuration        int
+	usesRatio          bool
+}
+
+var aliVideoCapabilities = map[string]aliVideoCapability{
+	"wan2.7-t2v": {
+		defaultResolution:  "1080p",
+		allowedResolutions: map[string]bool{"720p": true, "1080p": true},
+		minDuration:        2, maxDuration: 15, usesRatio: true,
+	},
+	"wan2.7-i2v": {
+		defaultResolution:  "1080p",
+		allowedResolutions: map[string]bool{"720p": true, "1080p": true},
+		minDuration:        2, maxDuration: 15,
+	},
+	"wan2.5-i2v-preview": {
+		defaultResolution:  "1080p",
+		allowedResolutions: map[string]bool{"480p": true, "720p": true, "1080p": true},
+		allowedDurations:   map[int]bool{5: true, 10: true},
+	},
+	"wan2.2-i2v-flash": {
+		defaultResolution:  "720p",
+		allowedResolutions: map[string]bool{"480p": true, "720p": true},
+		allowedDurations:   map[int]bool{5: true},
+	},
+	"wan2.2-i2v-plus": {
+		defaultResolution:  "1080p",
+		allowedResolutions: map[string]bool{"480p": true, "1080p": true},
+		allowedDurations:   map[int]bool{5: true},
+	},
+	"wanx2.1-i2v-plus": {
+		defaultResolution:  "720p",
+		allowedResolutions: map[string]bool{"720p": true},
+		allowedDurations:   map[int]bool{5: true},
+	},
+	"wanx2.1-i2v-turbo": {
+		defaultResolution:  "720p",
+		allowedResolutions: map[string]bool{"480p": true, "720p": true},
+		allowedDurations:   map[int]bool{3: true, 4: true, 5: true},
+	},
+}
+
 func normalizeAliVideoBillingRequest(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) (relaycommon.VideoBillingSelection, error) {
 	if aliReq == nil || aliReq.Parameters == nil {
 		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Ali video parameters are required")
+	}
+	capability, ok := aliVideoCapabilities[aliReq.Model]
+	if !ok {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unknown Ali video capabilities for model %s", aliReq.Model)
 	}
 
 	metadataSize := ""
@@ -528,20 +582,21 @@ func normalizeAliVideoBillingRequest(aliReq *AliVideoRequest, req relaycommon.Ta
 		resolution = canonical
 	}
 	if resolution == "" {
-		if !strings.HasPrefix(aliReq.Model, "wan2.7-t2v") {
-			return relaycommon.VideoBillingSelection{}, fmt.Errorf("unknown Ali video resolution for model %s", aliReq.Model)
-		}
-		resolution = "1080p"
+		resolution = capability.defaultResolution
 	}
-	if strings.HasPrefix(aliReq.Model, "wan2.7-") && resolution == "480p" {
+	if !capability.allowedResolutions[resolution] {
 		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Ali video resolution %q", resolution)
 	}
 
 	if aliReq.Parameters.Duration < 1 || aliReq.Parameters.Duration > relaycommon.MaxTaskDurationSeconds {
 		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Ali video duration must be between 1 and %d", relaycommon.MaxTaskDurationSeconds)
 	}
-	if strings.HasPrefix(aliReq.Model, "wan2.7-") && (aliReq.Parameters.Duration < 2 || aliReq.Parameters.Duration > 15) {
-		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Wan2.7 duration %d", aliReq.Parameters.Duration)
+	if capability.minDuration > 0 {
+		if aliReq.Parameters.Duration < capability.minDuration || aliReq.Parameters.Duration > capability.maxDuration {
+			return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Ali video duration %d for model %s", aliReq.Parameters.Duration, aliReq.Model)
+		}
+	} else if !capability.allowedDurations[aliReq.Parameters.Duration] {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Ali video duration %d for model %s", aliReq.Parameters.Duration, aliReq.Model)
 	}
 
 	shapeSelector := strings.TrimSpace(req.Size)
@@ -555,7 +610,7 @@ func normalizeAliVideoBillingRequest(aliReq *AliVideoRequest, req relaycommon.Ta
 		shapeSelector = metadataSize
 	}
 
-	if strings.HasPrefix(aliReq.Model, "wan2.7-t2v") {
+	if capability.usesRatio {
 		if aliReq.Parameters.Ratio != "" {
 			switch aliReq.Parameters.Ratio {
 			case "16:9", "9:16", "1:1", "4:3", "3:4":
@@ -570,6 +625,8 @@ func normalizeAliVideoBillingRequest(aliReq *AliVideoRequest, req relaycommon.Ta
 		}
 		aliReq.Parameters.Size = ""
 		aliReq.Parameters.Resolution = strings.ToUpper(resolution)
+	} else if strings.TrimSpace(aliReq.Parameters.Ratio) != "" {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Ali model %s does not support a ratio selector", aliReq.Model)
 	} else if strings.Contains(aliReq.Model, "t2v") {
 		if _, ok := aliRatioForSize(shapeSelector); ok {
 			aliReq.Parameters.Size = strings.ReplaceAll(strings.ToLower(shapeSelector), "x", "*")
@@ -597,9 +654,9 @@ func aliRatioForSize(size string) (string, bool) {
 		return "9:16", true
 	case "624*624", "960*960", "1440*1440":
 		return "1:1", true
-	case "1088*832", "1632*1248":
+	case "1104*832", "1648*1248":
 		return "4:3", true
-	case "832*1088", "1248*1632":
+	case "832*1104", "1248*1648":
 		return "3:4", true
 	default:
 		return "", false
@@ -610,11 +667,16 @@ func canonicalAliResolution(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	normalized = strings.ReplaceAll(normalized, "x", "*")
 	if strings.Contains(normalized, "*") {
-		resolution, err := sizeToResolution(normalized)
-		if err != nil {
-			return "", err
+		switch normalized {
+		case "832*480", "480*832", "624*624":
+			return "480p", nil
+		case "1280*720", "720*1280", "960*960", "1104*832", "832*1104":
+			return "720p", nil
+		case "1920*1080", "1080*1920", "1440*1440", "1648*1248", "1248*1648":
+			return "1080p", nil
+		default:
+			return "", fmt.Errorf("unsupported Ali video resolution %q", value)
 		}
-		return strings.ToLower(resolution), nil
 	}
 	if !strings.HasSuffix(normalized, "p") {
 		normalized += "p"
@@ -757,9 +819,33 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		Code: 0,
 	}
 	if aliResp.Usage != nil {
-		duration := int(aliResp.Usage.Duration)
-		if duration > 0 && duration <= relaycommon.MaxTaskDurationSeconds {
-			taskResult.EffectiveDurationSeconds = duration
+		for _, rawDuration := range []json.RawMessage{aliResp.Usage.Duration, aliResp.Usage.VideoDuration} {
+			if len(rawDuration) == 0 {
+				continue
+			}
+			var duration float64
+			switch common.GetJsonType(rawDuration) {
+			case "number":
+				if err := common.Unmarshal(rawDuration, &duration); err != nil {
+					continue
+				}
+			case "string":
+				var value string
+				if err := common.Unmarshal(rawDuration, &value); err != nil {
+					continue
+				}
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil {
+					continue
+				}
+				duration = parsed
+			default:
+				continue
+			}
+			if duration > 0 && duration <= relaycommon.MaxTaskDurationSeconds && math.Trunc(duration) == duration {
+				taskResult.EffectiveDurationSeconds = int(duration)
+				break
+			}
 		}
 	}
 

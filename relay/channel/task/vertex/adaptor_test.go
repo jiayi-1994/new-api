@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,7 +33,7 @@ func vertexBillingContext(t *testing.T, req relaycommon.TaskSubmitReq, upstreamM
 
 func TestVertexVideoBillingMatchesSharedVeoPayload(t *testing.T) {
 	c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
-		Model: "client-price-key", Prompt: "animate", Size: "2160x3840", Seconds: "8",
+		Model: "client-price-key", Prompt: "animate", Size: "1080x1920", Seconds: "6",
 	}, "veo-3.1-fast-generate-preview")
 	adaptor := &TaskAdaptor{}
 
@@ -47,11 +48,46 @@ func TestVertexVideoBillingMatchesSharedVeoPayload(t *testing.T) {
 	require.NotNil(t, payload.Parameters)
 
 	assert.Equal(t, "client-price-key", info.OriginModelName)
-	assert.Equal(t, "4k", selection.EffectiveResolution)
+	assert.Equal(t, "1080p", selection.EffectiveResolution)
 	assert.Equal(t, "9:16", payload.Parameters.AspectRatio)
 	assert.Equal(t, payload.Parameters.Resolution, selection.EffectiveResolution)
 	assert.Equal(t, payload.Parameters.DurationSeconds, selection.EffectiveDurationSeconds)
 	assert.Empty(t, selection.IndependentRatios)
+}
+
+func TestVertexVeoVideoBillingUsesVertexDurationAndResolutionMatrix(t *testing.T) {
+	for _, duration := range []int{4, 6, 8} {
+		t.Run("1080p-portrait-"+strconv.Itoa(duration), func(t *testing.T) {
+			c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: duration,
+			}, "veo-3.0-generate-001")
+			adaptor := &TaskAdaptor{}
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			body, err := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, err)
+			data, err := io.ReadAll(body)
+			require.NoError(t, err)
+			var payload geminitask.VeoRequestPayload
+			require.NoError(t, common.Unmarshal(data, &payload))
+			require.NotNil(t, payload.Parameters)
+			assert.Equal(t, "1080p", selection.EffectiveResolution)
+			assert.Equal(t, duration, selection.EffectiveDurationSeconds)
+			assert.Equal(t, "9:16", payload.Parameters.AspectRatio)
+			assert.Equal(t, selection.EffectiveResolution, payload.Parameters.Resolution)
+			assert.Equal(t, selection.EffectiveDurationSeconds, payload.Parameters.DurationSeconds)
+		})
+	}
+
+	t.Run("reject-4k", func(t *testing.T) {
+		c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
+			Model: "alias", Prompt: "animate", Size: "3840x2160", Duration: 8,
+		}, "veo-3.1-generate-preview")
+		selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+		assert.Zero(t, selection)
+		require.NotNil(t, taskErr)
+		assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	})
 }
 
 func TestVertexVideoBillingRejectsDimensionHeuristicAliases(t *testing.T) {
@@ -63,4 +99,27 @@ func TestVertexVideoBillingRejectsDimensionHeuristicAliases(t *testing.T) {
 	assert.Zero(t, selection)
 	require.NotNil(t, taskErr)
 	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+}
+
+func TestVertexVideoBillingSupportsCurrentVeo31GAModels(t *testing.T) {
+	for _, model := range []string{"veo-3.1-generate-001", "veo-3.1-fast-generate-001"} {
+		t.Run(model, func(t *testing.T) {
+			c, info := vertexBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: 6,
+			}, model)
+			adaptor := &TaskAdaptor{}
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			body, err := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, err)
+			data, err := io.ReadAll(body)
+			require.NoError(t, err)
+			var payload geminitask.VeoRequestPayload
+			require.NoError(t, common.Unmarshal(data, &payload))
+			require.NotNil(t, payload.Parameters)
+			assert.Equal(t, "1080p", selection.EffectiveResolution)
+			assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+			assert.Equal(t, "9:16", payload.Parameters.AspectRatio)
+		})
+	}
 }

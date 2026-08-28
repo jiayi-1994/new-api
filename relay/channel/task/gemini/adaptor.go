@@ -87,7 +87,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	params, _, err := ResolveVeoVideoRequest(req, info.UpstreamModelName)
+	params, _, err := ResolveVeoVideoRequest(req, info.UpstreamModelName, VeoProviderGemini)
 	if err != nil {
 		return nil, errors.Wrap(err, "resolve Veo parameters failed")
 	}
@@ -107,7 +107,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err == nil {
-		_, selection, resolveErr := ResolveVeoVideoRequest(req, info.UpstreamModelName)
+		_, selection, resolveErr := ResolveVeoVideoRequest(req, info.UpstreamModelName, VeoProviderGemini)
 		if resolveErr == nil {
 			return selection, nil
 		}

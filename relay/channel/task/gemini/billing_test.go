@@ -65,12 +65,8 @@ func TestVeoVideoBillingMatchesPayload(t *testing.T) {
 func TestVeo30VideoBillingAllows720pAnd1080pButRejects4k(t *testing.T) {
 	for _, resolution := range []string{"720p", "1080p"} {
 		t.Run(resolution, func(t *testing.T) {
-			duration := 4
-			if resolution == "1080p" {
-				duration = 8
-			}
 			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-				Model: "client-model", Prompt: "animate", Duration: duration,
+				Model: "client-model", Prompt: "animate", Duration: 8,
 				Metadata: map[string]any{"resolution": resolution},
 			}, "veo-3.0-fast-generate-001")
 			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
@@ -154,7 +150,7 @@ func TestVeoVideoBillingAcceptsOnlyProviderDurations(t *testing.T) {
 		t.Run("valid-"+strconv.Itoa(duration), func(t *testing.T) {
 			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
 				Model: "alias", Prompt: "animate", Metadata: map[string]any{"durationSeconds": duration},
-			}, "veo-3.0-generate-001")
+			}, "veo-3.1-generate-preview")
 			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 			require.Nil(t, taskErr)
 			assert.Equal(t, duration, selection.EffectiveDurationSeconds)
@@ -164,6 +160,20 @@ func TestVeoVideoBillingAcceptsOnlyProviderDurations(t *testing.T) {
 		t.Run("invalid-"+strconv.Itoa(duration), func(t *testing.T) {
 			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
 				Model: "alias", Prompt: "animate", Metadata: map[string]any{"durationSeconds": duration},
+			}, "veo-3.1-generate-preview")
+			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+		})
+	}
+}
+
+func TestGeminiVeo30VideoBillingUsesEightSecondLandscapeMatrix(t *testing.T) {
+	for _, duration := range []int{4, 6} {
+		t.Run("reject-720p-"+strconv.Itoa(duration), func(t *testing.T) {
+			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1280x720", Duration: duration,
 			}, "veo-3.0-generate-001")
 			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 			assert.Zero(t, selection)
@@ -171,6 +181,30 @@ func TestVeoVideoBillingAcceptsOnlyProviderDurations(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 		})
 	}
+
+	t.Run("accept-720p-8-and-match-payload", func(t *testing.T) {
+		c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
+			Model: "alias", Prompt: "animate", Size: "1280x720", Duration: 8,
+		}, "veo-3.0-generate-001")
+		adaptor := &TaskAdaptor{}
+		selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+		require.Nil(t, taskErr)
+		payload := decodeVeoPayload(t, adaptor, c, info)
+		assert.Equal(t, "720p", selection.EffectiveResolution)
+		assert.Equal(t, 8, selection.EffectiveDurationSeconds)
+		assert.Equal(t, selection.EffectiveResolution, payload.Parameters.Resolution)
+		assert.Equal(t, selection.EffectiveDurationSeconds, payload.Parameters.DurationSeconds)
+	})
+
+	t.Run("reject-1080p-portrait", func(t *testing.T) {
+		c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
+			Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: 8,
+		}, "veo-3.0-generate-001")
+		selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+		assert.Zero(t, selection)
+		require.NotNil(t, taskErr)
+		assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	})
 }
 
 func TestVeoVideoBillingRequiresEightSecondsForHighResolution(t *testing.T) {

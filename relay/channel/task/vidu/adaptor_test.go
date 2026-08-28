@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -22,11 +23,15 @@ func viduBillingContext(t *testing.T, req relaycommon.TaskSubmitReq, upstreamMod
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(string(body)))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("task_request", req)
-	return c, &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{
 		OriginModelName: req.Model,
 		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
-		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: upstreamModel},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType: constant.ChannelTypeVidu, UpstreamModelName: upstreamModel,
+		},
 	}
+	require.Nil(t, (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info))
+	return c, info
 }
 
 func decodeViduPayload(t *testing.T, adaptor *TaskAdaptor, c *gin.Context, info *relaycommon.RelayInfo) requestPayload {
@@ -100,7 +105,7 @@ func TestVidu20VideoBillingRejectsEightSecondsOutside720p(t *testing.T) {
 	for _, resolution := range []string{"360p", "1080p"} {
 		t.Run(resolution, func(t *testing.T) {
 			c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
-				Model: "alias", Prompt: "animate", Duration: 8, Size: resolution,
+				Model: "alias", Prompt: "animate", Images: []string{"https://example.com/frame.png"}, Duration: 8, Size: resolution,
 			}, "vidu2.0")
 			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 			assert.Zero(t, selection)
@@ -126,7 +131,7 @@ func TestVidu20VideoBillingUsesDurationSpecificResolutionCapabilities(t *testing
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
-				Model: "alias", Prompt: "animate", Duration: tc.duration, Size: tc.size,
+				Model: "alias", Prompt: "animate", Images: []string{"https://example.com/frame.png"}, Duration: tc.duration, Size: tc.size,
 			}, "vidu2.0")
 			adaptor := &TaskAdaptor{}
 			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
@@ -135,6 +140,129 @@ func TestVidu20VideoBillingUsesDurationSpecificResolutionCapabilities(t *testing
 			assert.Equal(t, tc.resolution, selection.EffectiveResolution)
 			assert.Equal(t, tc.resolution, payload.Resolution)
 			assert.Equal(t, tc.duration, payload.Duration)
+		})
+	}
+}
+
+func TestVidu20TextToVideoRejectsBeforePayloadBuild(t *testing.T) {
+	c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
+		Model: "alias", Prompt: "animate", Duration: 4, Size: "360p",
+	}, "vidu2.0")
+	adaptor := &TaskAdaptor{}
+	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	_, err := adaptor.BuildRequestBody(c, info)
+	require.Error(t, err)
+}
+
+func TestViduVideoBillingUsesActionModelCapabilityAndMatchingURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		images     []string
+		duration   int
+		resolution string
+		path       string
+	}{
+		{"q2 text", "viduq2", nil, 9, "1080p", "/ent/v2/text2video"},
+		{"q2 reference", "viduq2", []string{"a", "b", "c"}, 9, "1080p", "/ent/v2/reference2video"},
+		{"q1 text", "viduq1", nil, 5, "1080p", "/ent/v2/text2video"},
+		{"q1 image", "viduq1", []string{"a"}, 5, "1080p", "/ent/v2/img2video"},
+		{"q1 start-end", "viduq1", []string{"a", "b"}, 5, "1080p", "/ent/v2/start-end2video"},
+		{"q1 reference", "viduq1", []string{"a", "b", "c"}, 5, "1080p", "/ent/v2/reference2video"},
+		{"vidu20 image", "vidu2.0", []string{"a"}, 4, "360p", "/ent/v2/img2video"},
+		{"vidu20 start-end", "vidu2.0", []string{"a", "b"}, 8, "720p", "/ent/v2/start-end2video"},
+		{"vidu20 reference", "vidu2.0", []string{"a", "b", "c"}, 4, "720p", "/ent/v2/reference2video"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Images: tc.images,
+				Duration: tc.duration, Resolution: tc.resolution,
+			}, tc.model)
+			adaptor := &TaskAdaptor{baseURL: "https://vidu.example"}
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			payload := decodeViduPayload(t, adaptor, c, info)
+			url, err := adaptor.BuildRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, "https://vidu.example"+tc.path, url)
+			assert.Equal(t, tc.model, payload.Model)
+			assert.Equal(t, tc.resolution, payload.Resolution)
+			assert.Equal(t, tc.duration, payload.Duration)
+			assert.Equal(t, payload.Resolution, selection.EffectiveResolution)
+			assert.Equal(t, payload.Duration, selection.EffectiveDurationSeconds)
+			if info.Action == constant.TaskActionReferenceGenerate {
+				assert.Empty(t, payload.Images)
+				require.Len(t, payload.Subjects, 1)
+				assert.Equal(t, "subject1", payload.Subjects[0].Name)
+				assert.Equal(t, tc.images, payload.Subjects[0].Images)
+			}
+		})
+	}
+}
+
+func TestViduVideoBillingValidatesFinalPayloadInputsBeforeBilling(t *testing.T) {
+	tests := []relaycommon.TaskSubmitReq{
+		{
+			Model: "alias", Prompt: "animate", Duration: 5, Resolution: "1080p",
+			Metadata: map[string]any{"action": constant.TaskActionGenerate},
+		},
+		{
+			Model: "alias", Prompt: "animate", Images: []string{"https://example.com/frame.png"}, Duration: 5, Resolution: "1080p",
+			Metadata: map[string]any{"images": []string{}},
+		},
+	}
+	for index, req := range tests {
+		t.Run(string(rune('a'+index)), func(t *testing.T) {
+			c, info := viduBillingContext(t, req, "viduq1")
+			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+		})
+	}
+}
+
+func TestViduReferenceVideoBillingRejectsMoreThanSevenImages(t *testing.T) {
+	c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
+		Model: "alias", Prompt: "animate", Duration: 5, Resolution: "720p",
+		Images: []string{"1", "2", "3", "4", "5", "6", "7", "8"},
+	}, "viduq2")
+
+	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+	assert.Zero(t, selection)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+}
+
+func TestViduVideoBillingRejectsUnsupportedActionModelTuples(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		images     []string
+		duration   int
+		resolution string
+	}{
+		{"q2 image", "viduq2", []string{"a"}, 5, "720p"},
+		{"q2 start-end", "viduq2", []string{"a", "b"}, 5, "720p"},
+		{"vidu20 text", "vidu2.0", nil, 4, "360p"},
+		{"vidu20 reference eight seconds", "vidu2.0", []string{"a", "b", "c"}, 8, "720p"},
+		{"vidu20 reference 1080p", "vidu2.0", []string{"a", "b", "c"}, 4, "1080p"},
+		{"vidu15 unknown", "vidu1.5", []string{"a"}, 5, "720p"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := viduBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Images: tc.images,
+				Duration: tc.duration, Resolution: tc.resolution,
+			}, tc.model)
+			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 		})
 	}
 }
