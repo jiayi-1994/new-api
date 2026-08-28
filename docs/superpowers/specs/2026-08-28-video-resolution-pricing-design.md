@@ -2,14 +2,16 @@
 
 ## Summary
 
-Video generation pricing will be configured by model and effective output resolution. All configured resolutions of one model share that model's existing `TaskBillingMode` setting and are charged either per task or per second. A video request is supported only when its effective resolution has an explicit price entry.
+Video generation pricing will be configured by model and effective output resolution. Every configured value is a per-second price, and the final charge is based on the request's effective output resolution and bounded duration. A video request is supported only when its effective resolution has an explicit price entry.
 
 This replaces the current model-level base price plus provider-specific hard-coded resolution multipliers for video generation. Non-video pricing remains unchanged.
+
+The existing `TaskBillingMode` option and legacy task-pricing paths remain unchanged for backward compatibility. The new resolution-pricing path does not read, update, or depend on `TaskBillingMode` and never performs per-call billing.
 
 ## Goals
 
 - Configure a distinct price for every supported resolution of a video model.
-- Support both `per_call` and `per_second` charging for resolution prices.
+- Charge every resolution price per second.
 - Resolve omitted request resolutions to the actual provider or protocol default before pricing.
 - Reject video requests whose model or effective resolution has no configured price.
 - Charge from the same effective resolution that is sent upstream.
@@ -21,6 +23,8 @@ This replaces the current model-level base price plus provider-specific hard-cod
 - Replacing token pricing, ordinary fixed `ModelPrice`, or tiered billing expressions.
 - Guessing a price from pixel count or interpolating between configured resolutions.
 - Automatically migrating an existing video `ModelPrice` into a resolution price.
+- Changing or removing the existing `TaskBillingMode` option or its legacy consumers.
+- Supporting per-call billing on the new resolution-pricing path.
 - Introducing database-specific schema changes.
 
 ## Configuration Model
@@ -37,7 +41,7 @@ Add a `VideoResolutionPrice` option with this JSON shape:
 }
 ```
 
-The outer key is the original model name used for billing configuration. Existing model-name normalization and compact wildcard matching apply. The inner key is a canonical resolution, and the value is a USD price per task or per second according to `TaskBillingMode`.
+The outer key is the original model name used for billing configuration. Existing model-name normalization and compact wildcard matching apply. The inner key is a canonical resolution, and the value is a USD price per second.
 
 Resolution prices must be finite and greater than zero. Resolution keys are trimmed and lowercased before storage and lookup. If two input keys normalize to the same canonical resolution, the update is rejected instead of silently overwriting one value.
 
@@ -45,14 +49,13 @@ A canonical key must match either `^[1-9][0-9]{2,4}p$` for a vertical-resolution
 
 ## Pricing Semantics
 
-The selected resolution price becomes the request's base model price.
+The selected resolution price becomes the request's per-second base model price:
 
-- `per_call`: `resolution price × group ratio × product of allowed independent ratios`
-- `per_second`: `resolution price × effective duration seconds × group ratio × product of allowed independent ratios`
+`resolution price × effective duration seconds × group ratio × product of allowed independent ratios`
 
 The initial allowlist of independent ratios contains only Doubao's `video_input` ratio. Duration is represented by the billing formula, and output resolution is represented by the selected direct price, so neither is also included as an independent ratio. Any future independent ratio must define its name, business meaning, validation bound, ownership, and non-duplication test before it is added to the resolver result.
 
-If `TaskBillingMode` is absent, video resolution pricing retains the current default of `per_second`. The administration UI makes the unit visible and allows an explicit `per_call` or `per_second` selection.
+The resolution-pricing path always applies duration and ignores `TaskBillingMode`, even when that legacy option contains a matching model entry. Administrators configure only resolution prices; there is no billing-unit selector for this mode.
 
 The following conditions produce an HTTP 400 `video_resolution_not_supported` response:
 
@@ -87,10 +90,10 @@ Initial adapter work covers the existing resolution-bearing video integrations, 
 3. Ask the video billing resolver for the effective resolution, duration, and independent ratios.
 4. Resolve the price from the original model name and effective resolution using existing model-name normalization and compact wildcard matching.
 5. Build `PriceData` from the selected direct price and group ratio.
-6. Apply duration only for `per_second`; apply only non-duplicative independent ratios.
+6. Apply the bounded duration and only non-duplicative independent ratios.
 7. Convert quota with the checked helpers in `common/quota_math.go`, attach any saturation marker, and perform pre-consume.
 8. Submit the upstream request and settle using the same selected billing data.
-9. Save the effective resolution, selected price, billing unit, and ratios in the task billing snapshot.
+9. Save the effective resolution, selected per-second price, effective duration, and ratios in the task billing snapshot.
 
 A tested domain helper constructs video `PriceData` from an explicit resolution price. This is a stable billing concept and avoids mutating the global `ModelPrice` map or duplicating quota setup logic at the relay call site.
 
@@ -104,7 +107,7 @@ Any adjusted billing returned after submission must preserve the selected resolu
 
 ## Remix and Task Snapshots
 
-Extend the existing JSON `TaskBillingContext` with optional fields for effective resolution and selected resolution price. This requires no relational database migration and remains compatible with SQLite, MySQL, and PostgreSQL.
+Extend the existing JSON `TaskBillingContext` with optional fields for effective resolution, selected per-second resolution price, and effective duration. This requires no relational database migration and remains compatible with SQLite, MySQL, and PostgreSQL. New resolution-priced tasks do not set or consult the legacy per-call snapshot flag.
 
 A remix request inherits the original task's saved effective resolution only when the remix protocol guarantees that the upstream payload preserves that resolution. Otherwise the provider adapter resolves the effective output resolution again from the remix payload. For older tasks without this snapshot field, the relay first attempts to recover a resolution from saved task data using the provider adapter. If recovery is impossible, it uses the adapter's real default only when the remix protocol actually sends that default; otherwise it returns `video_resolution_not_supported`.
 
@@ -115,9 +118,8 @@ The consume log and administrator-visible task details record the canonical reso
 Add a `video_resolution` pricing mode to the model pricing editor. Its form contains:
 
 - a repeatable list of resolution and USD price rows;
-- the existing video task billing unit selector;
 - inline validation for required, unique canonical resolutions and positive finite prices;
-- a preview showing each resolution price with `/task` or `/second`.
+- a preview showing each resolution price with `/second`.
 
 Both administration paths must read and write the new option:
 
@@ -132,7 +134,7 @@ All user-facing strings use i18next and are added for `en`, `zh`, `zh-TW`, `fr`,
 
 Extend the pricing response with `resolution_prices`. A model with resolution prices is treated as fixed-price video billing even when it has no ordinary `ModelPrice`.
 
-Pricing cards show the lowest configured price as a `from` value plus the billing unit. Model details show the complete resolution-to-price table. Existing consumers that ignore the new optional field continue to work.
+Pricing cards show the lowest configured price as a `from` value with the per-second unit. Model details show the complete resolution-to-price table. The existing compatibility billing-unit field may report `per_second` for a resolution-priced model, but it is not sourced from `TaskBillingMode`. Existing consumers that ignore the new optional field continue to work.
 
 The exposed pricing cache and billing-configuration checks include `VideoResolutionPrice` and are invalidated when it changes. Ratio synchronization does not invent or import resolution prices unless its upstream contract explicitly supplies the nested map.
 
@@ -153,7 +155,7 @@ Implementation follows red-green-refactor. Tests protect these observable contra
 
 - Nested configuration load, replacement, canonicalization, compact wildcard matching, invalid values, duplicate aliases, and missing entries.
 - Exact 720p/1080p prices for the same model.
-- `per_call` charges one selected resolution price; `per_second` multiplies it by bounded duration.
+- Different durations multiply the selected resolution price exactly once, including when the legacy `TaskBillingMode` contains `per_call` for the same model.
 - Omitted resolution uses each adapter's actual default.
 - Metadata overrides top-level size only when the upstream payload does the same.
 - Unsupported and unconfigured resolutions return HTTP 400 before pre-consume.
@@ -168,7 +170,7 @@ New or substantially rewritten Go tests use `testify/require` for fatal setup as
 
 - Add, edit, remove, rename, copy, and save resolution price rows.
 - Reject empty, duplicate, zero, negative, and non-finite prices.
-- Preserve the selected per-task/per-second unit.
+- Render the fixed per-second unit without exposing a per-call selector for resolution pricing.
 - Render pricing card minimums and detail tables.
 - Cover the user-visible form behavior with React Testing Library and pure transformations with Vitest.
 - Run i18n synchronization and verify all supported locale files.
