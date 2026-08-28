@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -86,6 +87,22 @@ func (a *taskSubmitTestAdaptor) GetChannelName() string { return "test" }
 
 type videoTaskSubmitTestAdaptor struct {
 	*taskSubmitTestAdaptor
+}
+
+type unsupportedVideoAdaptorSpy struct {
+	channel.TaskAdaptor
+	buildCalls   int
+	requestCalls int
+}
+
+func (a *unsupportedVideoAdaptorSpy) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	a.buildCalls++
+	return a.TaskAdaptor.BuildRequestBody(c, info)
+}
+
+func (a *unsupportedVideoAdaptorSpy) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (*http.Response, error) {
+	a.requestCalls++
+	return a.TaskAdaptor.DoRequest(c, info, body)
 }
 
 func (a *videoTaskSubmitTestAdaptor) ResolveVideoBilling(*gin.Context, *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *dto.TaskError) {
@@ -281,6 +298,26 @@ func TestRelayTaskSubmitRejectsVideoAdaptorWithoutResolver(t *testing.T) {
 	assert.Zero(t, base.requestCalls)
 }
 
+func TestRelayTaskSubmitResolverRejectionStopsBeforePreConsumeAndRequest(t *testing.T) {
+	base := &taskSubmitTestAdaptor{resolveErr: &dto.TaskError{
+		Code:       "video_resolution_not_supported",
+		Message:    "provider resolution conflict",
+		StatusCode: http.StatusBadRequest,
+	}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.False(t, base.didBuildRequest)
+	assert.Zero(t, base.requestCalls)
+}
+
 func TestRelayTaskSubmitKeepsLegacySunoPath(t *testing.T) {
 	base := &taskSubmitTestAdaptor{}
 	c, info, deps, state := taskSubmitVideoTestContext(t, base)
@@ -297,4 +334,33 @@ func TestRelayTaskSubmitKeepsLegacySunoPath(t *testing.T) {
 	assert.True(t, base.didRequest)
 	assert.Equal(t, 1, state.preConsumeCalls)
 	assert.Equal(t, 1, base.requestCalls)
+}
+
+func TestUnsupportedVideoAdaptorRejectsKlingAndJimengBeforeRequest(t *testing.T) {
+	for _, channelType := range []int{constant.ChannelTypeKling, constant.ChannelTypeJimeng} {
+		t.Run(strconv.Itoa(channelType), func(t *testing.T) {
+			actual := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channelType)))
+			require.NotNil(t, actual)
+			spy := &unsupportedVideoAdaptorSpy{TaskAdaptor: actual}
+			c, info, deps, state := taskSubmitVideoTestContext(t, spy)
+			c.Request = httptest.NewRequest(
+				http.MethodPost,
+				"/v1/videos",
+				bytes.NewBufferString(`{"model":"client-model","prompt":"animate"}`),
+			)
+			c.Request.Header.Set("Content-Type", "application/json")
+			require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+			result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+			assert.Nil(t, result)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+			assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+			assert.Contains(t, taskErr.Message, "unknown")
+			assert.Zero(t, state.preConsumeCalls)
+			assert.Zero(t, spy.buildCalls)
+			assert.Zero(t, spy.requestCalls)
+		})
+	}
 }

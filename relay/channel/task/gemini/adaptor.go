@@ -87,21 +87,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	params := &VeoParameters{}
-	if err := taskcommon.UnmarshalMetadata(req.Metadata, params); err != nil {
-		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	params, _, err := ResolveVeoVideoRequest(req, info.UpstreamModelName)
+	if err != nil {
+		return nil, errors.Wrap(err, "resolve Veo parameters failed")
 	}
-	if params.DurationSeconds == 0 && req.Duration > 0 {
-		params.DurationSeconds = req.Duration
-	}
-	if params.Resolution == "" && req.Size != "" {
-		params.Resolution = SizeToVeoResolution(req.Size)
-	}
-	if params.AspectRatio == "" && req.Size != "" {
-		params.AspectRatio = SizeToVeoAspectRatio(req.Size)
-	}
-	params.Resolution = strings.ToLower(params.Resolution)
-	params.SampleCount = 1
 
 	body := VeoRequestPayload{
 		Instances:  []VeoInstance{instance},
@@ -113,6 +102,22 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 	return bytes.NewReader(data), nil
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err == nil {
+		_, selection, resolveErr := ResolveVeoVideoRequest(req, info.UpstreamModelName)
+		if resolveErr == nil {
+			return selection, nil
+		}
+		err = resolveErr
+	}
+	return relaycommon.VideoBillingSelection{}, service.TaskErrorWrapperLocal(
+		err,
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
 }
 
 // DoRequest delegates to common helper.

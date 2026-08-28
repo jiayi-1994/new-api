@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -75,12 +76,12 @@ type responseTask struct {
 	Content struct {
 		VideoURL string `json:"video_url"`
 	} `json:"content"`
-	Seed            int    `json:"seed"`
-	Resolution      string `json:"resolution"`
-	Duration        int    `json:"duration"`
-	Ratio           string `json:"ratio"`
-	FramesPerSecond int    `json:"framespersecond"`
-	ServiceTier     string `json:"service_tier"`
+	Seed            int          `json:"seed"`
+	Resolution      string       `json:"resolution"`
+	Duration        dto.IntValue `json:"duration"`
+	Ratio           string       `json:"ratio"`
+	FramesPerSecond int          `json:"framespersecond"`
+	ServiceTier     string       `json:"service_tier"`
 	Tools           []struct {
 		Type string `json:"type"`
 	} `json:"tools"`
@@ -108,6 +109,13 @@ type TaskAdaptor struct {
 	ChannelType int
 	apiKey      string
 	baseURL     string
+}
+
+const doubaoResolvedVideoRequestKey = "doubao_resolved_video_request"
+
+type doubaoResolvedVideoRequest struct {
+	Request   *requestPayload
+	Selection relaycommon.VideoBillingSelection
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
@@ -186,14 +194,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
-	body, err := a.convertToRequestPayload(&req)
-	if err != nil {
-		return nil, errors.Wrap(err, "convert request payload failed")
+	var body *requestPayload
+	if cached, ok := c.Get(doubaoResolvedVideoRequestKey); ok {
+		if resolved, valid := cached.(doubaoResolvedVideoRequest); valid {
+			body = resolved.Request
+		}
 	}
-	if info.IsModelMapped {
-		body.Model = info.UpstreamModelName
-	} else {
-		info.UpstreamModelName = body.Model
+	if body == nil {
+		body, _, err = a.resolveVideoRequest(&req, info)
+		if err != nil {
+			return nil, errors.Wrap(err, "convert request payload failed")
+		}
 	}
 	data, err := common.Marshal(body)
 	if err != nil {
@@ -271,9 +282,13 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
 }
 
-func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*requestPayload, error) {
+func (a *TaskAdaptor) resolveVideoRequest(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, relaycommon.VideoBillingSelection, error) {
+	upstreamModel := strings.TrimSpace(info.UpstreamModelName)
+	if upstreamModel == "" {
+		upstreamModel = req.Model
+	}
 	r := requestPayload{
-		Model:   req.Model,
+		Model:   upstreamModel,
 		Content: []ContentItem{},
 	}
 
@@ -291,11 +306,20 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 
 	metadata := req.Metadata
 	if err := taskcommon.UnmarshalMetadata(metadata, &r); err != nil {
-		return nil, errors.Wrap(err, "unmarshal metadata failed")
+		return nil, relaycommon.VideoBillingSelection{}, errors.Wrap(err, "unmarshal metadata failed")
 	}
 
 	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
 		r.Duration = lo.ToPtr(dto.IntValue(sec))
+	} else if r.Duration == nil && req.Duration > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
+	}
+	if r.Resolution == "" {
+		if strings.TrimSpace(req.Resolution) != "" {
+			r.Resolution = req.Resolution
+		} else if strings.TrimSpace(req.Size) != "" {
+			r.Resolution = req.Size
+		}
 	}
 
 	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
@@ -304,7 +328,96 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		Text: req.Prompt,
 	})
 
-	return &r, nil
+	selection, err := normalizeDoubaoVideoRequest(&r)
+	if err != nil {
+		return nil, relaycommon.VideoBillingSelection{}, err
+	}
+	return &r, selection, nil
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err == nil {
+		body, selection, resolveErr := a.resolveVideoRequest(&req, info)
+		if resolveErr == nil {
+			c.Set(doubaoResolvedVideoRequestKey, doubaoResolvedVideoRequest{Request: body, Selection: selection})
+			return selection, nil
+		}
+		err = resolveErr
+	}
+	return relaycommon.VideoBillingSelection{}, service.TaskErrorWrapperLocal(
+		err,
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
+}
+
+type doubaoVideoCapability struct {
+	defaultResolution string
+	minDuration       int
+	maxDuration       int
+	allow1080p        bool
+}
+
+var doubaoVideoCapabilities = map[string]doubaoVideoCapability{
+	"doubao-seedance-1-0-pro-250528":      {defaultResolution: "1080p", minDuration: 2, maxDuration: 12, allow1080p: true},
+	"doubao-seedance-1-0-pro-fast-250528": {defaultResolution: "1080p", minDuration: 2, maxDuration: 12, allow1080p: true},
+	"doubao-seedance-1-0-lite-t2v":        {defaultResolution: "720p", minDuration: 2, maxDuration: 12, allow1080p: true},
+	"doubao-seedance-1-0-lite-i2v":        {defaultResolution: "720p", minDuration: 2, maxDuration: 12},
+	"doubao-seedance-1-5-pro-251215":      {defaultResolution: "720p", minDuration: 4, maxDuration: 12, allow1080p: true},
+	"doubao-seedance-2-0-260128":          {defaultResolution: "720p", minDuration: 4, maxDuration: 15, allow1080p: true},
+	"doubao-seedance-2-0-fast-260128":     {defaultResolution: "720p", minDuration: 4, maxDuration: 15},
+}
+
+func getDoubaoVideoCapability(model string) (doubaoVideoCapability, bool) {
+	capability, ok := doubaoVideoCapabilities[model]
+	return capability, ok
+}
+
+func normalizeDoubaoVideoRequest(body *requestPayload) (relaycommon.VideoBillingSelection, error) {
+	capability, ok := getDoubaoVideoCapability(body.Model)
+	if !ok {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Doubao video model %q", body.Model)
+	}
+	resolution := strings.ToLower(strings.TrimSpace(body.Resolution))
+	if resolution == "" {
+		resolution = capability.defaultResolution
+	}
+	if resolution != "480p" && resolution != "720p" && resolution != "1080p" {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Doubao video resolution %q", resolution)
+	}
+	if resolution == "1080p" && !capability.allow1080p {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Doubao video resolution %q", resolution)
+	}
+	if body.Frames != nil {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Doubao video frames do not provide an exact billing duration")
+	}
+	if body.Duration == nil {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Doubao video duration is required")
+	}
+	duration := int(*body.Duration)
+	if duration < capability.minDuration || duration > capability.maxDuration || duration > relaycommon.MaxTaskDurationSeconds {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Doubao video duration %d", duration)
+	}
+
+	body.Resolution = resolution
+	selection := relaycommon.VideoBillingSelection{
+		EffectiveResolution:      resolution,
+		EffectiveDurationSeconds: duration,
+	}
+	if ratio, exists := GetVideoInputIndependentRatio(body.Model, resolution, hasVideoInPayload(body)); exists && ratio != 1 {
+		selection.IndependentRatios = map[string]float64{"video_input": ratio}
+	}
+	return selection, nil
+}
+
+func hasVideoInPayload(body *requestPayload) bool {
+	for _, item := range body.Content {
+		if item.Type == "video_url" || item.VideoURL != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
@@ -315,6 +428,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 	taskResult := relaycommon.TaskInfo{
 		Code: 0,
+	}
+	duration := int(resTask.Duration)
+	if duration > 0 && duration <= relaycommon.MaxTaskDurationSeconds {
+		taskResult.EffectiveDurationSeconds = duration
 	}
 
 	// Map Doubao status to internal status

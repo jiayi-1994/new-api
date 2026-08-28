@@ -144,14 +144,25 @@ func (a *TaskAdaptor) GetChannelName() string {
 }
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*VideoRequest, error) {
+	if !contains(ModelList, info.UpstreamModelName) {
+		return nil, fmt.Errorf("unsupported Hailuo model %q", info.UpstreamModelName)
+	}
 	modelConfig := GetModelConfig(info.UpstreamModelName)
 	duration := DefaultDuration
 	if req.Duration > 0 {
 		duration = req.Duration
 	}
 	resolution := modelConfig.DefaultResolution
-	if req.Size != "" {
-		resolution = a.parseResolutionFromSize(req.Size, modelConfig)
+	requestedResolution := req.Size
+	if strings.TrimSpace(req.Resolution) != "" {
+		requestedResolution = req.Resolution
+	}
+	if strings.TrimSpace(requestedResolution) != "" {
+		var err error
+		resolution, err = a.parseResolutionFromSize(requestedResolution)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	videoRequest := &VideoRequest{
@@ -163,23 +174,52 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	if err := req.UnmarshalMetadata(&videoRequest); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata to video request failed")
 	}
+	videoRequest.Model = info.UpstreamModelName
+	videoRequest.Resolution = strings.ToUpper(strings.TrimSpace(videoRequest.Resolution))
+	if !contains(modelConfig.SupportedResolutions, videoRequest.Resolution) {
+		return nil, fmt.Errorf("resolution %q is not supported by Hailuo model %s", videoRequest.Resolution, info.UpstreamModelName)
+	}
+	if videoRequest.Duration == nil || *videoRequest.Duration < 1 || *videoRequest.Duration > relaycommon.MaxTaskDurationSeconds || !containsInt(modelConfig.SupportedDurations, *videoRequest.Duration) {
+		return nil, fmt.Errorf("duration is not supported by Hailuo model %s", info.UpstreamModelName)
+	}
 
 	return videoRequest, nil
 }
 
-func (a *TaskAdaptor) parseResolutionFromSize(size string, modelConfig ModelConfig) string {
-	switch {
-	case strings.Contains(size, "1080"):
-		return Resolution1080P
-	case strings.Contains(size, "768"):
-		return Resolution768P
-	case strings.Contains(size, "720"):
-		return Resolution720P
-	case strings.Contains(size, "512"):
-		return Resolution512P
+func (a *TaskAdaptor) parseResolutionFromSize(size string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	normalized = strings.ReplaceAll(normalized, "*", "x")
+	switch normalized {
+	case "1080p", "1920x1080", "1080x1920":
+		return Resolution1080P, nil
+	case "768p", "1366x768", "768x1366":
+		return Resolution768P, nil
+	case "720p", "1280x720", "720x1280":
+		return Resolution720P, nil
+	case "512p":
+		return Resolution512P, nil
 	default:
-		return modelConfig.DefaultResolution
+		return "", fmt.Errorf("unsupported Hailuo resolution %q", size)
 	}
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err == nil {
+		body, resolveErr := a.convertToRequestPayload(&req, info)
+		if resolveErr == nil {
+			return relaycommon.VideoBillingSelection{
+				EffectiveResolution:      strings.ToLower(body.Resolution),
+				EffectiveDurationSeconds: *body.Duration,
+			}, nil
+		}
+		err = resolveErr
+	}
+	return relaycommon.VideoBillingSelection{}, service.TaskErrorWrapperLocal(
+		err,
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {

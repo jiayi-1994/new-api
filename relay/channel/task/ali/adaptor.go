@@ -56,6 +56,7 @@ type AliVideoInput struct {
 type AliVideoParameters struct {
 	Resolution   string `json:"resolution,omitempty"`    // 分辨率: 480P/720P/1080P（图生视频、首尾帧生视频）
 	Size         string `json:"size,omitempty"`          // 尺寸: 如 "832*480"（文生视频）
+	Ratio        string `json:"ratio,omitempty"`         // 宽高比（Wan2.7 文生视频）
 	Duration     int    `json:"duration,omitempty"`      // 时长: 3-10秒
 	PromptExtend bool   `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
 	Watermark    bool   `json:"watermark,omitempty"`     // 是否添加水印
@@ -124,6 +125,13 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+const aliResolvedVideoRequestKey = "ali_resolved_video_request"
+
+type aliResolvedVideoRequest struct {
+	Request   *AliVideoRequest
+	Selection relaycommon.VideoBillingSelection
+}
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
@@ -153,9 +161,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "get_task_request_failed")
 	}
 
-	aliReq, err := a.convertToAliRequest(info, taskReq)
-	if err != nil {
-		return nil, errors.Wrap(err, "convert_to_ali_request_failed")
+	var aliReq *AliVideoRequest
+	if cached, ok := c.Get(aliResolvedVideoRequestKey); ok {
+		if resolved, valid := cached.(aliResolvedVideoRequest); valid {
+			aliReq = resolved.Request
+		}
+	}
+	if aliReq == nil {
+		aliReq, err = a.convertToAliRequest(info, taskReq)
+		if err != nil {
+			return nil, errors.Wrap(err, "convert_to_ali_request_failed")
+		}
 	}
 	logger.LogJson(c, "ali video request body", aliReq)
 
@@ -349,8 +365,12 @@ func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitR
 }
 
 func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) (*AliVideoRequest, error) {
+	return a.convertToAliRequestMode(info, req, false)
+}
+
+func (a *TaskAdaptor) convertToAliRequestMode(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq, resolutionPricing bool) (*AliVideoRequest, error) {
 	upstreamModel := req.Model
-	if info.IsModelMapped {
+	if strings.TrimSpace(info.UpstreamModelName) != "" {
 		upstreamModel = info.UpstreamModelName
 	}
 	aliReq := &AliVideoRequest{
@@ -368,7 +388,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	// 处理分辨率映射
 	if req.Size != "" {
 		// text to video size must be contained *
-		if strings.Contains(req.Model, "t2v") && !strings.Contains(req.Size, "*") {
+		if !resolutionPricing && strings.Contains(upstreamModel, "t2v") && !strings.Contains(req.Size, "*") {
 			return nil, fmt.Errorf("invalid size: %s, example: %s", req.Size, "1920*1080")
 		}
 		if strings.Contains(req.Size, "*") {
@@ -383,22 +403,22 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		}
 	} else {
 		// 根据模型设置默认分辨率
-		if strings.Contains(req.Model, "t2v") { // image to video
-			if strings.HasPrefix(req.Model, "wan2.5") {
+		if strings.Contains(upstreamModel, "t2v") { // text to video
+			if strings.HasPrefix(upstreamModel, "wan2.5") {
 				aliReq.Parameters.Size = "1920*1080"
-			} else if strings.HasPrefix(req.Model, "wan2.2") {
+			} else if strings.HasPrefix(upstreamModel, "wan2.2") {
 				aliReq.Parameters.Size = "1920*1080"
 			} else {
 				aliReq.Parameters.Size = "1280*720"
 			}
 		} else {
-			if strings.HasPrefix(req.Model, "wan2.6") {
+			if strings.HasPrefix(upstreamModel, "wan2.6") {
 				aliReq.Parameters.Resolution = "1080P"
-			} else if strings.HasPrefix(req.Model, "wan2.5") {
+			} else if strings.HasPrefix(upstreamModel, "wan2.5") {
 				aliReq.Parameters.Resolution = "1080P"
-			} else if strings.HasPrefix(req.Model, "wan2.2-i2v-flash") {
+			} else if strings.HasPrefix(upstreamModel, "wan2.2-i2v-flash") {
 				aliReq.Parameters.Resolution = "720P"
-			} else if strings.HasPrefix(req.Model, "wan2.2-i2v-plus") {
+			} else if strings.HasPrefix(upstreamModel, "wan2.2-i2v-plus") {
 				aliReq.Parameters.Resolution = "1080P"
 			} else {
 				aliReq.Parameters.Resolution = "720P"
@@ -442,6 +462,180 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	}
 
 	return aliReq, nil
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
+	taskReq, err := relaycommon.GetTaskRequest(c)
+	if err == nil {
+		aliReq, convertErr := a.convertToAliRequestMode(info, taskReq, true)
+		if convertErr == nil {
+			selection, normalizeErr := normalizeAliVideoBillingRequest(aliReq, taskReq)
+			if normalizeErr == nil {
+				c.Set(aliResolvedVideoRequestKey, aliResolvedVideoRequest{Request: aliReq, Selection: selection})
+				return selection, nil
+			}
+			err = normalizeErr
+		} else {
+			err = convertErr
+		}
+	}
+	return relaycommon.VideoBillingSelection{}, service.TaskErrorWrapperLocal(
+		err,
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
+}
+
+func normalizeAliVideoBillingRequest(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) (relaycommon.VideoBillingSelection, error) {
+	if aliReq == nil || aliReq.Parameters == nil {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Ali video parameters are required")
+	}
+
+	metadataSize := ""
+	metadataResolution := ""
+	if parameters, ok := req.Metadata["parameters"].(map[string]any); ok {
+		if value, ok := parameters["size"].(string); ok {
+			metadataSize = strings.TrimSpace(value)
+		}
+		if value, ok := parameters["resolution"].(string); ok {
+			metadataResolution = strings.TrimSpace(value)
+		}
+	}
+
+	selectors := make([]string, 0, 4)
+	if strings.TrimSpace(req.Size) != "" {
+		selectors = append(selectors, req.Size)
+	}
+	if strings.TrimSpace(req.Resolution) != "" {
+		selectors = append(selectors, req.Resolution)
+	}
+	if metadataSize != "" {
+		selectors = append(selectors, metadataSize)
+	}
+	if metadataResolution != "" {
+		selectors = append(selectors, metadataResolution)
+	}
+
+	resolution := ""
+	for _, selector := range selectors {
+		canonical, err := canonicalAliResolution(selector)
+		if err != nil {
+			return relaycommon.VideoBillingSelection{}, err
+		}
+		if resolution != "" && canonical != resolution {
+			return relaycommon.VideoBillingSelection{}, fmt.Errorf("conflicting Ali video size and resolution")
+		}
+		resolution = canonical
+	}
+	if resolution == "" {
+		if !strings.HasPrefix(aliReq.Model, "wan2.7-t2v") {
+			return relaycommon.VideoBillingSelection{}, fmt.Errorf("unknown Ali video resolution for model %s", aliReq.Model)
+		}
+		resolution = "1080p"
+	}
+	if strings.HasPrefix(aliReq.Model, "wan2.7-") && resolution == "480p" {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Ali video resolution %q", resolution)
+	}
+
+	if aliReq.Parameters.Duration < 1 || aliReq.Parameters.Duration > relaycommon.MaxTaskDurationSeconds {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("Ali video duration must be between 1 and %d", relaycommon.MaxTaskDurationSeconds)
+	}
+	if strings.HasPrefix(aliReq.Model, "wan2.7-") && (aliReq.Parameters.Duration < 2 || aliReq.Parameters.Duration > 15) {
+		return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Wan2.7 duration %d", aliReq.Parameters.Duration)
+	}
+
+	shapeSelector := strings.TrimSpace(req.Size)
+	if shapeSelector == "" {
+		shapeSelector = strings.TrimSpace(req.Resolution)
+	}
+	if metadataResolution != "" && shapeSelector == "" {
+		shapeSelector = metadataResolution
+	}
+	if metadataSize != "" {
+		shapeSelector = metadataSize
+	}
+
+	if strings.HasPrefix(aliReq.Model, "wan2.7-t2v") {
+		if aliReq.Parameters.Ratio != "" {
+			switch aliReq.Parameters.Ratio {
+			case "16:9", "9:16", "1:1", "4:3", "3:4":
+			default:
+				return relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Wan2.7 ratio %q", aliReq.Parameters.Ratio)
+			}
+		}
+		if aliReq.Parameters.Ratio == "" {
+			if ratio, ok := aliRatioForSize(shapeSelector); ok {
+				aliReq.Parameters.Ratio = ratio
+			}
+		}
+		aliReq.Parameters.Size = ""
+		aliReq.Parameters.Resolution = strings.ToUpper(resolution)
+	} else if strings.Contains(aliReq.Model, "t2v") {
+		if _, ok := aliRatioForSize(shapeSelector); ok {
+			aliReq.Parameters.Size = strings.ReplaceAll(strings.ToLower(shapeSelector), "x", "*")
+		} else {
+			aliReq.Parameters.Size = aliSizeForResolution(resolution)
+		}
+		aliReq.Parameters.Resolution = ""
+	} else {
+		aliReq.Parameters.Size = ""
+		aliReq.Parameters.Resolution = strings.ToUpper(resolution)
+	}
+	return relaycommon.VideoBillingSelection{
+		EffectiveResolution:      resolution,
+		EffectiveDurationSeconds: aliReq.Parameters.Duration,
+	}, nil
+}
+
+func aliRatioForSize(size string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	normalized = strings.ReplaceAll(normalized, "x", "*")
+	switch normalized {
+	case "832*480", "1280*720", "1920*1080":
+		return "16:9", true
+	case "480*832", "720*1280", "1080*1920":
+		return "9:16", true
+	case "624*624", "960*960", "1440*1440":
+		return "1:1", true
+	case "1088*832", "1632*1248":
+		return "4:3", true
+	case "832*1088", "1248*1632":
+		return "3:4", true
+	default:
+		return "", false
+	}
+}
+
+func canonicalAliResolution(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "x", "*")
+	if strings.Contains(normalized, "*") {
+		resolution, err := sizeToResolution(normalized)
+		if err != nil {
+			return "", err
+		}
+		return strings.ToLower(resolution), nil
+	}
+	if !strings.HasSuffix(normalized, "p") {
+		normalized += "p"
+	}
+	switch normalized {
+	case "480p", "720p", "1080p":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported Ali video resolution %q", value)
+	}
+}
+
+func aliSizeForResolution(resolution string) string {
+	switch resolution {
+	case "480p":
+		return "832*480"
+	case "720p":
+		return "1280*720"
+	default:
+		return "1920*1080"
+	}
 }
 
 // EstimateBilling 根据用户请求参数计算 OtherRatios（时长、分辨率等）。
@@ -561,6 +755,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 	taskResult := relaycommon.TaskInfo{
 		Code: 0,
+	}
+	if aliResp.Usage != nil {
+		duration := int(aliResp.Usage.Duration)
+		if duration > 0 && duration <= relaycommon.MaxTaskDurationSeconds {
+			taskResult.EffectiveDurationSeconds = duration
+		}
 	}
 
 	// 状态映射

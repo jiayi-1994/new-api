@@ -1,11 +1,110 @@
 package gemini
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
+	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
+
+var veoResolutionCapabilities = map[string]map[string]bool{
+	"veo-3.0-generate-001":          {"720p": true, "1080p": true},
+	"veo-3.0-fast-generate-001":     {"720p": true, "1080p": true},
+	"veo-3.1-generate-preview":      {"720p": true, "1080p": true, "4k": true},
+	"veo-3.1-fast-generate-preview": {"720p": true, "1080p": true, "4k": true},
+}
+
+// ResolveVeoVideoRequest applies the same provider defaults and capability
+// checks used by Gemini and Vertex payload builders.
+func ResolveVeoVideoRequest(req relaycommon.TaskSubmitReq, upstreamModel string) (*VeoParameters, relaycommon.VideoBillingSelection, error) {
+	capabilities, ok := veoResolutionCapabilities[upstreamModel]
+	if !ok {
+		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Veo model %q", upstreamModel)
+	}
+
+	params := &VeoParameters{}
+	if err := taskcommon.UnmarshalMetadata(req.Metadata, params); err != nil {
+		return nil, relaycommon.VideoBillingSelection{}, err
+	}
+
+	resolution := strings.ToLower(strings.TrimSpace(params.Resolution))
+	if resolution == "" && strings.TrimSpace(req.Resolution) != "" {
+		resolution = strings.ToLower(strings.TrimSpace(req.Resolution))
+	}
+	if resolution == "" && strings.TrimSpace(req.Size) != "" {
+		var mapped bool
+		resolution, _, mapped = mapVeoSize(req.Size)
+		if !mapped {
+			return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Veo size %q", req.Size)
+		}
+	}
+	if resolution == "" {
+		resolution = "720p"
+	}
+	if !capabilities[resolution] {
+		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Veo resolution %q", resolution)
+	}
+
+	duration := params.DurationSeconds
+	if duration == 0 {
+		duration = req.Duration
+	}
+	if duration == 0 && strings.TrimSpace(req.Seconds) != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(req.Seconds))
+		if err != nil {
+			return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("invalid Veo duration %q", req.Seconds)
+		}
+		duration = parsed
+	}
+	if duration == 0 {
+		duration = 8
+	}
+	if duration != 4 && duration != 6 && duration != 8 {
+		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Veo duration %d", duration)
+	}
+	if resolution != "720p" && duration != 8 {
+		return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("Veo resolution %q requires an 8-second duration", resolution)
+	}
+
+	if params.AspectRatio == "" && strings.TrimSpace(req.Size) != "" {
+		_, aspectRatio, mapped := mapVeoSize(req.Size)
+		if !mapped {
+			return nil, relaycommon.VideoBillingSelection{}, fmt.Errorf("unsupported Veo size %q", req.Size)
+		}
+		params.AspectRatio = aspectRatio
+	}
+	params.Resolution = resolution
+	params.DurationSeconds = duration
+	params.SampleCount = 1
+
+	return params, relaycommon.VideoBillingSelection{
+		EffectiveResolution:      resolution,
+		EffectiveDurationSeconds: duration,
+	}, nil
+}
+
+func mapVeoSize(size string) (resolution, aspectRatio string, ok bool) {
+	normalized := strings.ToLower(strings.TrimSpace(size))
+	normalized = strings.ReplaceAll(normalized, "*", "x")
+	switch normalized {
+	case "720p", "1280x720":
+		return "720p", "16:9", true
+	case "720x1280":
+		return "720p", "9:16", true
+	case "1080p", "1920x1080":
+		return "1080p", "16:9", true
+	case "1080x1920":
+		return "1080p", "9:16", true
+	case "4k", "3840x2160":
+		return "4k", "16:9", true
+	case "2160x3840":
+		return "4k", "9:16", true
+	default:
+		return "", "", false
+	}
+}
 
 // ParseVeoDurationSeconds extracts durationSeconds from metadata.
 // Returns 8 (Veo default) when not specified or invalid.

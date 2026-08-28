@@ -4,6 +4,7 @@ import "strings"
 
 var ModelList = []string{
 	"doubao-seedance-1-0-pro-250528",
+	"doubao-seedance-1-0-pro-fast-250528",
 	"doubao-seedance-1-0-lite-t2v",
 	"doubao-seedance-1-0-lite-i2v",
 	"doubao-seedance-1-5-pro-251215",
@@ -53,4 +54,28 @@ func GetVideoInputRatio(modelName, resolution string, hasVideo bool) (float64, b
 		return 1.0, true
 	}
 	return price / base, true
+}
+
+// GetVideoInputIndependentRatio isolates only the video-input price effect
+// within the already selected output-resolution tier.
+func GetVideoInputIndependentRatio(modelName, resolution string, hasVideo bool) (float64, bool) {
+	prices, ok := videoPriceTable[modelName]
+	if !ok {
+		return 0, false
+	}
+	res := strings.ToLower(strings.TrimSpace(resolution))
+	tier := videoPriceKey{is1080p: res == "1080p", is4k: res == "4k"}
+	withoutVideo, ok := prices[tier]
+	if !ok || withoutVideo <= 0 {
+		return 0, false
+	}
+	if !hasVideo {
+		return 1, true
+	}
+	tier.hasVideo = true
+	withVideo, ok := prices[tier]
+	if !ok || withVideo <= 0 {
+		return 0, false
+	}
+	return withVideo / withoutVideo, true
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -67,6 +68,9 @@ type creation struct {
 	ID       string `json:"id"`
 	URL      string `json:"url"`
 	CoverURL string `json:"cover_url"`
+	Video    struct {
+		Duration float64 `json:"duration"`
+	} `json:"video"`
 }
 
 // ============================
@@ -120,13 +124,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	body, err := a.convertToRequestPayload(&req, info)
 	if err != nil {
 		return nil, err
-	}
-
-	if info.Action == constant.TaskActionReferenceGenerate {
-		if strings.Contains(body.Model, "viduq2") {
-			// 参考图生视频只能用 viduq2 模型, 不能带有pro或turbo后缀 https://platform.vidu.cn/docs/reference-to-video
-			body.Model = "viduq2"
-		}
 	}
 
 	data, err := common.Marshal(body)
@@ -226,19 +223,105 @@ func (a *TaskAdaptor) GetChannelName() string {
 // ============================
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
+	model := taskcommon.DefaultString(info.UpstreamModelName, "viduq1")
+	if info.Action == constant.TaskActionReferenceGenerate && strings.Contains(model, "viduq2") {
+		// 参考图生视频只能用 viduq2 模型, 不能带有pro或turbo后缀 https://platform.vidu.cn/docs/reference-to-video
+		model = "viduq2"
+	}
+	defaultResolution, defaultDuration, err := viduVideoDefaults(model)
+	if err != nil {
+		return nil, err
+	}
+	requestedResolution := req.Size
+	if strings.TrimSpace(req.Resolution) != "" {
+		requestedResolution = req.Resolution
+	}
 	r := requestPayload{
-		Model:             taskcommon.DefaultString(info.UpstreamModelName, "viduq1"),
+		Model:             model,
 		Images:            req.Images,
 		Prompt:            req.Prompt,
-		Duration:          taskcommon.DefaultInt(req.Duration, 5),
-		Resolution:        taskcommon.DefaultString(req.Size, "1080p"),
+		Duration:          taskcommon.DefaultInt(req.Duration, defaultDuration),
+		Resolution:        taskcommon.DefaultString(requestedResolution, defaultResolution),
 		MovementAmplitude: "auto",
 		Bgm:               false,
 	}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
+	r.Model = model
+	r.Resolution = strings.ToLower(strings.TrimSpace(r.Resolution))
+	_, metadataResolution := req.Metadata["resolution"]
+	if model == "vidu2.0" && r.Duration == 8 && strings.TrimSpace(requestedResolution) == "" && !metadataResolution {
+		r.Resolution = "720p"
+	}
+	if err := validateViduVideoPayload(&r); err != nil {
+		return nil, err
+	}
 	return &r, nil
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *taskdto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err == nil {
+		body, resolveErr := a.convertToRequestPayload(&req, info)
+		if resolveErr == nil {
+			return relaycommon.VideoBillingSelection{
+				EffectiveResolution:      body.Resolution,
+				EffectiveDurationSeconds: body.Duration,
+			}, nil
+		}
+		err = resolveErr
+	}
+	return relaycommon.VideoBillingSelection{}, service.TaskErrorWrapperLocal(
+		err,
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
+}
+
+func viduVideoDefaults(model string) (string, int, error) {
+	switch {
+	case strings.HasPrefix(model, "viduq1"):
+		return "1080p", 5, nil
+	case strings.HasPrefix(model, "viduq2"):
+		return "720p", 5, nil
+	case model == "vidu2.0":
+		return "360p", 4, nil
+	default:
+		return "", 0, fmt.Errorf("unknown Vidu defaults for model %s", model)
+	}
+}
+
+func validateViduVideoPayload(body *requestPayload) error {
+	if body.Duration < 1 || body.Duration > relaycommon.MaxTaskDurationSeconds {
+		return fmt.Errorf("Vidu duration must be between 1 and %d", relaycommon.MaxTaskDurationSeconds)
+	}
+	switch {
+	case strings.HasPrefix(body.Model, "viduq1"):
+		if body.Resolution != "1080p" || body.Duration != 5 {
+			return fmt.Errorf("unsupported viduq1 resolution or duration")
+		}
+	case strings.HasPrefix(body.Model, "viduq2"):
+		if body.Resolution != "540p" && body.Resolution != "720p" && body.Resolution != "1080p" {
+			return fmt.Errorf("unsupported viduq2 resolution %q", body.Resolution)
+		}
+		if body.Duration > 10 {
+			return fmt.Errorf("unsupported viduq2 duration %d", body.Duration)
+		}
+	case body.Model == "vidu2.0":
+		if body.Resolution != "360p" && body.Resolution != "720p" && body.Resolution != "1080p" {
+			return fmt.Errorf("unsupported vidu2.0 resolution %q", body.Resolution)
+		}
+		if body.Duration != 4 && body.Duration != 8 {
+			return fmt.Errorf("unsupported vidu2.0 duration %d", body.Duration)
+		}
+		if body.Duration == 8 && body.Resolution != "720p" {
+			return fmt.Errorf("vidu2.0 only supports 720p at eight seconds")
+		}
+	default:
+		return fmt.Errorf("unsupported Vidu model %s", body.Model)
+	}
+	return nil
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
@@ -260,6 +343,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskInfo.Status = model.TaskStatusSuccess
 		if len(taskResp.Creations) > 0 {
 			taskInfo.Url = taskResp.Creations[0].URL
+			duration := taskResp.Creations[0].Video.Duration
+			if duration > 0 && duration <= relaycommon.MaxTaskDurationSeconds && math.Trunc(duration) == duration {
+				taskInfo.EffectiveDurationSeconds = int(duration)
+			}
 		}
 	case "failed":
 		taskInfo.Status = model.TaskStatusFailure
