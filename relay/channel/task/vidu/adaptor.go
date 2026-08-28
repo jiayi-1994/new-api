@@ -230,13 +230,19 @@ func (a *TaskAdaptor) GetChannelName() string {
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
 	model := taskcommon.DefaultString(info.UpstreamModelName, "viduq1")
-	if info.Action == constant.TaskActionReferenceGenerate && model == "viduq2" {
+	action := info.Action
+	_, explicitAction := req.Metadata["action"]
+	if model == "viduq2" && !explicitAction && len(req.Images) > 0 {
+		action = constant.TaskActionReferenceGenerate
+		info.Action = action
+	}
+	if action == constant.TaskActionReferenceGenerate && model == "viduq2" {
 		// 参考图生视频只能用 viduq2 模型, 不能带有pro或turbo后缀 https://platform.vidu.cn/docs/reference-to-video
 		model = "viduq2"
 	}
-	capability, ok := viduVideoCapabilities[viduVideoCapabilityKey{action: info.Action, model: model}]
+	capability, ok := viduVideoCapabilities[viduVideoCapabilityKey{action: action, model: model}]
 	if !ok {
-		return nil, fmt.Errorf("unsupported Vidu action %q for model %s", info.Action, model)
+		return nil, fmt.Errorf("unsupported Vidu action %q for model %s", action, model)
 	}
 	requestedResolution := req.Size
 	if strings.TrimSpace(req.Resolution) != "" {
@@ -267,13 +273,22 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 			r.Resolution = resolution
 		}
 	}
-	if info.Action == constant.TaskActionReferenceGenerate {
-		if len(r.Subjects) == 0 && len(r.Images) > 0 {
-			r.Subjects = []subject{{Name: "subject1", Images: append([]string(nil), r.Images...)}}
+	if action == constant.TaskActionReferenceGenerate {
+		if len(r.Subjects) > 0 && len(r.Images) > 0 {
+			return nil, fmt.Errorf("Vidu reference-to-video accepts subjects or flat images, not both")
+		}
+		if len(r.Subjects) == 0 {
+			for start := 0; start < len(r.Images); start += 3 {
+				end := min(start+3, len(r.Images))
+				r.Subjects = append(r.Subjects, subject{
+					Name:   fmt.Sprintf("subject%d", len(r.Subjects)+1),
+					Images: append([]string(nil), r.Images[start:end]...),
+				})
+			}
 		}
 		r.Images = nil
 	}
-	if err := validateViduVideoInputs(&r, info.Action); err != nil {
+	if err := validateViduVideoInputs(&r, action); err != nil {
 		return nil, err
 	}
 	if err := validateViduVideoPayload(&r, capability); err != nil {
@@ -302,7 +317,7 @@ func validateViduVideoInputs(body *requestPayload, action string) error {
 		}
 		totalImages := 0
 		for _, subject := range body.Subjects {
-			if strings.TrimSpace(subject.Name) == "" || len(subject.Images) == 0 {
+			if strings.TrimSpace(subject.Name) == "" || len(subject.Images) < 1 || len(subject.Images) > 3 {
 				return fmt.Errorf("Vidu reference-to-video subjects require a name and images")
 			}
 			for _, image := range subject.Images {

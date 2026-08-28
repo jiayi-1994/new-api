@@ -410,10 +410,20 @@ func TestVeoProviderCapabilitiesApplyBeforePreConsumeAndMatchBuiltPayload(t *tes
 			requestBody:   `{"model":"client-model","prompt":"animate","size":"1080x1920","duration":8}`,
 		},
 		{
-			name: "gemini accepts its eight second tuple", channelType: constant.ChannelTypeGemini,
+			name: "gemini rejects retired standard model", channelType: constant.ChannelTypeGemini,
 			upstreamModel: "veo-3.0-generate-001",
 			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
-			wantAccepted:  true, wantResolution: "720p", wantDuration: 8,
+		},
+		{
+			name: "gemini rejects retired fast model", channelType: constant.ChannelTypeGemini,
+			upstreamModel: "veo-3.0-fast-generate-001",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":8}`,
+		},
+		{
+			name: "gemini accepts advertised preview model", channelType: constant.ChannelTypeGemini,
+			upstreamModel: "veo-3.1-generate-preview",
+			requestBody:   `{"model":"client-model","prompt":"animate","size":"1280x720","duration":4}`,
+			wantAccepted:  true, wantResolution: "720p", wantDuration: 4,
 		},
 		{
 			name: "vertex accepts four second portrait tuple", channelType: constant.ChannelTypeVertexAi,
@@ -491,4 +501,82 @@ func TestViduReferenceImageLimitAppliesBeforePreConsume(t *testing.T) {
 	assert.Zero(t, state.preConsumeCalls)
 	assert.Zero(t, spy.buildCalls)
 	assert.Zero(t, spy.requestCalls)
+}
+
+func TestViduReferenceSubjectLimitAppliesBeforePreConsume(t *testing.T) {
+	actual := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeVidu)))
+	require.NotNil(t, actual)
+	spy := &unsupportedVideoAdaptorSpy{TaskAdaptor: actual}
+	c, info, deps, state := taskSubmitVideoTestContext(t, spy)
+	c.Set("platform", strconv.Itoa(constant.ChannelTypeVidu))
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeVidu)
+	c.Set("model_mapping", `{"client-model":"viduq2"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewBufferString(
+		`{"model":"client-model","prompt":"animate","duration":5,"resolution":"720p","metadata":{"action":"referenceGenerate","subjects":[{"name":"subject1","images":["1","2","3","4"]}]}}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Zero(t, state.preConsumeCalls)
+	assert.Zero(t, spy.buildCalls)
+	assert.Zero(t, spy.requestCalls)
+}
+
+func TestViduQ2FlatImagesBuildReferencePayloadBeforeUpstream(t *testing.T) {
+	for _, imageCount := range []int{1, 2, 3, 4, 7} {
+		t.Run(strconv.Itoa(imageCount), func(t *testing.T) {
+			images := make([]string, imageCount)
+			for index := range images {
+				images[index] = strconv.Itoa(index + 1)
+			}
+			body, err := common.Marshal(relaycommon.TaskSubmitReq{
+				Model: "client-model", Prompt: "animate", Duration: 5, Resolution: "720p", Images: images,
+			})
+			require.NoError(t, err)
+			actual := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeVidu)))
+			require.NotNil(t, actual)
+			spy := &unsupportedVideoAdaptorSpy{
+				TaskAdaptor:  actual,
+				responseBody: `{"task_id":"upstream-task","state":"created"}`,
+			}
+			c, info, deps, state := taskSubmitVideoTestContext(t, spy)
+			c.Set("platform", strconv.Itoa(constant.ChannelTypeVidu))
+			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeVidu)
+			c.Set("model_mapping", `{"client-model":"viduq2"}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+			result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+			require.Nil(t, taskErr)
+			require.NotNil(t, result)
+			assert.Equal(t, constant.TaskActionReferenceGenerate, info.Action)
+			assert.Equal(t, 1, state.preConsumeCalls)
+			assert.Equal(t, 1, spy.buildCalls)
+			assert.Equal(t, 1, spy.requestCalls)
+			var payload struct {
+				Images   []string `json:"images"`
+				Subjects []struct {
+					Name   string   `json:"name"`
+					Images []string `json:"images"`
+				} `json:"subjects"`
+			}
+			require.NoError(t, common.Unmarshal(spy.builtBody, &payload))
+			assert.Empty(t, payload.Images)
+			flattened := make([]string, 0, imageCount)
+			for index, subject := range payload.Subjects {
+				assert.Equal(t, "subject"+strconv.Itoa(index+1), subject.Name)
+				assert.NotEmpty(t, subject.Images)
+				assert.LessOrEqual(t, len(subject.Images), 3)
+				flattened = append(flattened, subject.Images...)
+			}
+			assert.Equal(t, images, flattened)
+		})
+	}
 }

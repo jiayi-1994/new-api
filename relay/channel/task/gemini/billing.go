@@ -25,16 +25,6 @@ type veoVideoCapability struct {
 
 var veoVideoCapabilities = map[VeoProvider]map[string]veoVideoCapability{
 	VeoProviderGemini: {
-		"veo-3.0-generate-001": {
-			resolutions:                   map[string]bool{"720p": true, "1080p": true},
-			durations:                     map[int]bool{8: true},
-			portraitUnsupportedResolution: map[string]bool{"1080p": true},
-		},
-		"veo-3.0-fast-generate-001": {
-			resolutions:                   map[string]bool{"720p": true, "1080p": true},
-			durations:                     map[int]bool{8: true},
-			portraitUnsupportedResolution: map[string]bool{"1080p": true},
-		},
 		"veo-3.1-generate-preview": {
 			resolutions: map[string]bool{"720p": true, "1080p": true, "4k": true},
 			durations:   map[int]bool{4: true, 6: true, 8: true}, highResEight: true,

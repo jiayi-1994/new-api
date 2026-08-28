@@ -152,8 +152,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 func (a *TaskAdaptor) GetModelList() []string {
 	return []string{
-		"veo-3.0-generate-001",
-		"veo-3.0-fast-generate-001",
 		"veo-3.1-generate-preview",
 		"veo-3.1-fast-generate-preview",
 	}

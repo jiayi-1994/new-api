@@ -49,7 +49,7 @@ func TestVeoVideoBillingMatchesPayload(t *testing.T) {
 		Prompt:   "animate",
 		Size:     "1920x1080",
 		Duration: 8,
-	}, "veo-3.0-generate-001")
+	}, "veo-3.1-generate-preview")
 	adaptor := &TaskAdaptor{}
 
 	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
@@ -62,28 +62,34 @@ func TestVeoVideoBillingMatchesPayload(t *testing.T) {
 	assert.Empty(t, selection.IndependentRatios)
 }
 
-func TestVeo30VideoBillingAllows720pAnd1080pButRejects4k(t *testing.T) {
-	for _, resolution := range []string{"720p", "1080p"} {
-		t.Run(resolution, func(t *testing.T) {
+func TestGeminiAdvertisedModelsExcludeRetiredVeo30AndAllResolve(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	models := adaptor.GetModelList()
+	assert.NotContains(t, models, "veo-3.0-generate-001")
+	assert.NotContains(t, models, "veo-3.0-fast-generate-001")
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
 			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-				Model: "client-model", Prompt: "animate", Duration: 8,
-				Metadata: map[string]any{"resolution": resolution},
-			}, "veo-3.0-fast-generate-001")
-			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+				Model: "alias", Prompt: "animate", Size: "1280x720", Duration: 8,
+			}, model)
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
 			require.Nil(t, taskErr)
-			assert.Equal(t, resolution, selection.EffectiveResolution)
+			assert.Equal(t, "720p", selection.EffectiveResolution)
 		})
 	}
-
-	c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-		Model: "client-model", Prompt: "animate", Duration: 4,
-		Metadata: map[string]any{"resolution": "4k"},
-	}, "veo-3.0-generate-001")
-	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
-	assert.Zero(t, selection)
-	require.NotNil(t, taskErr)
-	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
-	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	for _, model := range []string{"veo-3.0-generate-001", "veo-3.0-fast-generate-001"} {
+		t.Run("retired-"+model, func(t *testing.T) {
+			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
+				Model: "alias", Prompt: "animate", Size: "1280x720", Duration: 8,
+			}, model)
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			assert.Zero(t, selection)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+			_, err := adaptor.BuildRequestBody(c, info)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestVeo31PreviewVideoBillingAllows4k(t *testing.T) {
@@ -119,14 +125,14 @@ func TestProviderVideoBillingMetadataOverrideMatchesPayload(t *testing.T) {
 	c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "client-price-key", Prompt: "animate", Size: "1280x720", Duration: 4,
 		Metadata: map[string]any{"resolution": "1080P", "durationSeconds": 8},
-	}, "veo-3.0-generate-001")
+	}, "veo-3.1-generate-preview")
 	adaptor := &TaskAdaptor{}
 
 	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
 	require.Nil(t, taskErr)
 	payload := decodeVeoPayload(t, adaptor, c, info)
 	assert.Equal(t, "client-price-key", info.OriginModelName)
-	assert.Equal(t, "veo-3.0-generate-001", info.UpstreamModelName)
+	assert.Equal(t, "veo-3.1-generate-preview", info.UpstreamModelName)
 	assert.Equal(t, "1080p", selection.EffectiveResolution)
 	assert.Equal(t, 8, selection.EffectiveDurationSeconds)
 	assert.Equal(t, selection.EffectiveResolution, payload.Parameters.Resolution)
@@ -137,7 +143,7 @@ func TestVeoVideoBillingRejectsUnboundedMetadataDuration(t *testing.T) {
 	c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
 		Model: "client-model", Prompt: "animate",
 		Metadata: map[string]any{"durationSeconds": relaycommon.MaxTaskDurationSeconds + 1},
-	}, "veo-3.0-generate-001")
+	}, "veo-3.1-generate-preview")
 
 	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
 	assert.Zero(t, selection)
@@ -167,44 +173,6 @@ func TestVeoVideoBillingAcceptsOnlyProviderDurations(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 		})
 	}
-}
-
-func TestGeminiVeo30VideoBillingUsesEightSecondLandscapeMatrix(t *testing.T) {
-	for _, duration := range []int{4, 6} {
-		t.Run("reject-720p-"+strconv.Itoa(duration), func(t *testing.T) {
-			c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-				Model: "alias", Prompt: "animate", Size: "1280x720", Duration: duration,
-			}, "veo-3.0-generate-001")
-			selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
-			assert.Zero(t, selection)
-			require.NotNil(t, taskErr)
-			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
-		})
-	}
-
-	t.Run("accept-720p-8-and-match-payload", func(t *testing.T) {
-		c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-			Model: "alias", Prompt: "animate", Size: "1280x720", Duration: 8,
-		}, "veo-3.0-generate-001")
-		adaptor := &TaskAdaptor{}
-		selection, taskErr := adaptor.ResolveVideoBilling(c, info)
-		require.Nil(t, taskErr)
-		payload := decodeVeoPayload(t, adaptor, c, info)
-		assert.Equal(t, "720p", selection.EffectiveResolution)
-		assert.Equal(t, 8, selection.EffectiveDurationSeconds)
-		assert.Equal(t, selection.EffectiveResolution, payload.Parameters.Resolution)
-		assert.Equal(t, selection.EffectiveDurationSeconds, payload.Parameters.DurationSeconds)
-	})
-
-	t.Run("reject-1080p-portrait", func(t *testing.T) {
-		c, info := veoBillingContext(t, relaycommon.TaskSubmitReq{
-			Model: "alias", Prompt: "animate", Size: "1080x1920", Duration: 8,
-		}, "veo-3.0-generate-001")
-		selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
-		assert.Zero(t, selection)
-		require.NotNil(t, taskErr)
-		assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
-	})
 }
 
 func TestVeoVideoBillingRequiresEightSecondsForHighResolution(t *testing.T) {

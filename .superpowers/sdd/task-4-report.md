@@ -71,4 +71,31 @@ Fix commit: `c0d9f811` (`fix(video): enforce provider capability contracts`).
 
 ### Lifecycle Concern
 
-- Official lifecycle pages mark the tested Gemini/Vertex Veo 3.0 IDs and Vertex 3.1 preview IDs as retired by the current date. Current Vertex 3.1 GA IDs were added and only those live IDs are advertised by Vertex. Historical Vertex entries remain resolver-compatible for the task's explicit tuple regression tests but are not advertised. Gemini 3.0 compatibility entries remain because the reviewed task explicitly requires their 8-second/portrait validation contract; deployments should map clients to a live upstream model.
+- Official lifecycle pages mark Gemini/Vertex Veo 3.0 IDs and Vertex 3.1 preview IDs as retired by the current date. Current Vertex 3.1 GA IDs were added and only those live IDs are advertised by Vertex. Historical Vertex entries remain resolver-compatible for explicit tuple regression tests but are not advertised. The second review correction below makes Gemini stricter by removing its retired 3.0 production capabilities entirely.
+
+## Second Review Correction
+
+Fix commit: `fix(video): reject retired Gemini and normalize Vidu references`; the final SHA is recorded below after the implementation commit.
+
+### RED Evidence
+
+- Vidu q2 flat image arrays with one or two images were inferred as image-to-video/start-end and rejected despite q2 supporting those inputs through reference-to-video. Four and seven images were placed into one subject, exceeding the provider's three-image per-subject maximum. Focused provider and relay tests reproduced both failures.
+- Metadata could inject a single Vidu subject containing four images while remaining under the seven-image total, so the resolver allowed pre-consume before the upstream rejected the subject.
+- Gemini still advertised both retired Veo 3.0 IDs and accepted a valid historical 720p x 8-second tuple through production billing/build. Relay integration showed pre-consume, payload build, and upstream invocation all occurred.
+
+### GREEN Decisions
+
+- For mapped `viduq2`, an implicit flat image array selects the supported reference action. Explicit supported action semantics remain authoritative. Flat images are split in stable input order into named subjects of at most three images (`3+3+1` for seven), with no dropped images; the URL consumes the normalized action.
+- Vidu final payload validation enforces one-to-three images per subject and one-to-seven images total. Provider tests cover flat counts 1/2/3/4/7, explicit reference, total eight, and per-subject overflow. Relay tests assert decoded subjects plus pre-consume/build/upstream counts for every successful count and zero counts for both invalid limits.
+- Gemini no longer advertises or resolves `veo-3.0-generate-001` or `veo-3.0-fast-generate-001`. Every advertised Gemini model is exercised through production capability resolution, and both retired mappings return HTTP 400 before pre-consume/build/upstream. Legacy `EstimateBilling` remains unchanged.
+- Sources: [Vidu Reference-to-Video](https://platform.vidu.com/docs/reference-to-video) and [Gemini deprecations](https://ai.google.dev/gemini-api/docs/deprecations).
+
+### Second Review Verification
+
+- Vidu and Gemini RED tests failed on the reported behavior before implementation and passed after the minimal fixes.
+- Full Gemini and Vidu packages: exit 0.
+- Task 4 focused command across relay and all six providers: exit 0.
+- `go test ./relay/... -count=1`: exit 0.
+- `go build . ./relay ./relay/channel/task/gemini ./relay/channel/task/vidu`: exit 0.
+- `git diff --check`: exit 0.
+- Independent official-protocol review: no remaining P1/P2.
