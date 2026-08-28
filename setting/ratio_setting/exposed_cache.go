@@ -27,6 +27,12 @@ func InvalidateExposedDataCache() {
 func cloneGinH(src gin.H) gin.H {
 	dst := make(gin.H, len(src))
 	for k, v := range src {
+		if k == "video_resolution_price" {
+			if prices, ok := v.(map[string]map[string]float64); ok {
+				dst[k] = cloneVideoResolutionPriceMap(prices)
+				continue
+			}
+		}
 		dst[k] = v
 	}
 	return dst
@@ -42,11 +48,12 @@ func GetExposedData() gin.H {
 		return cloneGinH(c.data)
 	}
 	newData := gin.H{
-		"model_ratio":        GetModelRatioCopy(),
-		"completion_ratio":   GetCompletionRatioCopy(),
-		"cache_ratio":        GetCacheRatioCopy(),
-		"create_cache_ratio": GetCreateCacheRatioCopy(),
-		"model_price":        GetModelPriceCopy(),
+		"model_ratio":            GetModelRatioCopy(),
+		"completion_ratio":       GetCompletionRatioCopy(),
+		"cache_ratio":            GetCacheRatioCopy(),
+		"create_cache_ratio":     GetCreateCacheRatioCopy(),
+		"model_price":            GetModelPriceCopy(),
+		"video_resolution_price": GetVideoResolutionPriceMap(),
 	}
 	exposedData.Store(&exposedCache{
 		data:      newData,

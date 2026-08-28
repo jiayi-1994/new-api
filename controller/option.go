@@ -21,6 +21,7 @@ import (
 
 var completionRatioMetaOptionKeys = []string{
 	"ModelPrice",
+	ratio_setting.VideoResolutionPriceOptionKey,
 	"ModelRatio",
 	"CompletionRatio",
 	"CacheRatio",
@@ -121,6 +122,19 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
+func optionUpdateValueString(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		return common.Interface2String(typed)
+	case float64:
+		return common.Interface2String(typed)
+	case int:
+		return common.Interface2String(typed)
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
+}
+
 func UpdateOption(c *gin.Context) {
 	var option OptionUpdateRequest
 	err := common.DecodeJson(c.Request.Body, &option)
@@ -131,16 +145,7 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	switch option.Value.(type) {
-	case bool:
-		option.Value = common.Interface2String(option.Value.(bool))
-	case float64:
-		option.Value = common.Interface2String(option.Value.(float64))
-	case int:
-		option.Value = common.Interface2String(option.Value.(int))
-	default:
-		option.Value = fmt.Sprintf("%v", option.Value)
-	}
+	option.Value = optionUpdateValueString(option.Value)
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
@@ -371,6 +376,45 @@ func UpdateOption(c *gin.Context) {
 	// 出于安全考虑只记录被修改的配置项名称，不记录配置值（可能含密钥等敏感信息）。
 	recordManageAudit(c, "option.update", map[string]interface{}{
 		"key": option.Key,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
+func UpdateOptionsBulk(c *gin.Context) {
+	var options []OptionUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &options); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的参数",
+		})
+		return
+	}
+
+	values := make(map[string]string, len(options))
+	for _, option := range options {
+		if _, exists := values[option.Key]; exists {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "duplicate option key: " + option.Key,
+			})
+			return
+		}
+		values[option.Key] = optionUpdateValueString(option.Value)
+	}
+	if err := model.UpdateOptionsBulk(values); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	recordManageAudit(c, "option.update", map[string]interface{}{
+		"key": strings.Join(keys, ","),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

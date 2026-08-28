@@ -325,7 +325,6 @@ var defaultAudioCompletionRatio = map[string]float64{
 var modelPriceMap = types.NewRWMap[string, float64]()
 var modelRatioMap = types.NewRWMap[string, float64]()
 var completionRatioMap = types.NewRWMap[string, float64]()
-var taskBillingModeMap = types.NewRWMap[string, string]()
 
 var defaultCompletionRatio = map[string]float64{
 	"gpt-4-gizmo-*":  2,
@@ -391,26 +390,40 @@ const (
 )
 
 func TaskBillingMode2JSONString() string {
-	return taskBillingModeMap.MarshalJSONString()
+	videoResolutionPricingMu.RLock()
+	modes := cloneTaskBillingModeMap(videoTaskBillingModes)
+	videoResolutionPricingMu.RUnlock()
+	data, err := common.Marshal(modes)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func UpdateTaskBillingModeByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(taskBillingModeMap, jsonStr, InvalidateExposedDataCache)
+	modes, err := parseTaskBillingModeJSON(jsonStr)
+	if err != nil {
+		return err
+	}
+	videoResolutionPricingMu.Lock()
+	videoTaskBillingModes = modes
+	videoResolutionPricingMu.Unlock()
+	InvalidateExposedDataCache()
+	return nil
 }
 
 func GetTaskBillingModeMap() map[string]string {
-	return taskBillingModeMap.ReadAll()
+	videoResolutionPricingMu.RLock()
+	defer videoResolutionPricingMu.RUnlock()
+	return cloneTaskBillingModeMap(videoTaskBillingModes)
 }
 
 // GetTaskBillingMode 返回模型显式配置的任务计费单位以及是否命中配置。
 // 旧的 TASK_PRICE_PATCH 环境变量作为兜底保留，页面配置优先。
 func GetTaskBillingMode(name string) (string, bool) {
-	matchName := FormatMatchingModelName(name)
-
-	mode, ok := taskBillingModeMap.Get(matchName)
-	if !ok && strings.HasSuffix(matchName, CompactModelSuffix) {
-		mode, ok = taskBillingModeMap.Get(CompactWildcardModelKey)
-	}
+	videoResolutionPricingMu.RLock()
+	mode, ok := matchingTaskBillingModeLocked(name)
+	videoResolutionPricingMu.RUnlock()
 	if ok {
 		return mode, true
 	}
