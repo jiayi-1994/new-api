@@ -116,6 +116,56 @@ func TestMultipartTaskRequestStoresTopLevelResolution(t *testing.T) {
 	assert.Equal(t, "720p", storedReq.Metadata["resolution"])
 }
 
+func TestValidateMultipartDirectDefersSoraSizeValidationUntilAfterModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/videos",
+		strings.NewReader(`{"model":"sora-2","prompt":"animate","size":"1792x1024","seconds":"8"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+
+	taskErr := ValidateMultipartDirect(context, info)
+
+	require.Nil(t, taskErr)
+	stored, err := GetTaskRequest(context)
+	require.NoError(t, err)
+	assert.Equal(t, "1792x1024", stored.Size)
+}
+
+func TestValidateMultipartTaskRequestRejectsInvalidDurationFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "malformed seconds", field: "seconds", value: "forever"},
+		{name: "oversized seconds", field: "seconds", value: "999999"},
+		{name: "oversized duration", field: "duration", value: "999999"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			require.NoError(t, writer.WriteField("model", "sora-2"))
+			require.NoError(t, writer.WriteField("prompt", "animate"))
+			require.NoError(t, writer.WriteField(tc.field, tc.value))
+			require.NoError(t, writer.Close())
+
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", &body)
+			request.Header.Set("Content-Type", writer.FormDataContentType())
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Request = request
+
+			_, err := validateMultipartTaskRequest(context, &RelayInfo{}, constant.TaskActionGenerate)
+			assert.Error(t, err)
+		})
+	}
+}
+
 // TestTaskDurationBounds guards the billing invariant that user-supplied
 // video duration (a quota multiplier via OtherRatio "seconds") is bounded, so
 // it can never overflow quota calculation into a negative charge.
@@ -148,6 +198,11 @@ func TestTaskDurationBounds(t *testing.T) {
 		{
 			name:    "negative duration is rejected",
 			body:    `{"model":"sora-2","prompt":"a cat","duration":-8}`,
+			wantErr: true,
+		},
+		{
+			name:    "malformed seconds is rejected",
+			body:    `{"model":"sora-2","prompt":"a cat","seconds":"forever"}`,
 			wantErr: true,
 		},
 		{

@@ -111,6 +111,13 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+type normalizedSoraVideoRequest struct {
+	Request   relaycommon.TaskSubmitReq
+	Selection relaycommon.VideoBillingSelection
+}
+
+const normalizedSoraVideoRequestKey = "sora_normalized_video_request"
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
@@ -135,6 +142,125 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		return validateRemixRequest(c)
 	}
 	return relaycommon.ValidateMultipartDirect(c, info)
+}
+
+func soraVideoBillingNotSupported(info *relaycommon.RelayInfo) *dto.TaskError {
+	modelName := ""
+	if info != nil {
+		modelName = info.OriginModelName
+	}
+	return service.TaskErrorWrapperLocal(
+		fmt.Errorf("video resolution unknown is not configured for model %s", modelName),
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
+}
+
+func resolveSoraResolution(upstreamModelName, size string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "720x1280", "1280x720":
+		return "720p", true
+	case "1024x1792", "1792x1024":
+		if upstreamModelName == "sora-2" {
+			return "", false
+		}
+		return "1024p", true
+	default:
+		return "", false
+	}
+}
+
+func normalizeSoraVideoRequest(req relaycommon.TaskSubmitReq, upstreamModelName string) (normalizedSoraVideoRequest, error) {
+	size := strings.ToLower(strings.TrimSpace(req.Size))
+	if size == "" {
+		size = "720x1280"
+	}
+	resolution, ok := resolveSoraResolution(upstreamModelName, size)
+	if !ok {
+		return normalizedSoraVideoRequest{}, fmt.Errorf("unsupported Sora size %q", size)
+	}
+
+	seconds := 0
+	if req.Seconds != "" {
+		var err error
+		seconds, err = strconv.Atoi(strings.TrimSpace(req.Seconds))
+		if err != nil {
+			return normalizedSoraVideoRequest{}, fmt.Errorf("invalid Sora seconds: %w", err)
+		}
+	} else {
+		seconds = req.Duration
+	}
+	if seconds == 0 {
+		seconds = 4
+	}
+	if seconds < 1 || seconds > relaycommon.MaxTaskDurationSeconds {
+		return normalizedSoraVideoRequest{}, fmt.Errorf("Sora seconds must be between 1 and %d", relaycommon.MaxTaskDurationSeconds)
+	}
+
+	req.Size = size
+	req.Seconds = strconv.Itoa(seconds)
+	req.Duration = 0
+	req.Resolution = resolution
+	return normalizedSoraVideoRequest{
+		Request: req,
+		Selection: relaycommon.VideoBillingSelection{
+			EffectiveResolution:      resolution,
+			EffectiveDurationSeconds: seconds,
+		},
+	}, nil
+}
+
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (relaycommon.VideoBillingSelection, *dto.TaskError) {
+	if info.Action != constant.TaskActionRemix {
+		req, err := relaycommon.GetTaskRequest(c)
+		if err != nil {
+			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		}
+		normalized, err := normalizeSoraVideoRequest(req, info.UpstreamModelName)
+		if err != nil {
+			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		}
+		c.Set(normalizedSoraVideoRequestKey, normalized)
+		return normalized.Selection, nil
+	}
+
+	originValue, exists := c.Get("origin_task")
+	if !exists {
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+	originTask, ok := originValue.(*model.Task)
+	if !ok || originTask == nil {
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+	if billing := originTask.PrivateData.BillingContext; billing != nil && billing.PricingKind == "video_resolution" {
+		selection := relaycommon.VideoBillingSelection{
+			EffectiveResolution:      billing.EffectiveResolution,
+			EffectiveDurationSeconds: billing.EffectiveDurationSeconds,
+			IndependentRatios:        billing.IndependentRatios,
+		}
+		resolved, err := relaycommon.NewResolvedVideoBilling(selection, 1)
+		if err == nil && (resolved.Selection.EffectiveResolution == "720p" || resolved.Selection.EffectiveResolution == "1024p") {
+			return resolved.Selection, nil
+		}
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+
+	var saved responseTask
+	if err := common.Unmarshal(originTask.Data, &saved); err != nil {
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+	resolution, ok := resolveSoraResolution(info.UpstreamModelName, saved.Size)
+	if !ok || strings.TrimSpace(string(saved.Seconds)) == "" {
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(string(saved.Seconds)))
+	if err != nil || seconds < 1 || seconds > relaycommon.MaxTaskDurationSeconds {
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+	}
+	return relaycommon.VideoBillingSelection{
+		EffectiveResolution:      resolution,
+		EffectiveDurationSeconds: seconds,
+	}, nil
 }
 
 // EstimateBilling 根据用户请求的 seconds 和 size 计算 OtherRatios。
@@ -189,30 +315,34 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 // wrapDashScopeVideoPayload rewrites an OpenAI-style video body for upstreams (e.g. meaicc
 // sd-2-* Seedance) that only read prompt/media from a DashScope-like `input` object and
 // knobs from `parameters`. Top-level fields are kept: such upstreams ignore unknown fields,
-// while this gateway's own validation and per-second billing still read them. Idempotent —
-// a body that already carries input.prompt (a client that speaks the dialect) is left as is.
+// while this gateway's own validation and per-second billing still read them. Existing
+// dialect input is preserved, but parameters are always rebuilt from the normalized
+// top-level values so client-supplied nested duration/resolution cannot bypass billing.
 func wrapDashScopeVideoPayload(bodyMap map[string]any) {
+	hasWrappedInput := false
 	if input, ok := bodyMap["input"].(map[string]any); ok {
 		if _, has := input["prompt"]; has {
-			return
+			hasWrappedInput = true
 		}
 	}
-	input := map[string]any{}
-	if prompt, _ := bodyMap["prompt"].(string); prompt != "" {
-		input["prompt"] = prompt
-	}
-	if images, ok := bodyMap["images"].([]any); ok {
-		media := make([]any, 0, len(images))
-		for _, item := range images {
-			if u, ok := item.(string); ok && u != "" {
-				media = append(media, map[string]any{"type": "reference_image", "url": u})
+	if !hasWrappedInput {
+		input := map[string]any{}
+		if prompt, _ := bodyMap["prompt"].(string); prompt != "" {
+			input["prompt"] = prompt
+		}
+		if images, ok := bodyMap["images"].([]any); ok {
+			media := make([]any, 0, len(images))
+			for _, item := range images {
+				if u, ok := item.(string); ok && u != "" {
+					media = append(media, map[string]any{"type": "reference_image", "url": u})
+				}
+			}
+			if len(media) > 0 {
+				input["media"] = media
 			}
 		}
-		if len(media) > 0 {
-			input["media"] = media
-		}
+		bodyMap["input"] = input
 	}
-	bodyMap["input"] = input
 
 	parameters := map[string]any{"prompt_extend": false, "watermark": false}
 	if resolution, _ := bodyMap["resolution"].(string); resolution != "" {
@@ -244,11 +374,29 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "read_body_bytes_failed")
 	}
 	contentType := c.GetHeader("Content-Type")
+	var normalized normalizedSoraVideoRequest
+	if value, ok := c.Get(normalizedSoraVideoRequestKey); ok {
+		normalized, _ = value.(normalizedSoraVideoRequest)
+	}
 
 	if strings.HasPrefix(contentType, "application/json") {
 		var bodyMap map[string]interface{}
 		if err := common.Unmarshal(cachedBody, &bodyMap); err == nil {
 			bodyMap["model"] = info.UpstreamModelName
+			if info.Action == constant.TaskActionRemix {
+				delete(bodyMap, "size")
+				delete(bodyMap, "seconds")
+				delete(bodyMap, "duration")
+				delete(bodyMap, "resolution")
+			} else if normalized.Request.Size != "" {
+				bodyMap["size"] = normalized.Request.Size
+				bodyMap["seconds"] = normalized.Request.Seconds
+				delete(bodyMap, "duration")
+				delete(bodyMap, "resolution")
+				if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
+					bodyMap["resolution"] = normalized.Selection.EffectiveResolution
+				}
+			}
 			if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
 				wrapDashScopeVideoPayload(bodyMap)
 			}
@@ -267,8 +415,16 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
 		writer.WriteField("model", info.UpstreamModelName)
+		if info.Action != constant.TaskActionRemix && normalized.Request.Size != "" {
+			writer.WriteField("size", normalized.Request.Size)
+			writer.WriteField("seconds", normalized.Request.Seconds)
+			if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
+				writer.WriteField("resolution", normalized.Selection.EffectiveResolution)
+			}
+		}
 		for key, values := range formData.Value {
-			if key == "model" {
+			isVideoParameter := key == "size" || key == "seconds" || key == "duration" || key == "resolution"
+			if key == "model" || (isVideoParameter && (info.Action == constant.TaskActionRemix || normalized.Request.Size != "")) {
 				continue
 			}
 			for _, v := range values {

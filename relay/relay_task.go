@@ -64,6 +64,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	if !exist {
 		return service.TaskErrorWrapperLocal(errors.New("task_origin_not_exist"), "task_not_exist", http.StatusBadRequest)
 	}
+	c.Set("origin_task", originTask)
 
 	// 从原始任务推导模型名称
 	if info.OriginModelName == "" {
@@ -138,6 +139,19 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	return nil
 }
 
+var getTaskAdaptor = GetTaskAdaptor
+
+func videoResolutionNotSupported(modelName, resolution string) *dto.TaskError {
+	if resolution == "" {
+		resolution = "unknown"
+	}
+	return service.TaskErrorWrapperLocal(
+		fmt.Errorf("video resolution %s is not configured for model %s", resolution, modelName),
+		"video_resolution_not_supported",
+		http.StatusBadRequest,
+	)
+}
+
 // RelayTaskSubmit 完成 task 提交的全部流程（每次尝试调用一次）：
 // 刷新渠道元数据 → 确定 platform/adaptor → 验证请求 →
 // 估算计费(EstimateBilling) → 计算价格 → 预扣费（仅首次）→
@@ -151,7 +165,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if platform == "" {
 		platform = GetTaskPlatform(c)
 	}
-	adaptor := GetTaskAdaptor(platform)
+	adaptor := getTaskAdaptor(platform)
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
@@ -173,36 +187,65 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
 	}
 
-	// 3. 预生成公开 task ID（仅首次）
-	if info.PublicTaskID == "" {
-		info.PublicTaskID = model.GenerateTaskID()
-	}
-
-	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
-	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
-	}
-	info.PriceData = priceData
+	resolutionPricing := platform != constant.TaskPlatformSuno
+	perCallBilling := false
+	if resolutionPricing {
+		resolver, ok := adaptor.(channel.VideoBillingResolver)
+		if !ok {
+			return nil, videoResolutionNotSupported(modelName, "unknown")
+		}
+		selection, taskErr := resolver.ResolveVideoBilling(c, info)
+		if taskErr != nil {
+			return nil, taskErr
+		}
 
-	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
-	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
-	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-		for k, v := range estimatedRatios {
-			info.PriceData.AddOtherRatio(k, v)
+		validated, err := relaycommon.NewResolvedVideoBilling(selection, 1)
+		if err != nil {
+			resolution := "unknown"
+			if canonical, normalizeErr := common.NormalizeVideoResolutionKey(selection.EffectiveResolution); normalizeErr == nil {
+				resolution = canonical
+			}
+			return nil, videoResolutionNotSupported(modelName, resolution)
+		}
+		selection = validated.Selection
+		selectedPrice, ok := ratio_setting.GetVideoResolutionPrice(modelName, selection.EffectiveResolution)
+		if !ok {
+			return nil, videoResolutionNotSupported(modelName, selection.EffectiveResolution)
+		}
+
+		priceData, clamp, err := helper.BuildVideoResolutionPriceData(c, info, selectedPrice, selection)
+		if err != nil {
+			return nil, videoResolutionNotSupported(modelName, selection.EffectiveResolution)
+		}
+		info.PriceData = priceData
+		noteTaskQuotaClamp(info, clamp)
+	} else {
+		// Suno remains on the legacy task-price path.
+		priceData, err := helper.ModelPriceHelperPerCall(c, info)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
+			}
+		}
+
+		perCallBilling = ratio_setting.IsTaskPerCallBilling(modelName)
+		if !perCallBilling {
+			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
+			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
 		}
 	}
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	//    按次计费的模型跳过相乘，但保留 OtherRatios 供日志与下游展示实际时长。
-	perCallBilling := ratio_setting.IsTaskPerCallBilling(modelName)
-	if !perCallBilling {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
+	// 3. 预生成公开 task ID（仅首次）
+	if info.PublicTaskID == "" {
+		info.PublicTaskID = model.GenerateTaskID()
 	}
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
@@ -247,15 +290,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
-	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		if perCallBilling {
-			// 按次计费：额度不随上游返回的时长变化，但仍记录实际参数
-			info.PriceData.ReplaceOtherRatios(adjustedRatios)
-		} else if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
-			// 基于调整后的 ratios 重新计算 quota
-			finalQuota = adjustedQuota
-			info.PriceData.ReplaceOtherRatios(adjustedRatios)
-			info.PriceData.Quota = finalQuota
+	if !resolutionPricing {
+		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+			if perCallBilling {
+				// 按次计费：额度不随上游返回的时长变化，但仍记录实际参数
+				info.PriceData.ReplaceOtherRatios(adjustedRatios)
+			} else if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+				// 基于调整后的 ratios 重新计算 quota
+				finalQuota = adjustedQuota
+				info.PriceData.ReplaceOtherRatios(adjustedRatios)
+				info.PriceData.Quota = finalQuota
+			}
 		}
 	}
 

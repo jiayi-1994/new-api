@@ -292,7 +292,7 @@ func TestWrapDashScopeVideoPayloadWrapsPromptImagesAndKnobs(t *testing.T) {
 	assert.Equal(t, "15", bodyMap["seconds"])
 }
 
-func TestWrapDashScopeVideoPayloadIsIdempotentForDialectClients(t *testing.T) {
+func TestWrapDashScopeVideoPayloadPreservesDialectInputAndRebuildsParameters(t *testing.T) {
 	existingInput := map[string]interface{}{"prompt": "already wrapped", "media": []interface{}{}}
 	bodyMap := map[string]interface{}{
 		"model":  "sd-2-c5",
@@ -303,7 +303,10 @@ func TestWrapDashScopeVideoPayloadIsIdempotentForDialectClients(t *testing.T) {
 	wrapDashScopeVideoPayload(bodyMap)
 
 	assert.Equal(t, existingInput, bodyMap["input"])
-	assert.Nil(t, bodyMap["parameters"])
+	assert.Equal(t, map[string]interface{}{
+		"prompt_extend": false,
+		"watermark":     false,
+	}, bodyMap["parameters"])
 }
 
 func TestWrapDashScopeVideoPayloadTextToVideoOmitsMedia(t *testing.T) {
