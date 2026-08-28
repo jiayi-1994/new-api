@@ -193,9 +193,15 @@ func InitOptionMap() {
 var videoResolutionPriceOptionMu sync.Mutex
 
 var publishVideoResolutionPriceOption = func(value string) error {
-	if err := updateOptionMap(ratio_setting.VideoResolutionPriceOptionKey, value); err != nil {
+	if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(value); err != nil {
 		return err
 	}
+	if err := ratio_setting.UpdateVideoResolutionPriceByJSONString(value); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey] = value
+	common.OptionMapRWMutex.Unlock()
 	InvalidatePricingCache()
 	return nil
 }
@@ -621,8 +627,6 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
-	case ratio_setting.VideoResolutionPriceOptionKey:
-		err = ratio_setting.UpdateVideoResolutionPriceByJSONString(value)
 	case "TaskBillingMode":
 		err = ratio_setting.UpdateTaskBillingModeByJSONString(value)
 	case "CacheRatio":

@@ -127,6 +127,31 @@ func TestLoadOptionsFromDatabasePublishesVideoResolutionPriceIndependently(t *te
 	common.OptionMapRWMutex.RUnlock()
 }
 
+func TestLoadOptionsFromDatabaseRejectsInvalidVideoResolutionPriceWithoutPartialPublication(t *testing.T) {
+	setupVideoResolutionOptionTest(t)
+	const validPrice = `{"sora-2":{"720p":0.1}}`
+	require.NoError(t, UpdateOption(ratio_setting.VideoResolutionPriceOptionKey, validPrice))
+	validExposed := ratio_setting.GetExposedData()["video_resolution_price"].(map[string]map[string]float64)
+	pricingMap = []Pricing{{ModelName: "cached-pricing"}}
+	vendorsList = []PricingVendor{{Name: "cached-vendor"}}
+	lastGetPricingTime = time.Now()
+
+	require.NoError(t, DB.Model(&Option{}).
+		Where("key = ?", ratio_setting.VideoResolutionPriceOptionKey).
+		Update("value", `{"sora-2":{"720p":0}}`).Error)
+
+	loadOptionsFromDatabase()
+
+	common.OptionMapRWMutex.RLock()
+	assert.Equal(t, validPrice, common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey])
+	common.OptionMapRWMutex.RUnlock()
+	assert.Equal(t, map[string]map[string]float64{"sora-2": {"720p": 0.1}}, ratio_setting.GetVideoResolutionPriceMap())
+	assert.Equal(t, validExposed, ratio_setting.GetExposedData()["video_resolution_price"])
+	assert.Equal(t, []Pricing{{ModelName: "cached-pricing"}}, pricingMap)
+	assert.Equal(t, []PricingVendor{{Name: "cached-vendor"}}, vendorsList)
+	assert.False(t, lastGetPricingTime.IsZero())
+}
+
 func TestConcurrentVideoResolutionPriceUpdatesPublishLatestDatabaseValue(t *testing.T) {
 	setupVideoResolutionOptionTest(t)
 	require.NoError(t, UpdateOption(
