@@ -5244,6 +5244,8 @@
     "Add resolution": "Add resolution",
     "Remove resolution": "Remove resolution",
     "No resolution prices configured": "No resolution prices configured",
+    "Unsupported": "Unsupported",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "Video requests to this model are rejected until an administrator configures resolution prices.",
     "Resolution is required": "Resolution is required",
     "Use a canonical resolution such as 720p or 4k": "Use a canonical resolution such as 720p or 4k",
     "Each resolution can only be configured once": "Each resolution can only be configured once",

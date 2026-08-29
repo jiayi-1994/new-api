@@ -5244,6 +5244,8 @@
     "Add resolution": "新增解析度",
     "Remove resolution": "移除解析度",
     "No resolution prices configured": "尚未設定解析度價格",
+    "Unsupported": "暫不支援",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "在管理員設定解析度價格前，對該模型的影片請求將被拒絕。",
     "Resolution is required": "請輸入解析度",
     "Use a canonical resolution such as 720p or 4k": "請使用標準解析度，例如 720p 或 4k",
     "Each resolution can only be configured once": "每個解析度只能設定一次",

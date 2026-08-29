@@ -34,6 +34,7 @@ import {
   isPerSecondBilledModel,
   isResolutionPricedModel,
   isTokenBasedModel,
+  isVideoModelMissingResolutionPrices,
 } from '../lib/model-helpers'
 import { formatPrice, formatRequestPrice } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
@@ -179,6 +180,17 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           </span>
         )}
       </>
+    )
+  } else if (isVideoModelMissingResolutionPrices(props.model)) {
+    priceSummary = (
+      <span className='min-w-0'>
+        <span className='font-medium text-amber-700 dark:text-amber-300'>
+          {t('Unsupported')}
+        </span>
+        <span className='text-muted-foreground/70 ml-1.5 text-xs'>
+          {t('No resolution prices configured')}
+        </span>
+      </span>
     )
   } else {
     priceSummary = (

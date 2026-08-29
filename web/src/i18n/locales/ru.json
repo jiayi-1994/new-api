@@ -5244,6 +5244,8 @@
     "Add resolution": "Добавить разрешение",
     "Remove resolution": "Удалить разрешение",
     "No resolution prices configured": "Цены по разрешению не настроены",
+    "Unsupported": "Не поддерживается",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "Видеозапросы к этой модели отклоняются, пока администратор не настроит цены по разрешению.",
     "Resolution is required": "Укажите разрешение",
     "Use a canonical resolution such as 720p or 4k": "Используйте стандартное разрешение, например 720p или 4k",
     "Each resolution can only be configured once": "Каждое разрешение можно настроить только один раз",

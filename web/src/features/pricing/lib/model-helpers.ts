@@ -147,3 +147,19 @@ export function isPerSecondBilledModel(model: PricingModel): boolean {
     isResolutionPricedModel(model) || model.task_billing_mode === 'per_second'
   )
 }
+
+/**
+ * Video models bill exclusively through per-second resolution prices; the
+ * backend rejects their requests when none are configured. A legacy fixed
+ * price still exposed for such a model must be marked unsupported instead of
+ * being presented as an active price.
+ */
+export function isVideoModelMissingResolutionPrices(
+  model: PricingModel
+): boolean {
+  return (
+    !isTokenBasedModel(model) &&
+    !isResolutionPricedModel(model) &&
+    (model.supported_endpoint_types ?? []).includes('openai-video')
+  )
+}

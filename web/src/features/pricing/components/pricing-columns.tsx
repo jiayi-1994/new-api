@@ -34,7 +34,11 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isPerSecondBilledModel, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  isPerSecondBilledModel,
+  isTokenBasedModel,
+  isVideoModelMissingResolutionPrices,
+} from '../lib/model-helpers'
 import {
   formatPrice,
   formatRequestPrice,
@@ -209,6 +213,19 @@ export function usePricingColumns(
               </span>
               <div className='text-muted-foreground/50 text-[10px]'>
                 / {tokenUnitLabel} tokens
+              </div>
+            </div>
+          )
+        }
+
+        if (isVideoModelMissingResolutionPrices(model)) {
+          return (
+            <div className='max-w-full min-w-0'>
+              <span className='text-xs font-medium text-amber-700 dark:text-amber-300'>
+                {t('Unsupported')}
+              </span>
+              <div className='text-muted-foreground/50 text-[10px]'>
+                {t('No resolution prices configured')}
               </div>
             </div>
           )

@@ -25,6 +25,7 @@ import {
   getResolutionPriceEntries,
   isPerSecondBilledModel,
   isResolutionPricedModel,
+  isVideoModelMissingResolutionPrices,
 } from '../model-helpers'
 import { formatFixedPrice, formatRequestPrice } from '../price'
 
@@ -92,6 +93,42 @@ describe('resolution price helpers', () => {
     })
 
     assert.equal(isPerSecondBilledModel(model), true)
+  })
+
+  // 后端会拒绝没有分辨率价格的视频请求：这种模型必须标记为不可用，
+  // 而不是把遗留的 ModelPrice 展示为生效价格。
+  test('video models with only a legacy fixed price are marked unsupported', () => {
+    const model = pricingModel({
+      model_price: 0.5,
+      supported_endpoint_types: ['openai-video'],
+    })
+
+    assert.equal(isVideoModelMissingResolutionPrices(model), true)
+  })
+
+  test('resolution-priced and non-video models are not marked unsupported', () => {
+    const priced = pricingModel({
+      supported_endpoint_types: ['openai-video'],
+      resolution_prices: { '720p': 0.1 },
+    })
+    const nonVideo = pricingModel({ model_price: 0.5 })
+    const tokenBased = pricingModel({
+      quota_type: 0,
+      supported_endpoint_types: ['openai-video'],
+    })
+
+    assert.equal(isVideoModelMissingResolutionPrices(priced), false)
+    assert.equal(isVideoModelMissingResolutionPrices(nonVideo), false)
+    assert.equal(isVideoModelMissingResolutionPrices(tokenBased), false)
+  })
+
+  test('a video model whose configured prices are all invalid is unsupported', () => {
+    const model = pricingModel({
+      supported_endpoint_types: ['openai-video'],
+      resolution_prices: { '720p': 0 },
+    })
+
+    assert.equal(isVideoModelMissingResolutionPrices(model), true)
   })
 })
 

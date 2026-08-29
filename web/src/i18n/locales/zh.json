@@ -5244,6 +5244,8 @@
     "Add resolution": "添加分辨率",
     "Remove resolution": "移除分辨率",
     "No resolution prices configured": "未配置分辨率价格",
+    "Unsupported": "暂不支持",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "在管理员配置分辨率价格前，对该模型的视频请求将被拒绝。",
     "Resolution is required": "请输入分辨率",
     "Use a canonical resolution such as 720p or 4k": "请使用规范分辨率，例如 720p 或 4k",
     "Each resolution can only be configured once": "每个分辨率只能配置一次",

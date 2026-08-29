@@ -5244,6 +5244,8 @@
     "Add resolution": "Thêm độ phân giải",
     "Remove resolution": "Xóa độ phân giải",
     "No resolution prices configured": "Chưa cấu hình giá theo độ phân giải",
+    "Unsupported": "Không được hỗ trợ",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "Yêu cầu video tới mô hình này sẽ bị từ chối cho đến khi quản trị viên cấu hình giá theo độ phân giải.",
     "Resolution is required": "Cần nhập độ phân giải",
     "Use a canonical resolution such as 720p or 4k": "Dùng độ phân giải chuẩn như 720p hoặc 4k",
     "Each resolution can only be configured once": "Mỗi độ phân giải chỉ được cấu hình một lần",

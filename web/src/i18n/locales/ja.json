@@ -5244,6 +5244,8 @@
     "Add resolution": "解像度を追加",
     "Remove resolution": "解像度を削除",
     "No resolution prices configured": "解像度別の価格が設定されていません",
+    "Unsupported": "未対応",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "管理者が解像度別の価格を設定するまで、このモデルへの動画リクエストは拒否されます。",
     "Resolution is required": "解像度は必須です",
     "Use a canonical resolution such as 720p or 4k": "720p や 4k などの標準的な解像度を使用してください",
     "Each resolution can only be configured once": "各解像度は1回だけ設定できます",

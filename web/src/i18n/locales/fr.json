@@ -5244,6 +5244,8 @@
     "Add resolution": "Ajouter une résolution",
     "Remove resolution": "Supprimer la résolution",
     "No resolution prices configured": "Aucun prix par résolution configuré",
+    "Unsupported": "Non pris en charge",
+    "Video requests to this model are rejected until an administrator configures resolution prices.": "Les requêtes vidéo vers ce modèle sont rejetées tant qu'un administrateur n'a pas configuré les prix par résolution.",
     "Resolution is required": "La résolution est obligatoire",
     "Use a canonical resolution such as 720p or 4k": "Utilisez une résolution canonique telle que 720p ou 4k",
     "Each resolution can only be configured once": "Chaque résolution ne peut être configurée qu’une seule fois",
