@@ -100,6 +100,41 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 }
 
+// PersistSubmittedTask 在上游已接受提交后把任务落库。
+// 落库失败意味着用户已被扣费却没有可轮询、可结算的任务，因此必须同步退还分辨率
+// 预留并记账；同步退款也失败时记录告警，由轮询的孤儿清扫兜底。
+func PersistSubmittedTask(c *gin.Context, task *model.Task) error {
+	insertErr := task.Insert()
+	if insertErr == nil {
+		return nil
+	}
+	requestId := task.PrivateData.BillingReservationRequestId
+	if requestId == "" {
+		return insertErr
+	}
+	if refundErr := model.RefundResolutionBillingReservation(requestId, "task insert failed: "+insertErr.Error()); refundErr != nil {
+		logger.LogError(c, fmt.Sprintf("退还分辨率预留失败 (request_id=%s): %s", requestId, refundErr.Error()))
+		return insertErr
+	}
+	logger.LogWarn(c, fmt.Sprintf("任务落库失败，已退还分辨率预留 (request_id=%s)", requestId))
+	if task.Quota > 0 {
+		other := taskBillingOther(task)
+		other["reason"] = "task insert failed"
+		model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+			UserId:    task.UserId,
+			LogType:   model.LogTypeRefund,
+			Content:   "任务提交后落库失败，已退还预扣费",
+			ChannelId: task.ChannelId,
+			ModelName: taskModelName(task),
+			Quota:     task.Quota,
+			TokenId:   task.PrivateData.TokenId,
+			Group:     task.Group,
+			Other:     other,
+		})
+	}
+	return insertErr
+}
+
 // ---------------------------------------------------------------------------
 // 异步任务计费辅助函数
 // ---------------------------------------------------------------------------

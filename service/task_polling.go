@@ -38,6 +38,23 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
+// resolutionReservationOrphanGrace 是预留记录从创建到被 Task.Insert 附着的宽限期。
+// 必须长于一次上游任务提交的最坏耗时，否则会退掉仍在提交中的请求。
+const resolutionReservationOrphanGrace = 15 * time.Minute
+
+// sweepOrphanedResolutionReservations 兜底退还没有附着到任务的分辨率预留。
+// 上游提交成功但任务落库失败、且控制器的同步退款也失败时，额度只能靠这里归还。
+func sweepOrphanedResolutionReservations(ctx context.Context) {
+	cutoff := time.Now().Add(-resolutionReservationOrphanGrace).Unix()
+	refunded, err := model.RefundOrphanedResolutionBillingReservations(cutoff, 100)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("sweepOrphanedResolutionReservations: refunded %d before error: %s", refunded, err.Error()))
+	}
+	if refunded > 0 {
+		logger.LogInfo(ctx, fmt.Sprintf("sweepOrphanedResolutionReservations: refunded %d orphaned reservations", refunded))
+	}
+}
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -115,6 +132,7 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 	}
 
 	common.SysLog("任务进度轮询开始")
+	sweepOrphanedResolutionReservations(ctx)
 	sweepTimedOutTasks(ctx)
 	allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 	summary.UnfinishedTasks = len(allTasks)

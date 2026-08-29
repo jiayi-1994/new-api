@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,6 +155,7 @@ func TestMain(m *testing.M) {
 		&model.UserSubscription{},
 		&model.SubscriptionPlan{},
 		&model.SubscriptionPreConsumeRecord{},
+		&model.ResolutionBillingReservation{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 	); err != nil {
@@ -179,6 +181,7 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM subscription_plans")
 		model.DB.Exec("DELETE FROM subscription_pre_consume_records")
+		model.DB.Exec("DELETE FROM resolution_billing_reservations")
 		model.DB.Exec("DELETE FROM system_task_locks")
 		model.DB.Exec("DELETE FROM system_tasks")
 	})
@@ -1060,6 +1063,7 @@ func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c := gin.CreateTestContextOnly(recorder, g)
 	info := &relaycommon.RelayInfo{
+		RequestId:       "resolution-durable-preconsume",
 		UserId:          userID,
 		TokenId:         tokenID,
 		TokenKey:        "sk-resolution-durable-preconsume",
@@ -1074,6 +1078,10 @@ func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 	require.Nil(t, PreConsumeBilling(c, preConsumed, info))
 	assert.Equal(t, userQuota-preConsumed, getUserQuota(t, userID))
 	assert.Equal(t, tokenQuota-preConsumed, getTokenRemainQuota(t, tokenID))
+	var reservation model.ResolutionBillingReservation
+	require.NoError(t, model.DB.Where("request_id = ?", info.RequestId).First(&reservation).Error)
+	assert.Equal(t, model.ResolutionReservationStatusReserved, reservation.Status)
+	assert.Equal(t, preConsumed, reservation.Quota)
 }
 
 func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
@@ -1082,15 +1090,20 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 	common.BatchUpdateEnabled = true
 	t.Cleanup(func() { common.BatchUpdateEnabled = originalBatchUpdateEnabled })
 
-	const userID, channelID = 405, 405
+	const userID, channelID, tokenID = 405, 405, 405
 	seedUser(t, userID, 1_000_000)
+	seedToken(t, tokenID, userID, "sk-resolution-base-stats", 1_000_000)
 	seedChannel(t, channelID)
 	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
 	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
+		RequestId:       "resolution-base-stats",
 		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "sk-resolution-base-stats",
 		OriginModelName: "video-model",
 		UsingGroup:      "default",
+		ForcePreConsume: true,
 		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
 		PriceData: types.PriceData{
 			Quota: preConsumed,
@@ -1110,11 +1123,14 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 			},
 		},
 	}
+	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	require.Nil(t, PreConsumeBilling(c, preConsumed, info))
 	LogTaskConsumption(c, info)
-	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	task.PrivateData.BillingReservationRequestId = info.RequestId
 	require.NoError(t, task.Insert())
 
 	var submittedUser model.User
@@ -1136,6 +1152,195 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 	assert.Equal(t, 1, submittedUser.RequestCount)
 	require.NoError(t, model.DB.Select("used_quota").First(&submittedChannel, channelID).Error)
 	assert.EqualValues(t, actualQuota, submittedChannel.UsedQuota)
+}
+
+// resolutionSubmitRelayInfo 构造一次分辨率任务提交的 RelayInfo：0.1/秒 × 8 秒 ×
+// 1.25 分组倍率 × 1.2 video_input 倍率。
+func resolutionSubmitRelayInfo(requestId string, userID, tokenID, channelID, quota int) *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		RequestId:       requestId,
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "sk-" + requestId,
+		OriginModelName: "video-model",
+		UsingGroup:      "default",
+		ForcePreConsume: true,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			Quota:          quota,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.25},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				Selection: relaycommon.VideoBillingSelection{
+					EffectiveResolution:      "1080p",
+					EffectiveDurationSeconds: 8,
+					IndependentRatios:        map[string]float64{"video_input": 1.2},
+				},
+				SelectedResolutionPrice: 0.1,
+				QuotaPerUnit:            common.QuotaPerUnit,
+			},
+		},
+	}
+}
+
+func TestResolutionTaskInsertFailureSynchronouslyRefundsReservation(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 410, 410, 410
+	const userQuota, tokenQuota = 2_000_000, 1_500_000
+	seedUser(t, userID, userQuota)
+	seedToken(t, tokenID, userID, "sk-resolution-insert-failure", tokenQuota)
+	seedChannel(t, channelID)
+
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	info := resolutionSubmitRelayInfo("resolution-insert-failure", userID, tokenID, channelID, preConsumed)
+	info.UserSetting.BillingPreference = "wallet_only"
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+
+	require.Nil(t, PreConsumeBilling(c, preConsumed, info))
+	require.NoError(t, SettleBilling(c, info, preConsumed))
+	LogTaskConsumption(c, info)
+	require.Equal(t, userQuota-preConsumed, getUserQuota(t, userID))
+
+	const callbackName = "test:fail_resolution_task_insert"
+	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "Task" {
+			tx.AddError(errors.New("forced task insert failure"))
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Create().Remove(callbackName) })
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	task.PrivateData.BillingReservationRequestId = info.RequestId
+
+	require.Error(t, PersistSubmittedTask(c, task))
+
+	var persistedTasks int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Count(&persistedTasks).Error)
+	assert.Zero(t, persistedTasks)
+	assert.Equal(t, userQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenQuota, getTokenRemainQuota(t, tokenID))
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Zero(t, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+
+	var reservation model.ResolutionBillingReservation
+	require.NoError(t, model.DB.Where("request_id = ?", info.RequestId).First(&reservation).Error)
+	assert.Equal(t, model.ResolutionReservationStatusRefunded, reservation.Status)
+	assert.Zero(t, reservation.TaskId)
+
+	var refundLogs []model.Log
+	require.NoError(t, model.DB.Where("type = ?", model.LogTypeRefund).Find(&refundLogs).Error)
+	require.Len(t, refundLogs, 1)
+	assert.Equal(t, preConsumed, refundLogs[0].Quota)
+}
+
+func TestResolutionReservationFallsBackToWalletWhenSubscriptionIsExhausted(t *testing.T) {
+	truncate(t)
+	const userID, channelID, planID, subscriptionID = 411, 411, 411, 411
+	const userQuota, tokenQuota = 2_000_000, 2_000_000
+	seedUser(t, userID, userQuota)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: planID, Title: "resolution fallback plan", DurationUnit: "month", DurationValue: 1, Enabled: true, TotalAmount: 10_000,
+	}).Error)
+
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	// 订阅余额只够一次提交，另一次必须回退到钱包
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		AmountTotal: int64(preConsumed), AmountUsed: 0, AllowWalletOverflow: true,
+		Status: "active", StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix(),
+	}).Error)
+
+	requestIds := []string{"resolution-fallback-a", "resolution-fallback-b"}
+	for i, requestId := range requestIds {
+		seedToken(t, 4110+i, userID, "sk-"+requestId, tokenQuota)
+	}
+
+	var submissions sync.WaitGroup
+	errs := make(chan *relaytypes.NewAPIError, len(requestIds))
+	sources := make(chan string, len(requestIds))
+	for i, requestId := range requestIds {
+		submissions.Add(1)
+		go func() {
+			defer submissions.Done()
+			info := resolutionSubmitRelayInfo(requestId, userID, 4110+i, channelID, preConsumed)
+			info.UserSetting.BillingPreference = "subscription_first"
+			c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+			if apiErr := PreConsumeBilling(c, preConsumed, info); apiErr != nil {
+				errs <- apiErr
+				return
+			}
+			sources <- info.BillingSource
+		}()
+	}
+	submissions.Wait()
+	close(errs)
+	close(sources)
+
+	require.Empty(t, errs)
+	usedSources := make([]string, 0, len(requestIds))
+	for source := range sources {
+		usedSources = append(usedSources, source)
+	}
+	assert.ElementsMatch(t, []string{BillingSourceSubscription, BillingSourceWallet}, usedSources)
+
+	assert.EqualValues(t, preConsumed, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, userQuota-preConsumed, getUserQuota(t, userID))
+	var reservations []model.ResolutionBillingReservation
+	require.NoError(t, model.DB.Order("request_id").Find(&reservations).Error)
+	require.Len(t, reservations, 2)
+	for _, reservation := range reservations {
+		assert.Equal(t, model.ResolutionReservationStatusReserved, reservation.Status)
+		assert.Equal(t, preConsumed, reservation.Quota)
+	}
+	assert.ElementsMatch(t,
+		[]string{model.ResolutionReservationSourceSubscription, model.ResolutionReservationSourceWallet},
+		[]string{reservations[0].BillingSource, reservations[1].BillingSource},
+	)
+}
+
+func TestSweepOrphanedResolutionReservationsOnlyRefundsAfterGracePeriod(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 412, 412
+	const userQuota, tokenQuota, quota = 10_000, 8_000, 600
+	seedUser(t, userID, userQuota)
+	seedToken(t, tokenID, userID, "sk-resolution-orphan-sweep", tokenQuota)
+
+	fresh := resolutionSubmitRelayInfo("resolution-orphan-fresh", userID, tokenID, 0, quota)
+	fresh.UserSetting.BillingPreference = "wallet_only"
+	stale := resolutionSubmitRelayInfo("resolution-orphan-stale", userID, tokenID, 0, quota)
+	stale.UserSetting.BillingPreference = "wallet_only"
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	require.Nil(t, PreConsumeBilling(c, quota, fresh))
+	require.Nil(t, PreConsumeBilling(c, quota, stale))
+
+	expired := time.Now().Add(-resolutionReservationOrphanGrace - time.Minute).Unix()
+	require.NoError(t, model.DB.Model(&model.ResolutionBillingReservation{}).
+		Where("request_id = ?", stale.RequestId).
+		Updates(map[string]any{"created_at": expired, "updated_at": expired}).Error)
+
+	sweepOrphanedResolutionReservations(context.Background())
+
+	var staleReservation model.ResolutionBillingReservation
+	require.NoError(t, model.DB.Where("request_id = ?", stale.RequestId).First(&staleReservation).Error)
+	assert.Equal(t, model.ResolutionReservationStatusRefunded, staleReservation.Status)
+	var freshReservation model.ResolutionBillingReservation
+	require.NoError(t, model.DB.Where("request_id = ?", fresh.RequestId).First(&freshReservation).Error)
+	assert.Equal(t, model.ResolutionReservationStatusReserved, freshReservation.Status)
+
+	assert.Equal(t, userQuota-quota, getUserQuota(t, userID))
+	assert.Equal(t, tokenQuota-quota, getTokenRemainQuota(t, tokenID))
 }
 
 func TestResolutionTaskInsertRollsBackWhenBaseStatsCannotReachChannel(t *testing.T) {
@@ -1209,11 +1414,12 @@ func TestResolutionRoundedZeroSubscriptionDoesNotReserveSyntheticTokenQuota(t *t
 	assert.Zero(t, record.PreConsumed)
 }
 
-func TestResolutionImmediateWalletRaceReturnsInsufficientQuota(t *testing.T) {
+func TestResolutionWalletOverdraftReturnsInsufficientQuotaAndLeavesNoReservation(t *testing.T) {
 	truncate(t)
 	const userID = 407
 	seedUser(t, userID, 20)
 	info := &relaycommon.RelayInfo{
+		RequestId:       "resolution-wallet-overdraft",
 		UserId:          userID,
 		OriginModelName: "video-model",
 		ForcePreConsume: true,
@@ -1222,18 +1428,17 @@ func TestResolutionImmediateWalletRaceReturnsInsufficientQuota(t *testing.T) {
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{},
 		},
 	}
-	session := &BillingSession{
-		relayInfo: info,
-		funding: &WalletFunding{
-			userId:    userID,
-			immediate: true,
-		},
-	}
+	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
-	apiErr := session.preConsume(c, 80)
+
+	apiErr := PreConsumeBilling(c, 80, info)
+
 	require.NotNil(t, apiErr)
 	assert.Equal(t, relaytypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
 	assert.Equal(t, 20, getUserQuota(t, userID))
+	var reservations int64
+	require.NoError(t, model.DB.Model(&model.ResolutionBillingReservation{}).Count(&reservations).Error)
+	assert.Zero(t, reservations)
 }
 
 func TestLegacyRoundedZeroSubscriptionRetainsSyntheticReservation(t *testing.T) {

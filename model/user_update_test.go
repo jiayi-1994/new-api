@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -61,124 +60,6 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	assert.Equal(t, 600, got.Quota)
 	assert.Equal(t, 420, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
-}
-
-func TestDecreaseUserQuotaImmediatelyPersistsBeforeInvalidatingCache(t *testing.T) {
-	setupUserUpdateTestState(t)
-	server := useUserCacheMiniRedis(t)
-	user := User{
-		Id:       390,
-		Username: "resolution-immediate-user",
-		Password: "password",
-		Status:   common.UserStatusEnabled,
-		Quota:    1_000,
-	}
-	require.NoError(t, DB.Create(&user).Error)
-	require.NoError(t, populateUserCache(user))
-	assert.True(t, server.Exists(getUserCacheKey(user.Id)))
-
-	const callbackName = "test:fail_immediate_user_quota_update"
-	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "User" {
-			tx.AddError(errors.New("forced immediate user quota failure"))
-		}
-	}))
-	callbackRegistered := true
-	t.Cleanup(func() {
-		if callbackRegistered {
-			require.NoError(t, DB.Callback().Update().Remove(callbackName))
-		}
-	})
-
-	require.Error(t, DecreaseUserQuotaImmediately(user.Id, 100))
-	var afterFailure User
-	require.NoError(t, DB.First(&afterFailure, user.Id).Error)
-	assert.Equal(t, 1_000, afterFailure.Quota)
-	cached, err := cacheGetUserBase(user.Id)
-	require.NoError(t, err)
-	assert.Equal(t, 1_000, cached.Quota)
-
-	require.NoError(t, DB.Callback().Update().Remove(callbackName))
-	callbackRegistered = false
-	require.NoError(t, DecreaseUserQuotaImmediately(user.Id, 100))
-	var afterSuccess User
-	require.NoError(t, DB.First(&afterSuccess, user.Id).Error)
-	assert.Equal(t, 900, afterSuccess.Quota)
-	assert.False(t, server.Exists(getUserCacheKey(user.Id)))
-}
-
-func TestDecreaseUserQuotaImmediatelyAtomicallyRejectsConcurrentOverdraft(t *testing.T) {
-	setupUserUpdateTestState(t)
-	user := User{
-		Id:       392,
-		Username: "resolution-concurrent-wallet",
-		Password: "password",
-		Status:   common.UserStatusEnabled,
-		Quota:    100,
-	}
-	require.NoError(t, DB.Create(&user).Error)
-
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	var requests sync.WaitGroup
-	for range 2 {
-		requests.Add(1)
-		go func() {
-			defer requests.Done()
-			<-start
-			results <- DecreaseUserQuotaImmediately(user.Id, 80)
-		}()
-	}
-	close(start)
-	requests.Wait()
-	close(results)
-
-	var successCount, insufficientCount int
-	for err := range results {
-		if err == nil {
-			successCount++
-			continue
-		}
-		if errors.Is(err, ErrInsufficientUserQuota) {
-			insufficientCount++
-		}
-	}
-	assert.Equal(t, 1, successCount)
-	assert.Equal(t, 1, insufficientCount)
-	var persisted User
-	require.NoError(t, DB.First(&persisted, user.Id).Error)
-	assert.Equal(t, 20, persisted.Quota)
-}
-
-func TestImmediateQuotaUpdatesRollBackWhenCacheInvalidationFails(t *testing.T) {
-	t.Run("user", func(t *testing.T) {
-		setupUserUpdateTestState(t)
-		server := useUserCacheMiniRedis(t)
-		user := User{Id: 391, Username: "resolution-user-cache-failure", Password: "password", Status: common.UserStatusEnabled, Quota: 1_000}
-		require.NoError(t, DB.Create(&user).Error)
-		require.NoError(t, populateUserCache(user))
-		server.Close()
-
-		require.Error(t, DecreaseUserQuotaImmediately(user.Id, 100))
-		var persisted User
-		require.NoError(t, DB.First(&persisted, user.Id).Error)
-		assert.Equal(t, 1_000, persisted.Quota)
-	})
-
-	t.Run("token", func(t *testing.T) {
-		setupUserUpdateTestState(t)
-		server := useUserCacheMiniRedis(t)
-		token := Token{Id: 391, UserId: 391, Key: "sk-resolution-token-cache-failure", Name: "resolution", Status: common.TokenStatusEnabled, RemainQuota: 1_000}
-		require.NoError(t, DB.Create(&token).Error)
-		require.NoError(t, cacheSetToken(token))
-		server.Close()
-
-		require.Error(t, DecreaseTokenQuotaImmediately(token.Id, token.Key, 100))
-		var persisted Token
-		require.NoError(t, DB.First(&persisted, token.Id).Error)
-		assert.Equal(t, 1_000, persisted.RemainQuota)
-		assert.Zero(t, persisted.UsedQuota)
-	})
 }
 
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {

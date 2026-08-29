@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,82 @@ func TestResolutionReservationAtomicallyPreConsumesSubscriptionAndToken(t *testi
 	require.NoError(t, DB.First(&token, 9602).Error)
 	assert.Equal(t, 920, token.RemainQuota)
 	assert.Equal(t, 80, token.UsedQuota)
+}
+
+func TestResolutionReservationRejectsConcurrentWalletOverdraft(t *testing.T) {
+	truncateTables(t)
+	seedResolutionReservationUserAndToken(t, 9606, 9606, 100, 1_000, false)
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var requests sync.WaitGroup
+	for i := range 2 {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			<-start
+			_, err := ReserveResolutionBilling(ResolutionBillingReservationParams{
+				RequestId:     fmt.Sprintf("resolution-overdraft-%d", i),
+				UserId:        9606,
+				TokenId:       9606,
+				BillingSource: ResolutionReservationSourceWallet,
+				Quota:         80,
+			})
+			results <- err
+		}()
+	}
+	close(start)
+	requests.Wait()
+	close(results)
+
+	var reserved, rejected int
+	for err := range results {
+		if err == nil {
+			reserved++
+			continue
+		}
+		require.ErrorIs(t, err, ErrInsufficientUserQuota)
+		rejected++
+	}
+	assert.Equal(t, 1, reserved)
+	assert.Equal(t, 1, rejected)
+
+	var user User
+	require.NoError(t, DB.First(&user, 9606).Error)
+	assert.Equal(t, 20, user.Quota)
+	var token Token
+	require.NoError(t, DB.First(&token, 9606).Error)
+	assert.Equal(t, 920, token.RemainQuota)
+	var records []ResolutionBillingReservation
+	require.NoError(t, DB.Find(&records).Error)
+	assert.Len(t, records, 1)
+}
+
+func TestResolutionReservationRollsBackWhenCacheInvalidationFails(t *testing.T) {
+	truncateTables(t)
+	server := useUserCacheMiniRedis(t)
+	seedResolutionReservationUserAndToken(t, 9607, 9607, 1_000, 1_000, false)
+	server.Close()
+
+	_, err := ReserveResolutionBilling(ResolutionBillingReservationParams{
+		RequestId:     "resolution-cache-failure",
+		UserId:        9607,
+		TokenId:       9607,
+		BillingSource: ResolutionReservationSourceWallet,
+		Quota:         80,
+	})
+	require.Error(t, err)
+
+	var user User
+	require.NoError(t, DB.First(&user, 9607).Error)
+	assert.Equal(t, 1_000, user.Quota)
+	var token Token
+	require.NoError(t, DB.First(&token, 9607).Error)
+	assert.Equal(t, 1_000, token.RemainQuota)
+	assert.Zero(t, token.UsedQuota)
+	var count int64
+	require.NoError(t, DB.Model(&ResolutionBillingReservation{}).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestResolutionReservationRefundFailureIsAuditedAndRetryIsIdempotent(t *testing.T) {

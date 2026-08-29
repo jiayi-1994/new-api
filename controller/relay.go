@@ -589,11 +589,14 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
 		task.PrivateData.BillingContext = taskBillingContextFromRelayInfo(relayInfo)
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
+			task.PrivateData.BillingReservationRequestId = relayInfo.RequestId
+		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
-		if insertErr := task.Insert(); insertErr != nil {
-			common.SysError("insert task error: " + insertErr.Error())
+		if insertErr := service.PersistSubmittedTask(c, task); insertErr != nil {
+			logger.LogError(c, "insert task error: "+insertErr.Error())
 		}
 	}
 

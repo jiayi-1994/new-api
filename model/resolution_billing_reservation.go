@@ -242,7 +242,7 @@ func adjustResolutionTokenTx(tx *gorm.DB, tokenId, userId, quota int) error {
 		return err
 	}
 	if quota > 0 && !token.UnlimitedQuota && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is insufficient for resolution task pre-consume")
+		return fmt.Errorf("%w: need=%d remain=%d", ErrInsufficientTokenQuota, quota, token.RemainQuota)
 	}
 	if quota == 0 {
 		return nil
@@ -367,7 +367,7 @@ func adjustResolutionTokenDeltaTx(tx *gorm.DB, tokenId, userId, delta int) error
 		return err
 	}
 	if delta > 0 && !token.UnlimitedQuota && token.RemainQuota < delta {
-		return fmt.Errorf("token quota is insufficient for resolution task pre-consume")
+		return fmt.Errorf("%w: need=%d remain=%d", ErrInsufficientTokenQuota, delta, token.RemainQuota)
 	}
 	return tx.Model(&Token{}).Where("id = ?", token.Id).Updates(map[string]interface{}{
 		"remain_quota":  gorm.Expr("remain_quota - ?", delta),

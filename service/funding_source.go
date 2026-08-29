@@ -27,9 +27,8 @@ type FundingSource interface {
 // ---------------------------------------------------------------------------
 
 type WalletFunding struct {
-	userId    int
-	consumed  int // 实际预扣的用户额度
-	immediate bool
+	userId   int
+	consumed int // 实际预扣的用户额度
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
@@ -38,13 +37,7 @@ func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	var err error
-	if w.immediate {
-		err = model.DecreaseUserQuotaImmediately(w.userId, amount)
-	} else {
-		err = model.DecreaseUserQuota(w.userId, amount, false)
-	}
-	if err != nil {
+	if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
 		return err
 	}
 	w.consumed = amount
@@ -56,13 +49,7 @@ func (w *WalletFunding) Settle(delta int) error {
 		return nil
 	}
 	if delta > 0 {
-		if w.immediate {
-			return model.DecreaseUserQuotaImmediately(w.userId, delta)
-		}
 		return model.DecreaseUserQuota(w.userId, delta, false)
-	}
-	if w.immediate {
-		return model.IncreaseUserQuotaImmediately(w.userId, -delta)
 	}
 	return model.IncreaseUserQuota(w.userId, -delta, false)
 }
@@ -73,9 +60,6 @@ func (w *WalletFunding) Refund() error {
 	}
 	// IncreaseUserQuota 是 quota += N 的非幂等操作，不能重试，否则会多退额度。
 	// 订阅的 RefundSubscriptionPreConsume 有 requestId 幂等保护所以可以重试。
-	if w.immediate {
-		return model.IncreaseUserQuotaImmediately(w.userId, w.consumed)
-	}
 	return model.IncreaseUserQuota(w.userId, w.consumed, false)
 }
 
@@ -131,6 +115,89 @@ func (s *SubscriptionFunding) Refund() error {
 	return refundWithRetry(func() error {
 		return model.RefundSubscriptionPreConsume(s.requestId)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// ResolutionReservationFunding — 分辨率任务的预留账本资金来源
+// ---------------------------------------------------------------------------
+
+// ResolutionReservationFunding 通过 ResolutionBillingReservation 账本预扣费。
+// 与钱包/订阅实现不同，它在同一个事务里扣减资金来源和令牌额度，并留下一条
+// 以 requestId 为幂等键的持久记录：Task.Insert 附着该记录，插入失败时可以
+// 同步退款，两者都没发生时由轮询的孤儿清扫兜底。
+type ResolutionReservationFunding struct {
+	requestId    string
+	userId       int
+	tokenId      int
+	modelName    string
+	isPlayground bool
+	source       string
+
+	reserved       int
+	subscriptionId int
+	preConsumed    int64
+	// 以下字段在预留成功后填充，供 RelayInfo 同步使用
+	AmountTotal     int64
+	AmountUsedAfter int64
+	PlanId          int
+	PlanTitle       string
+}
+
+func (r *ResolutionReservationFunding) Source() string { return r.source }
+
+func (r *ResolutionReservationFunding) PreConsume(amount int) error {
+	result, err := model.ReserveResolutionBilling(model.ResolutionBillingReservationParams{
+		RequestId:     r.requestId,
+		UserId:        r.userId,
+		TokenId:       r.tokenId,
+		BillingSource: r.source,
+		Quota:         amount,
+		ModelName:     r.modelName,
+		IsPlayground:  r.isPlayground,
+	})
+	if err != nil {
+		return err
+	}
+	r.reserved = amount
+	r.applyReservationResult(result)
+	return nil
+}
+
+func (r *ResolutionReservationFunding) Settle(delta int) error {
+	if delta == 0 {
+		return nil
+	}
+	result, err := model.AdjustResolutionBillingReservation(r.requestId, r.reserved+delta)
+	if err != nil {
+		return err
+	}
+	r.reserved += delta
+	r.applyReservationResult(result)
+	return nil
+}
+
+func (r *ResolutionReservationFunding) Refund() error {
+	// RefundResolutionBillingReservation 以 requestId 为幂等键且完全事务化，重试安全。
+	return refundWithRetry(func() error {
+		return model.RefundResolutionBillingReservation(r.requestId, "resolution task submission failed")
+	})
+}
+
+func (r *ResolutionReservationFunding) applyReservationResult(result *model.ResolutionBillingReservationResult) {
+	if result == nil {
+		return
+	}
+	r.subscriptionId = result.SubscriptionId
+	r.preConsumed = result.PreConsumed
+	r.AmountTotal = result.AmountTotal
+	r.AmountUsedAfter = result.AmountUsedAfter
+	if r.source != BillingSourceSubscription || r.subscriptionId <= 0 || r.PlanId > 0 {
+		return
+	}
+	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(r.subscriptionId); err == nil && planInfo != nil {
+		r.PlanId = planInfo.PlanId
+		r.PlanTitle = planInfo.PlanTitle
+	}
 }
 
 // refundWithRetry 尝试多次执行退款操作以提高成功率，只能用于基于事务的退款函数！！！！！！

@@ -4,8 +4,9 @@ import "errors"
 
 // Common errors
 var (
-	ErrDatabase              = errors.New("database error")
-	ErrInsufficientUserQuota = errors.New("insufficient user quota")
+	ErrDatabase               = errors.New("database error")
+	ErrInsufficientUserQuota  = errors.New("insufficient user quota")
+	ErrInsufficientTokenQuota = errors.New("insufficient token quota")
 )
 
 // User auth errors

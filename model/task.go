@@ -410,22 +410,28 @@ func (task *Task) Insert() error {
 	if bc == nil || bc.PricingKind != TaskPricingKindVideoResolution {
 		return DB.Create(task).Error
 	}
+	// 锁序固定为 预留 → 资金/令牌 → 任务/统计，与预扣费事务保持一致。
+	// 免费任务没有可退的额度，因此允许没有预留记录。
 	requestId := strings.TrimSpace(task.PrivateData.BillingReservationRequestId)
-	if requestId == "" {
+	if requestId == "" && task.Quota != 0 {
 		return fmt.Errorf("resolution task requires a billing reservation requestId")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		reservation, err := lockResolutionBillingReservation(tx, requestId)
-		if err != nil {
-			return err
-		}
-		if reservation.Status != ResolutionReservationStatusReserved {
-			return fmt.Errorf("resolution billing reservation %q cannot attach from status %s", requestId, reservation.Status)
-		}
-		if reservation.UserId != task.UserId || reservation.TokenId != task.PrivateData.TokenId ||
-			reservation.BillingSource != task.PrivateData.BillingSource || reservation.SubscriptionId != task.PrivateData.SubscriptionId ||
-			reservation.Quota != task.Quota {
-			return fmt.Errorf("resolution billing reservation %q does not match task billing state", requestId)
+		var reservation *ResolutionBillingReservation
+		if requestId != "" {
+			var err error
+			reservation, err = lockResolutionBillingReservation(tx, requestId)
+			if err != nil {
+				return err
+			}
+			if reservation.Status != ResolutionReservationStatusReserved {
+				return fmt.Errorf("resolution billing reservation %q cannot attach from status %s", requestId, reservation.Status)
+			}
+			if reservation.UserId != task.UserId || reservation.TokenId != task.PrivateData.TokenId ||
+				reservation.BillingSource != task.PrivateData.BillingSource || reservation.SubscriptionId != task.PrivateData.SubscriptionId ||
+				reservation.Quota != task.Quota {
+				return fmt.Errorf("resolution billing reservation %q does not match task billing state", requestId)
+			}
 		}
 		if err := tx.Create(task).Error; err != nil {
 			return err
@@ -459,6 +465,9 @@ func (task *Task) Insert() error {
 					return fmt.Errorf("resolution task usage channel %d was not updated", task.ChannelId)
 				}
 			}
+		}
+		if reservation == nil {
+			return nil
 		}
 		attached := tx.Model(&ResolutionBillingReservation{}).
 			Where("id = ? AND status = ?", reservation.Id, ResolutionReservationStatusReserved).
