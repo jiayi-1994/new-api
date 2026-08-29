@@ -22,7 +22,7 @@
 - VideoResolutionPrice is validated and published independently; this feature does not add a public bulk-option API or couple writes to TaskBillingMode.
 - Public Pricing.ModelPrice is the minimum valid resolution price for legacy summary consumers, while relay billing ignores that compatibility field.
 - All Go JSON operations use common wrappers.
-- No relational schema migration is introduced; snapshot additions remain optional JSON and work on SQLite, MySQL, and PostgreSQL.
+- Snapshot additions remain optional JSON and work on SQLite, MySQL, and PostgreSQL. One new table, `ResolutionBillingReservation`, was added during Task 5 to close the charged-without-a-persisted-task hole; it is registered in `AutoMigrate` and uses only portable column types.
 - New or substantially rewritten Go tests use testify/require and testify/assert.
 - Frontend forms use FieldGroup/Field, accessible labels, functional state updates, and no new dependency.
 - Locale JSON is written only by web/scripts/add-missing-keys.mjs followed by bun run i18n:sync.
@@ -40,6 +40,8 @@
 | relay/relay_task.go | Strict selection before pre-consume and retry-safe billing. |
 | relay/channel/task/*/adaptor.go | Provider-owned effective resolution/default mapping. |
 | model/task.go and service/task_billing.go | Frozen billing snapshot, video-only settlement, and audit fields. |
+| model/resolution_billing_reservation.go | Durable pre-consume ledger: funding, token and reservation commit together; refund and orphan recovery. |
+| docs/video-resolution-pricing.md | Operator guide: which resolutions each provider can actually produce. |
 | model/pricing.go | Public resolution_prices contract. |
 | web/src/features/system-settings/models/video-resolution-pricing.ts | Shared row/map normalization and validation. |
 | web/src/features/system-settings/models/video-resolution-price-editor.tsx | Repeatable accessible row editor. |
