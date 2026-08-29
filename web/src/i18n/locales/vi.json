@@ -5252,7 +5252,8 @@
     "From": "Từ",
     "Prices shown per second": "Giá hiển thị theo mỗi giây",
     "Resolution prices are always charged per second.": "Giá theo độ phân giải luôn được tính theo giây.",
-    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "Bản đồ JSON mô hình → độ phân giải → giá USD mỗi giây. Giá theo độ phân giải luôn được tính theo giây."
+    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "Bản đồ JSON mô hình → độ phân giải → giá USD mỗi giây. Giá theo độ phân giải luôn được tính theo giây.",
+    "Fix the resolution prices before saving": "Hãy sửa giá theo độ phân giải trước khi lưu"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

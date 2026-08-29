@@ -5252,7 +5252,8 @@
     "From": "起",
     "Prices shown per second": "顯示每秒價格",
     "Resolution prices are always charged per second.": "解析度價格一律按秒計費。",
-    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "模型 → 解析度 → 每秒美元價格的 JSON 對應。解析度價格一律按秒計費。"
+    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "模型 → 解析度 → 每秒美元價格的 JSON 對應。解析度價格一律按秒計費。",
+    "Fix the resolution prices before saving": "請先修正解析度價格再儲存"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

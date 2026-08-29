@@ -58,8 +58,6 @@ export type ModelPricingSnapshot = {
   taskBillingMode?: string
   /** 按分辨率的每秒单价；存在时该模型走 video_resolution 计费 */
   resolutionPrices?: VideoResolutionPriceMap
-  /** 展示用计费单位；分辨率定价恒为 per_second，不读取 taskBillingMode */
-  displayUnit?: string
   hasConflict: boolean
 }
 
@@ -327,7 +325,6 @@ export const buildModelSnapshots = ({
         taskBillingMode: taskMode,
         resolutionPrices,
         billingMode: 'video_resolution',
-        displayUnit: TASK_BILLING_PER_SECOND,
         hasConflict: false,
       }
     }

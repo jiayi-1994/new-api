@@ -5252,7 +5252,8 @@
     "From": "最低",
     "Prices shown per second": "1秒ごとの価格を表示",
     "Resolution prices are always charged per second.": "解像度別の価格は常に1秒単位で課金されます。",
-    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "モデル → 解像度 → 1秒あたりの価格（USD）の JSON マップ。解像度別の価格は常に1秒単位で課金されます。"
+    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "モデル → 解像度 → 1秒あたりの価格（USD）の JSON マップ。解像度別の価格は常に1秒単位で課金されます。",
+    "Fix the resolution prices before saving": "保存する前に解像度別の価格を修正してください"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

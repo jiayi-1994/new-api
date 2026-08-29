@@ -72,9 +72,10 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getSystemOptions } from '@/features/system-settings/api'
 import {
-  useSystemOptions,
   getOptionValue,
+  useSystemOptions,
 } from '@/features/system-settings/hooks/use-system-options'
 import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
@@ -271,6 +272,10 @@ export function ModelMutateDrawer({
   const [resolutionRows, setResolutionRows] = useState<
     VideoResolutionPriceRow[]
   >([])
+  const resolutionValidation = useMemo(
+    () => validateVideoResolutionPriceRows(resolutionRows),
+    [resolutionRows]
+  )
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
@@ -513,6 +518,16 @@ export function ModelMutateDrawer({
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {
+      // 分辨率定价是该模式下唯一的价格来源：任何无效行都必须阻止保存，
+      // 否则会被当成「没有配置」而把该模型的整张价格表删掉。
+      if (
+        pricingMode === 'video_resolution' &&
+        (resolutionValidation.prices === null ||
+          Object.keys(resolutionValidation.prices).length === 0)
+      ) {
+        toast.error(t('Fix the resolution prices before saving'))
+        return
+      }
       setIsSubmitting(true)
       try {
         const submitData = {
@@ -545,7 +560,7 @@ export function ModelMutateDrawer({
           const finalModelName = values.model_name
           const resolutionPrices =
             pricingMode === 'video_resolution'
-              ? (validateVideoResolutionPriceRows(resolutionRows).prices ?? {})
+              ? (resolutionValidation.prices ?? {})
               : {}
           const hasRatioConfig =
             (pricingMode === 'per-request' &&
@@ -754,20 +769,37 @@ export function ModelMutateDrawer({
               })
             }
 
-            // 分辨率价格是独立选项：只在完整文档确有变化时提交一次更新，
-            // 且改名与后端事务保持一致（本地也搬迁旧键），绝不附带 TaskBillingMode
-            if (hasRatioConfig || finalModelName === loadedPricingName) {
+            // 分辨率价格是独立选项：只在完整文档确有变化时提交一次更新，绝不附带
+            // TaskBillingMode。改名时表单说了算的是旧名字，必须一并覆盖，否则后端
+            // 事务已把旧键搬到新名字下，清空操作会漏掉、旧价格会在新名字上复活。
+            const ownsResolutionPricing =
+              hasRatioConfig ||
+              finalModelName === loadedPricingName ||
+              (isEditing &&
+                oldModelName !== '' &&
+                oldModelName === loadedPricingName)
+            if (ownsResolutionPricing) {
+              // 以刚落库后的文档为基准重算：Model.Update 已在事务里搬过键，
+              // 用打开抽屉时的旧快照做全量替换会把后端的事务结果覆盖掉。
+              const freshOptions = await queryClient.fetchQuery({
+                queryKey: ['system-options'],
+                queryFn: getSystemOptions,
+                staleTime: 0,
+              })
+              const currentResolutionPrice = getOptionValue(freshOptions.data, {
+                VideoResolutionPrice: '{}',
+              }).VideoResolutionPrice
               const resolutionUpdate = buildVideoResolutionOptionUpdate({
                 oldName: isEditing ? oldModelName : '',
                 newName: finalModelName,
                 videoResolutionPrice: parseVideoResolutionPriceOption(
-                  modelSettings.VideoResolutionPrice
+                  currentResolutionPrice
                 ),
                 prices: resolutionPrices,
               })
               if (
                 normalizeJsonString(resolutionUpdate.value) !==
-                normalizeJsonString(modelSettings.VideoResolutionPrice)
+                normalizeJsonString(currentResolutionPrice)
               ) {
                 updates.push({
                   key: resolutionUpdate.key,
@@ -806,11 +838,12 @@ export function ModelMutateDrawer({
       onOpenChange,
       pricingMode,
       taskBillingMode,
-      resolutionRows,
+      resolutionValidation,
       oldModelName,
       loadedPricingName,
       modelSettings,
       updateOption,
+      t,
     ]
   )
 
@@ -1117,10 +1150,8 @@ export function ModelMutateDrawer({
               {pricingMode === 'video_resolution' ? (
                 <VideoResolutionPriceEditor
                   rows={resolutionRows}
-                  errorsByRowId={
-                    validateVideoResolutionPriceRows(resolutionRows)
-                      .errorsByRowId
-                  }
+                  errorsByRowId={resolutionValidation.errorsByRowId}
+                  disabled={isSubmitting}
                   onChange={setResolutionRows}
                 />
               ) : null}

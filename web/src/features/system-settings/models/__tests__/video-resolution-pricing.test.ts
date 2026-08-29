@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { buildModelSnapshots } from '../model-pricing-snapshots'
+import {
+  buildModelSnapshots,
+  getPriceDetail,
+  getPriceSummary,
+  isTaskPerCallBilling,
+} from '../model-pricing-snapshots'
 import {
   buildVideoResolutionOptionUpdate,
   parseVideoResolutionPriceOption,
@@ -165,7 +170,16 @@ describe('model pricing snapshots', () => {
     })
 
     assert.equal(snapshots[0].billingMode, 'video_resolution')
-    assert.equal(snapshots[0].displayUnit, 'per_second')
+    // 管理端摘要必须按秒展示，不能被过期的 per_call 影响
+    assert.equal(isTaskPerCallBilling(snapshots[0]), false)
+    assert.match(
+      getPriceSummary(snapshots[0], (key) => key),
+      /\/ second$/
+    )
+    assert.match(
+      getPriceDetail(snapshots[0], (key) => key),
+      /Prices shown per second/
+    )
   })
 
   test('expression pricing still wins over resolution pricing', () => {

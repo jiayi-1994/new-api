@@ -121,12 +121,18 @@ describe('resolution price formatting', () => {
       group_ratio: { default: 1 },
     })
 
-    const usd = formatFixedPrice(model, 'default', false, 1, 1, { default: 1 })
-    const converted = formatFixedPrice(model, 'default', true, 2, 1, {
-      default: 1,
-    })
-
-    assert.notEqual(usd, converted)
+    // 充值汇率换算的基准必须是最低档 0.1，而不是 model_price 或最高档
+    assert.equal(
+      formatFixedPrice(model, 'default', true, 2, 1, { default: 1 }),
+      formatFixedPrice(
+        pricingModel({ model_price: 0.2, group_ratio: { default: 1 } }),
+        'default',
+        false,
+        1,
+        1,
+        { default: 1 }
+      )
+    )
   })
 
   test('falls back to the legacy model_price when no resolution price is valid', () => {

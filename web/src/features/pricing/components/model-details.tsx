@@ -708,43 +708,45 @@ function PriceSection(props: {
     )
   }
 
-  if (isResolutionPricedModel(props.model)) {
-    return (
-      <section>
-        <SectionTitle>{t('Resolution prices')}</SectionTitle>
-        <div className='space-y-1'>
-          {getResolutionPriceEntries(props.model).map(([resolution, price]) => (
-            <div
-              key={resolution}
-              className='flex items-baseline justify-between'
-            >
-              <span className='text-muted-foreground text-sm'>
-                {resolution}
-              </span>
-              <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
-                {formatFixedPrice(
-                  {
-                    ...props.model,
-                    resolution_prices: { [resolution]: price },
-                  },
-                  baseGroupKey,
-                  props.showRechargePrice,
-                  props.priceRate,
-                  props.usdExchangeRate,
-                  baseGroupRatioMap
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
-        <p className='text-muted-foreground mt-2 text-xs'>
-          {t('Prices shown per second')}
-        </p>
-      </section>
-    )
-  }
-
   if (!isTokenBased) {
+    if (isResolutionPricedModel(props.model)) {
+      return (
+        <section>
+          <SectionTitle>{t('Resolution prices')}</SectionTitle>
+          <div className='space-y-1'>
+            {getResolutionPriceEntries(props.model).map(
+              ([resolution, price]) => (
+                <div
+                  key={resolution}
+                  className='flex items-baseline justify-between'
+                >
+                  <span className='text-muted-foreground text-sm'>
+                    {resolution}
+                  </span>
+                  <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
+                    {formatFixedPrice(
+                      {
+                        ...props.model,
+                        resolution_prices: { [resolution]: price },
+                      },
+                      baseGroupKey,
+                      props.showRechargePrice,
+                      props.priceRate,
+                      props.usdExchangeRate,
+                      baseGroupRatioMap
+                    )}
+                  </span>
+                </div>
+              )
+            )}
+          </div>
+          <p className='text-muted-foreground mt-2 text-xs'>
+            {t('Prices shown per second')}
+          </p>
+        </section>
+      )
+    }
+
     return (
       <section>
         <SectionTitle>{t('Base Price')}</SectionTitle>

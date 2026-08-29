@@ -768,6 +768,7 @@ export const ModelPricingEditorPanel = forwardRef<
                     <VideoResolutionPriceEditor
                       rows={resolutionRows}
                       errorsByRowId={resolutionValidation.errorsByRowId}
+                      disabled={isSaving}
                       onChange={setResolutionRows}
                     />
                   </TabsContent>

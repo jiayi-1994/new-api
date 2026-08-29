@@ -92,10 +92,13 @@ export function VideoResolutionPriceEditor(
         </FieldDescription>
       ) : null}
 
-      {props.rows.map((row) => {
+      {props.rows.map((row, index) => {
         const errors = props.errorsByRowId[row.id]
-        const resolutionLabel = `${t('Resolution')} ${row.id}`
+        // row.id 是稳定身份而非位置，删行后会跳号，所以朗读用的序号取索引
+        const resolutionLabel = `${t('Resolution')} ${index + 1}`
         const priceLabel = `${t('USD price per second')}: ${row.resolution || resolutionLabel}`
+        const resolutionErrorId = `video-resolution-${row.id}-error`
+        const priceErrorId = `video-resolution-price-${row.id}-error`
         return (
           <div
             key={row.id}
@@ -112,12 +115,15 @@ export function VideoResolutionPriceEditor(
                 disabled={props.disabled}
                 aria-invalid={Boolean(errors?.resolution)}
                 aria-label={resolutionLabel}
+                aria-describedby={
+                  errors?.resolution ? resolutionErrorId : undefined
+                }
                 onChange={(event) =>
                   updateRow(row.id, 'resolution', event.target.value)
                 }
               />
               {errors?.resolution ? (
-                <FieldError>
+                <FieldError id={resolutionErrorId}>
                   {t(resolutionErrorKey[errors.resolution])}
                 </FieldError>
               ) : null}
@@ -137,6 +143,7 @@ export function VideoResolutionPriceEditor(
                   disabled={props.disabled}
                   aria-invalid={Boolean(errors?.price)}
                   aria-label={priceLabel}
+                  aria-describedby={errors?.price ? priceErrorId : undefined}
                   onChange={(event) =>
                     updateRow(row.id, 'price', event.target.value)
                   }
@@ -146,7 +153,9 @@ export function VideoResolutionPriceEditor(
                 </InputGroupAddon>
               </InputGroup>
               {errors?.price ? (
-                <FieldError>{t(priceErrorKey[errors.price])}</FieldError>
+                <FieldError id={priceErrorId}>
+                  {t(priceErrorKey[errors.price])}
+                </FieldError>
               ) : null}
             </Field>
 

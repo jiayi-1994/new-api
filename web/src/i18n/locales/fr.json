@@ -5252,7 +5252,8 @@
     "From": "À partir de",
     "Prices shown per second": "Prix affichés par seconde",
     "Resolution prices are always charged per second.": "Les prix par résolution sont toujours facturés à la seconde.",
-    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "Carte JSON modèle → résolution → prix par seconde en USD. Les prix par résolution sont toujours facturés à la seconde."
+    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "Carte JSON modèle → résolution → prix par seconde en USD. Les prix par résolution sont toujours facturés à la seconde.",
+    "Fix the resolution prices before saving": "Corrigez les prix par résolution avant d’enregistrer"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

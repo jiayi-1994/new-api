@@ -770,6 +770,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
                     count: modeCounts['per-request'],
                   },
                   {
+                    label: 'Video resolution',
+                    value: 'video_resolution',
+                    count: modeCounts.video_resolution,
+                  },
+                  {
                     label: 'Expression',
                     value: 'tiered_expr',
                     count: modeCounts.tiered_expr,

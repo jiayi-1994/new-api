@@ -5252,7 +5252,8 @@
     "From": "From",
     "Prices shown per second": "Prices shown per second",
     "Resolution prices are always charged per second.": "Resolution prices are always charged per second.",
-    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second."
+    "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.": "JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.",
+    "Fix the resolution prices before saving": "Fix the resolution prices before saving"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
