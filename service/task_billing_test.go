@@ -1286,7 +1286,7 @@ func TestSweepOrphanedResolutionReservationsRecordsARefundLog(t *testing.T) {
 	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	require.Nil(t, PreConsumeBilling(c, quota, info))
-	expired := time.Now().Add(-resolutionReservationOrphanGrace - time.Minute).Unix()
+	expired := time.Now().Add(-resolutionReservationOrphanGrace() - time.Minute).Unix()
 	require.NoError(t, model.DB.Model(&model.ResolutionBillingReservation{}).
 		Where("request_id = ?", info.RequestId).
 		Updates(map[string]any{"created_at": expired, "updated_at": expired}).Error)
@@ -1383,7 +1383,7 @@ func TestSweepOrphanedResolutionReservationsOnlyRefundsAfterGracePeriod(t *testi
 	require.Nil(t, PreConsumeBilling(c, quota, fresh))
 	require.Nil(t, PreConsumeBilling(c, quota, stale))
 
-	expired := time.Now().Add(-resolutionReservationOrphanGrace - time.Minute).Unix()
+	expired := time.Now().Add(-resolutionReservationOrphanGrace() - time.Minute).Unix()
 	require.NoError(t, model.DB.Model(&model.ResolutionBillingReservation{}).
 		Where("request_id = ?", stale.RequestId).
 		Updates(map[string]any{"created_at": expired, "updated_at": expired}).Error)

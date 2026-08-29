@@ -89,11 +89,37 @@ That sweep infers "the request is dead" from the row's age, so the submit
 itself must have a bound — otherwise a request still waiting on a slow upstream
 would be refunded while it is alive, and the task it later creates would be
 untracked. `RELAY_TIMEOUT` defaults to `0` (no timeout), so resolution-priced
-submissions are capped separately at `constant.TaskSubmitTimeout` (5 minutes),
-well under the grace period. If you change either constant, keep the submit
-bound clearly below the grace.
+submissions are bounded separately by **`TASK_SUBMIT_TIMEOUT`** (seconds,
+default `300`). The orphan grace is derived from it — `TASK_SUBMIT_TIMEOUT + 10
+minutes`, never below 15 minutes — so the two cannot drift apart.
 
-Watch for these in the logs; both mean a charge needed manual attention:
+### The unavoidable trade-off
+
+A submit timeout is **ambiguous**: the upstream may have accepted the task and
+will bill us for it, but we never got the task id, so we refund the user and
+have no local record. The provider charges us; the user pays nothing.
+
+No timeout value removes this — it only moves it:
+
+- **Shorter** bound: we give up sooner on a slow-but-healthy upstream, so this
+  happens more often.
+- **Longer** bound: fewer false give-ups, but a genuinely stuck submit holds the
+  user's pre-consumed quota longer before the sweep releases it.
+
+Raise `TASK_SUBMIT_TIMEOUT` if your providers are slow to acknowledge
+submissions. Task submit endpoints normally return a task id in seconds, so the
+300 s default is already ~10× headroom; treat a timeout as a real upstream
+fault, not as normal slowness.
+
+Every ambiguous timeout is logged for reconciliation:
+
+```
+resolution task submit timed out after 5m0s; upstream may have accepted and
+billed us (request_id=... model=... upstream_model=... channel=...) —
+reconcile against the provider console
+```
+
+Also watch for these; both mean a charge needed manual attention:
 
 - `orphaned resolution reservation ... could not be refunded`
 - `resolution reservation ... refunded funding but its token ... no longer exists`

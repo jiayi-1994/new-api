@@ -198,6 +198,9 @@ func initConstantEnv() {
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
+	// 提交上界（秒）。RELAY_TIMEOUT 默认 0（不限）挡不住卡死的提交，而孤儿清扫
+	// 靠记录年龄推断请求已死，因此提交必须单独设界；清扫宽限期由 setter 同步推后。
+	constant.SetTaskSubmitTimeout(time.Duration(GetEnvOrDefault("TASK_SUBMIT_TIMEOUT", 300)) * time.Second)
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {

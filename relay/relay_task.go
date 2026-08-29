@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
@@ -291,6 +293,15 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		// 提交超时是歧义结果：上游可能已经接受并会向我们计费，但我们拿不到 task id，
+		// 于是会退还用户的预扣额度。这笔差额只能靠人工对账，必须留下可检索的痕迹。
+		var netErr net.Error
+		if resolutionPricing && errors.As(err, &netErr) && netErr.Timeout() {
+			logger.LogError(c, fmt.Sprintf(
+				"resolution task submit timed out after %s; upstream may have accepted and billed us "+
+					"(request_id=%s model=%s upstream_model=%s channel=%d) — reconcile against the provider console",
+				constant.TaskSubmitTimeout, info.RequestId, info.OriginModelName, info.UpstreamModelName, info.ChannelId))
+		}
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	// 任一 2xx 都视为提交成功：异步创建接口常返回 201/202（此时任务已在上游

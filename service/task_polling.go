@@ -38,15 +38,17 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
-// resolutionReservationOrphanGrace 是预留记录从创建到被 Task.Insert 附着的宽限期。
-// 它与 constant.TaskSubmitTimeout 成对：提交有确定上界，年龄才能作为「请求已死」
-// 的证据。改动其中一个必须同时检查另一个。
-const resolutionReservationOrphanGrace = constant.TaskReservationOrphanGrace
+// resolutionReservationOrphanGrace 返回预留从创建到被 Task.Insert 附着的宽限期。
+// 它与 constant.TaskSubmitTimeout 成对由 constant.SetTaskSubmitTimeout 维护：
+// 提交有确定上界，年龄才能作为「请求已死」的证据。运行时读取，便于配置生效。
+func resolutionReservationOrphanGrace() time.Duration {
+	return constant.TaskReservationOrphanGrace
+}
 
 // sweepOrphanedResolutionReservations 兜底退还没有附着到任务的分辨率预留。
 // 上游提交成功但任务落库失败、且控制器的同步退款也失败时，额度只能靠这里归还。
 func sweepOrphanedResolutionReservations(ctx context.Context) {
-	cutoff := time.Now().Add(-resolutionReservationOrphanGrace).Unix()
+	cutoff := time.Now().Add(-resolutionReservationOrphanGrace()).Unix()
 	refunds, err := model.RefundOrphanedResolutionBillingReservations(cutoff, 100)
 	if err != nil {
 		logger.LogError(ctx, "sweepOrphanedResolutionReservations: "+err.Error())
