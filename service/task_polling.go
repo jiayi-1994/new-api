@@ -39,8 +39,9 @@ type TaskPollingAdaptor interface {
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
 // resolutionReservationOrphanGrace 是预留记录从创建到被 Task.Insert 附着的宽限期。
-// 必须长于一次上游任务提交的最坏耗时，否则会退掉仍在提交中的请求。
-const resolutionReservationOrphanGrace = 15 * time.Minute
+// 它与 constant.TaskSubmitTimeout 成对：提交有确定上界，年龄才能作为「请求已死」
+// 的证据。改动其中一个必须同时检查另一个。
+const resolutionReservationOrphanGrace = constant.TaskReservationOrphanGrace
 
 // sweepOrphanedResolutionReservations 兜底退还没有附着到任务的分辨率预留。
 // 上游提交成功但任务落库失败、且控制器的同步退款也失败时，额度只能靠这里归还。

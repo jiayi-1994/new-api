@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -141,6 +143,21 @@ func (taskSubmitTestBilling) NeedsRefund() bool        { return false }
 func (taskSubmitTestBilling) GetPreConsumedQuota() int { return 0 }
 func (taskSubmitTestBilling) Reserve(int) error        { return nil }
 
+// taskSubmitRejectingBilling 模拟重试时补扣失败（例如钱包余额不够补差价）
+type taskSubmitRejectingBilling struct {
+	taskSubmitTestBilling
+	reserveTargets []int
+}
+
+func (b *taskSubmitRejectingBilling) Reserve(target int) error {
+	b.reserveTargets = append(b.reserveTargets, target)
+	return relaytypes.NewErrorWithStatusCode(
+		errors.New("insufficient user quota"),
+		relaytypes.ErrorCodeInsufficientUserQuota,
+		http.StatusForbidden,
+	)
+}
+
 type taskSubmitTestState struct {
 	preConsumeCalls int
 }
@@ -192,6 +209,28 @@ func taskSubmitVideoTestContext(
 		},
 	}
 	return c, info, deps, state
+}
+
+func TestRelayTaskSubmitToppingUpFailsBeforeReachingUpstream(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 8}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"1080p":0.5}}`))
+	// 模拟重试：会话已存在（首次尝试已预扣），这次解析出更贵的额度需要补扣
+	billing := &taskSubmitRejectingBilling{}
+	info.Billing = billing
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.NotNil(t, taskErr)
+	assert.Nil(t, result)
+	assert.Equal(t, http.StatusForbidden, taskErr.StatusCode)
+	// 补扣发生在提交之前：上游没有被调用，也就不会留下无法追踪的孤儿任务
+	assert.False(t, base.didBuildRequest)
+	assert.False(t, base.didRequest)
+	assert.Zero(t, base.requestCalls)
+	// 已经存在会话时不会重复预扣
+	assert.Zero(t, state.preConsumeCalls)
+	assert.Equal(t, []int{2000}, billing.reserveTargets)
 }
 
 func TestRelayTaskSubmitUsesOriginalModelForResolutionPrice(t *testing.T) {

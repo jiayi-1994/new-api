@@ -18,6 +18,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -268,6 +269,16 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 		info.ForcePreConsume = true
 		if taskErr := deps.preConsume(c, info.PriceData.Quota, info); taskErr != nil {
 			return nil, taskErr
+		}
+	} else if info.Billing != nil && !info.PriceData.FreeModel {
+		// 重试可能换到更贵的渠道或分辨率。补扣必须在提交给上游之前完成：一旦上游
+		// 接受了任务，再发现钱不够就只剩「少收」和「用户白嫖且任务无记录」两条路。
+		if err := info.Billing.Reserve(info.PriceData.Quota); err != nil {
+			var apiErr *relaytypes.NewAPIError
+			if errors.As(err, &apiErr) {
+				return nil, service.TaskErrorFromAPIError(apiErr)
+			}
+			return nil, service.TaskErrorWrapperLocal(err, "pre_consume_failed", http.StatusForbidden)
 		}
 	}
 

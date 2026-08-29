@@ -170,7 +170,8 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	// 预留账本在单个事务里同时补扣资金来源和令牌额度，没有需要单独回滚的中间态
 	if reservation, ok := s.funding.(*ResolutionReservationFunding); ok {
 		if err := reservation.Settle(delta); err != nil {
-			return err
+			// 必须映射成额度不足类错误：调用方据此在提交上游之前返回 403
+			return preConsumeFundingError(err)
 		}
 		s.preConsumedQuota += delta
 		s.syncRelayInfo()

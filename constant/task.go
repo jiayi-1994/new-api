@@ -1,5 +1,18 @@
 package constant
 
+import "time"
+
+// 分辨率任务的预扣款由孤儿清扫兜底，而清扫是用「记录年龄」推断「请求已经死了」。
+// 这个推断只有在提交请求本身有确定上界时才成立：RELAY_TIMEOUT 默认为 0，即上游
+// 请求可以无限期阻塞，此时一个仍然活着的提交会被误判成孤儿而退款，随后上游接受
+// 任务，就留下一个扣不到费、也查不到的孤儿任务。
+//
+// 因此这两个值必须成对维护：提交上界要显著小于清扫宽限期。
+const (
+	TaskSubmitTimeout          time.Duration = 5 * time.Minute
+	TaskReservationOrphanGrace time.Duration = 15 * time.Minute
+)
+
 type TaskPlatform string
 
 const (

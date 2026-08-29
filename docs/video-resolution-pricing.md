@@ -79,6 +79,25 @@ These are separate from pricing — no configuration re-enables them:
   channel and still ship default model ratios, but the video path only supports
   the Veo 3.1 models listed above, so they return 400.
 
+## Timeouts and stuck charges
+
+A resolution task reserves quota before it submits upstream. If the process
+dies between the reservation and the task row, a sweep in the polling loop
+refunds the reservation after `TaskReservationOrphanGrace` (15 minutes).
+
+That sweep infers "the request is dead" from the row's age, so the submit
+itself must have a bound — otherwise a request still waiting on a slow upstream
+would be refunded while it is alive, and the task it later creates would be
+untracked. `RELAY_TIMEOUT` defaults to `0` (no timeout), so resolution-priced
+submissions are capped separately at `constant.TaskSubmitTimeout` (5 minutes),
+well under the grace period. If you change either constant, keep the submit
+bound clearly below the grace.
+
+Watch for these in the logs; both mean a charge needed manual attention:
+
+- `orphaned resolution reservation ... could not be refunded`
+- `resolution reservation ... refunded funding but its token ... no longer exists`
+
 ## Upgrade checklist
 
 1. List the video models your channels actually serve.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	taskconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -508,6 +509,16 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 				}
 			}()
 		}
+	}
+
+	// 分辨率任务的预留必须有确定的提交上界，否则一个无限期阻塞的提交会被孤儿清扫
+	// 误退（RELAY_TIMEOUT 默认 0，即不设超时）。复制客户端只覆盖超时，连接池不变。
+	if info != nil && info.TaskRelayInfo != nil && info.TaskRelayInfo.ResolvedVideoBilling != nil {
+		bounded := *client
+		if bounded.Timeout == 0 || bounded.Timeout > taskconstant.TaskSubmitTimeout {
+			bounded.Timeout = taskconstant.TaskSubmitTimeout
+		}
+		client = &bounded
 	}
 
 	resp, err := client.Do(req)
