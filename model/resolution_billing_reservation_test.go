@@ -13,6 +13,12 @@ import (
 	"gorm.io/gorm"
 )
 
+func refundResolutionReservationForTest(t *testing.T, requestId, reason string) error {
+	t.Helper()
+	_, err := RefundResolutionBillingReservation(requestId, reason)
+	return err
+}
+
 func seedResolutionReservationUserAndToken(t *testing.T, userID, tokenID, userQuota, tokenQuota int, unlimited bool) {
 	t.Helper()
 	require.NoError(t, DB.Create(&User{Id: userID, Username: "reservation-user", Password: "password", Status: common.UserStatusEnabled, Quota: userQuota}).Error)
@@ -148,12 +154,14 @@ func TestResolutionReservationRejectsConcurrentWalletOverdraft(t *testing.T) {
 	assert.Len(t, records, 1)
 }
 
-func TestResolutionReservationRollsBackWhenCacheInvalidationFails(t *testing.T) {
+func TestResolutionReservationCommitsWhenCacheInvalidationFails(t *testing.T) {
 	truncateTables(t)
 	server := useUserCacheMiniRedis(t)
 	seedResolutionReservationUserAndToken(t, 9607, 9607, 1_000, 1_000, false)
 	server.Close()
 
+	// 缓存失效在事务提交后执行且只记录告警：一次 Redis 抖动不能回滚一笔已经算对的扣费，
+	// 否则用户会拿到 500 而上游可能已经产生费用。
 	_, err := ReserveResolutionBilling(ResolutionBillingReservationParams{
 		RequestId:     "resolution-cache-failure",
 		UserId:        9607,
@@ -161,18 +169,45 @@ func TestResolutionReservationRollsBackWhenCacheInvalidationFails(t *testing.T) 
 		BillingSource: ResolutionReservationSourceWallet,
 		Quota:         80,
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	var user User
 	require.NoError(t, DB.First(&user, 9607).Error)
-	assert.Equal(t, 1_000, user.Quota)
+	assert.Equal(t, 920, user.Quota)
 	var token Token
 	require.NoError(t, DB.First(&token, 9607).Error)
-	assert.Equal(t, 1_000, token.RemainQuota)
-	assert.Zero(t, token.UsedQuota)
-	var count int64
-	require.NoError(t, DB.Model(&ResolutionBillingReservation{}).Count(&count).Error)
-	assert.Zero(t, count)
+	assert.Equal(t, 920, token.RemainQuota)
+	assert.Equal(t, 80, token.UsedQuota)
+	var reservation ResolutionBillingReservation
+	require.NoError(t, DB.Where("request_id = ?", "resolution-cache-failure").First(&reservation).Error)
+	assert.Equal(t, ResolutionReservationStatusReserved, reservation.Status)
+}
+
+func TestResolutionReservationRefundSurvivesADeletedToken(t *testing.T) {
+	truncateTables(t)
+	seedResolutionReservationUserAndToken(t, 9608, 9608, 1_000, 1_000, false)
+	params := ResolutionBillingReservationParams{
+		RequestId:     "resolution-deleted-token",
+		UserId:        9608,
+		TokenId:       9608,
+		BillingSource: ResolutionReservationSourceWallet,
+		Quota:         80,
+	}
+	_, err := ReserveResolutionBilling(params)
+	require.NoError(t, err)
+	// 用户在退款前把这把 key 删了/轮换了；资金必须照退，不能被永久卡住
+	require.NoError(t, DB.Delete(&Token{}, 9608).Error)
+
+	quota, err := RefundResolutionBillingReservation(params.RequestId, "task insert failed")
+
+	require.NoError(t, err)
+	assert.Equal(t, 80, quota)
+	var user User
+	require.NoError(t, DB.First(&user, 9608).Error)
+	assert.Equal(t, 1_000, user.Quota)
+	var reservation ResolutionBillingReservation
+	require.NoError(t, DB.Where("request_id = ?", params.RequestId).First(&reservation).Error)
+	assert.Equal(t, ResolutionReservationStatusRefunded, reservation.Status)
 }
 
 func TestResolutionReservationRefundFailureIsAuditedAndRetryIsIdempotent(t *testing.T) {
@@ -200,7 +235,8 @@ func TestResolutionReservationRefundFailureIsAuditedAndRetryIsIdempotent(t *test
 			require.NoError(t, DB.Callback().Update().Remove(callbackName))
 		}
 	})
-	require.Error(t, RefundResolutionBillingReservation(params.RequestId, "task insert failed"))
+	refundErr := refundResolutionReservationForTest(t, params.RequestId, "task insert failed")
+	require.Error(t, refundErr)
 	var failed ResolutionBillingReservation
 	require.NoError(t, DB.Where("request_id = ?", params.RequestId).First(&failed).Error)
 	assert.Equal(t, ResolutionReservationStatusReserved, failed.Status)
@@ -209,8 +245,13 @@ func TestResolutionReservationRefundFailureIsAuditedAndRetryIsIdempotent(t *test
 
 	require.NoError(t, DB.Callback().Update().Remove(callbackName))
 	callbackRegistered = false
-	require.NoError(t, RefundResolutionBillingReservation(params.RequestId, "task insert failed"))
-	require.NoError(t, RefundResolutionBillingReservation(params.RequestId, "duplicate retry"))
+	quota, err := RefundResolutionBillingReservation(params.RequestId, "task insert failed")
+	require.NoError(t, err)
+	assert.Equal(t, 80, quota)
+	// 幂等重试不再报告退款额度，调用方据此避免重复记账
+	duplicateQuota, err := RefundResolutionBillingReservation(params.RequestId, "duplicate retry")
+	require.NoError(t, err)
+	assert.Zero(t, duplicateQuota)
 	var refunded ResolutionBillingReservation
 	require.NoError(t, DB.Where("request_id = ?", params.RequestId).First(&refunded).Error)
 	assert.Equal(t, ResolutionReservationStatusRefunded, refunded.Status)
@@ -245,9 +286,9 @@ func TestResolutionReservationAttachPreventsOrphanRefund(t *testing.T) {
 		},
 	}
 	require.NoError(t, task.Insert())
-	refunded, err := RefundOrphanedResolutionBillingReservations(time.Now().Add(time.Hour).Unix(), 10)
+	refunds, err := RefundOrphanedResolutionBillingReservations(time.Now().Add(time.Hour).Unix(), 10)
 	require.NoError(t, err)
-	assert.Zero(t, refunded)
+	assert.Empty(t, refunds)
 	var reservation ResolutionBillingReservation
 	require.NoError(t, DB.Where("request_id = ?", params.RequestId).First(&reservation).Error)
 	assert.Equal(t, ResolutionReservationStatusAttached, reservation.Status)
@@ -275,9 +316,11 @@ func TestResolutionReservationOrphanSweepRefundsOnlyExpiredUnattachedRows(t *tes
 		"updated_at": old,
 	}).Error)
 
-	refunded, err := RefundOrphanedResolutionBillingReservations(time.Now().Add(-time.Hour).Unix(), 10)
+	refunds, err := RefundOrphanedResolutionBillingReservations(time.Now().Add(-time.Hour).Unix(), 10)
 	require.NoError(t, err)
-	assert.Equal(t, 1, refunded)
+	require.Len(t, refunds, 1)
+	assert.Equal(t, 80, refunds[0].Quota)
+	assert.Equal(t, params.RequestId, refunds[0].Reservation.RequestId)
 	var user User
 	require.NoError(t, DB.First(&user, 9605).Error)
 	assert.Equal(t, 1_000, user.Quota)

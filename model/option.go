@@ -209,7 +209,7 @@ var publishVideoResolutionPriceOption = func(value string) error {
 func loadOptionsFromDatabase() {
 	videoResolutionPriceOptionMu.Lock()
 	var priceOption Option
-	priceResult := DB.Where("key = ?", ratio_setting.VideoResolutionPriceOptionKey).Find(&priceOption)
+	priceResult := DB.Where(commonKeyCol+" = ?", ratio_setting.VideoResolutionPriceOptionKey).Find(&priceOption)
 	if priceResult.Error != nil {
 		common.SysLog("failed to load video resolution prices from database: " + priceResult.Error.Error())
 	} else if priceResult.RowsAffected > 0 {

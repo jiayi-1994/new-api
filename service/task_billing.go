@@ -112,12 +112,15 @@ func PersistSubmittedTask(c *gin.Context, task *model.Task) error {
 	if requestId == "" {
 		return insertErr
 	}
-	if refundErr := model.RefundResolutionBillingReservation(requestId, "task insert failed: "+insertErr.Error()); refundErr != nil {
+	refundedQuota, refundErr := model.RefundResolutionBillingReservation(requestId, "task insert failed: "+insertErr.Error())
+	if refundErr != nil {
 		logger.LogError(c, fmt.Sprintf("退还分辨率预留失败 (request_id=%s): %s", requestId, refundErr.Error()))
 		return insertErr
 	}
 	logger.LogWarn(c, fmt.Sprintf("任务落库失败，已退还分辨率预留 (request_id=%s)", requestId))
-	if task.Quota > 0 {
+	// 记账金额取自预留实际退还的额度，而不是任务上的额度：结算失败时两者会不同，
+	// 而并发路径已经退过时 refundedQuota 为 0，不能再记一条重复的退款日志。
+	if refundedQuota > 0 {
 		other := taskBillingOther(task)
 		other["reason"] = "task insert failed"
 		model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
@@ -126,7 +129,7 @@ func PersistSubmittedTask(c *gin.Context, task *model.Task) error {
 			Content:   "任务提交后落库失败，已退还预扣费",
 			ChannelId: task.ChannelId,
 			ModelName: taskModelName(task),
-			Quota:     task.Quota,
+			Quota:     refundedQuota,
 			TokenId:   task.PrivateData.TokenId,
 			Group:     task.Group,
 			Other:     other,

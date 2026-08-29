@@ -577,8 +577,16 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
+		// 上游已接受，响应也已写出。结算失败时只能按「实际收到的钱」落库：
+		// 重试换渠道可能让最终额度高于预扣额度，若仍用未成功入账的额度建任务，
+		// Task.Insert 的一致性校验会拒绝，最终变成用户免费拿到一个查不到的任务。
+		chargedQuota := result.Quota
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
+			if relayInfo.Billing != nil {
+				chargedQuota = relayInfo.Billing.GetPreConsumedQuota()
+				logger.LogError(c, fmt.Sprintf("结算失败，任务按已预扣额度记账 (charged=%d, computed=%d)", chargedQuota, result.Quota))
+			}
 		}
 		service.LogTaskConsumption(c, relayInfo)
 
@@ -592,7 +600,7 @@ func RelayTask(c *gin.Context) {
 		if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
 			task.PrivateData.BillingReservationRequestId = relayInfo.RequestId
 		}
-		task.Quota = result.Quota
+		task.Quota = chargedQuota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
 		if insertErr := service.PersistSubmittedTask(c, task); insertErr != nil {

@@ -179,7 +179,8 @@ func (r *ResolutionReservationFunding) Settle(delta int) error {
 func (r *ResolutionReservationFunding) Refund() error {
 	// RefundResolutionBillingReservation 以 requestId 为幂等键且完全事务化，重试安全。
 	return refundWithRetry(func() error {
-		return model.RefundResolutionBillingReservation(r.requestId, "resolution task submission failed")
+		_, err := model.RefundResolutionBillingReservation(r.requestId, "resolution task submission failed")
+		return err
 	})
 }
 

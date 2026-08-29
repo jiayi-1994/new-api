@@ -49,6 +49,11 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	// 预扣费只在首次尝试时执行，所以 PreConsumeBilling 的饱和拦截拦不住「重试换渠道后
+	// 才发生饱和」。这里必须再判一次，否则会把预留一路调到 int32 上限。
+	if relayInfo.Billing != nil && relayInfo.QuotaClamp != nil {
+		return fmt.Errorf("quota saturation detected after pre-consume: %v", relayInfo.QuotaClamp)
+	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed

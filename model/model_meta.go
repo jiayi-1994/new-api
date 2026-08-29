@@ -174,7 +174,7 @@ func DeleteModelMetaByID(id int) error {
 
 func loadVideoResolutionPriceOptionForLifecycle(tx *gorm.DB) (Option, map[string]map[string]float64, error) {
 	option := Option{Key: ratio_setting.VideoResolutionPriceOptionKey}
-	result := lockForUpdate(tx).Where("key = ?", option.Key).Find(&option)
+	result := lockForUpdate(tx).Where(commonKeyCol+" = ?", option.Key).Find(&option)
 	if result.Error != nil {
 		return Option{}, nil, result.Error
 	}

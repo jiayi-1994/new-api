@@ -80,6 +80,7 @@ func ReserveResolutionBilling(params ResolutionBillingReservationParams) (*Resol
 	}
 	now := GetDBTimestamp()
 	var result *ResolutionBillingReservationResult
+	var cacheTargets resolutionCacheTargets
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		reservation := ResolutionBillingReservation{
 			RequestId: params.RequestId, UserId: params.UserId, TokenId: params.TokenId,
@@ -134,8 +135,10 @@ func ReserveResolutionBilling(params ResolutionBillingReservationParams) (*Resol
 				return err
 			}
 		}
-		if err := invalidateResolutionBillingCaches(tx, params.UserId, params.TokenId, params.IsPlayground); err != nil {
-			return err
+		var cacheErr error
+		cacheTargets, cacheErr = resolutionCacheTargetsTx(tx, params.UserId, params.TokenId, params.IsPlayground)
+		if cacheErr != nil {
+			return cacheErr
 		}
 		if subscriptionResult == nil {
 			result = &ResolutionBillingReservationResult{}
@@ -150,6 +153,9 @@ func ReserveResolutionBilling(params ResolutionBillingReservationParams) (*Resol
 		}
 		return nil
 	})
+	if err == nil {
+		cacheTargets.invalidate()
+	}
 	return result, err
 }
 
@@ -254,21 +260,45 @@ func adjustResolutionTokenTx(tx *gorm.DB, tokenId, userId, quota int) error {
 	}).Error
 }
 
-func invalidateResolutionBillingCaches(tx *gorm.DB, userId, tokenId int, isPlayground bool) error {
-	if !common.RedisEnabled {
-		return nil
+// resolutionCacheTargets 记录事务提交后需要失效的缓存目标。
+// 缓存失效必须在提交之后做：Redis 调用是网络往返，放在事务里会让 FOR UPDATE 行锁
+// 一直握到 Redis 返回，而且一次 Redis 抖动就会回滚一笔已经算对的扣费/退款。
+type resolutionCacheTargets struct {
+	userId   int
+	tokenKey string
+}
+
+func resolutionCacheTargetsTx(tx *gorm.DB, userId, tokenId int, isPlayground bool) (resolutionCacheTargets, error) {
+	targets := resolutionCacheTargets{userId: userId}
+	if !common.RedisEnabled || isPlayground || tokenId <= 0 {
+		return targets, nil
 	}
-	if err := invalidateUserCache(userId); err != nil {
-		return err
-	}
-	if isPlayground {
-		return nil
-	}
+	// 令牌可能已被软删除；缓存键仍需清理，且缺失绝不能让账本事务失败
 	var token Token
-	if err := tx.Select("key").Where("id = ?", tokenId).First(&token).Error; err != nil {
-		return err
+	err := tx.Unscoped().Select("key").Where("id = ?", tokenId).First(&token).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return targets, nil
 	}
-	return cacheDeleteToken(token.Key)
+	if err != nil {
+		return targets, err
+	}
+	targets.tokenKey = token.Key
+	return targets, nil
+}
+
+func (t resolutionCacheTargets) invalidate() {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := invalidateUserCache(t.userId); err != nil {
+		common.SysError(fmt.Sprintf("failed to invalidate user cache after resolution billing (user=%d): %v", t.userId, err))
+	}
+	if t.tokenKey == "" {
+		return
+	}
+	if err := cacheDeleteToken(t.tokenKey); err != nil {
+		common.SysError(fmt.Sprintf("failed to invalidate token cache after resolution billing (user=%d): %v", t.userId, err))
+	}
 }
 
 // AdjustResolutionBillingReservation atomically changes an unattached
@@ -279,6 +309,7 @@ func AdjustResolutionBillingReservation(requestId string, targetQuota int) (*Res
 		return nil, errors.New("invalid resolution billing reservation adjustment")
 	}
 	var result *ResolutionBillingReservationResult
+	var cacheTargets resolutionCacheTargets
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		reservation, err := lockResolutionBillingReservation(tx, requestId)
 		if err != nil {
@@ -318,12 +349,16 @@ func AdjustResolutionBillingReservation(requestId string, targetQuota int) (*Res
 			return err
 		}
 		reservation.Quota = targetQuota
-		if err := invalidateResolutionBillingCaches(tx, reservation.UserId, reservation.TokenId, reservation.IsPlayground); err != nil {
+		cacheTargets, err = resolutionCacheTargetsTx(tx, reservation.UserId, reservation.TokenId, reservation.IsPlayground)
+		if err != nil {
 			return err
 		}
 		result, err = resolutionReservationResultTx(tx, reservation)
 		return err
 	})
+	if err == nil {
+		cacheTargets.invalidate()
+	}
 	return result, err
 }
 
@@ -376,11 +411,16 @@ func adjustResolutionTokenDeltaTx(tx *gorm.DB, tokenId, userId, delta int) error
 	}).Error
 }
 
-func RefundResolutionBillingReservation(requestId, reason string) error {
+// RefundResolutionBillingReservation 退还一条尚未附着到任务的预留。
+// 返回本次调用实际退还的额度：已经是 refunded 状态时返回 0，调用方据此避免
+// 为并发路径已经退过的钱重复记一条退款日志。
+func RefundResolutionBillingReservation(requestId, reason string) (int, error) {
 	requestId = strings.TrimSpace(requestId)
 	if requestId == "" {
-		return errors.New("resolution billing reservation requestId is empty")
+		return 0, errors.New("resolution billing reservation requestId is empty")
 	}
+	refunded := 0
+	var cacheTargets resolutionCacheTargets
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		reservation, err := lockResolutionBillingReservation(tx, requestId)
 		if err != nil {
@@ -389,6 +429,7 @@ func RefundResolutionBillingReservation(requestId, reason string) error {
 		if reservation.Status == ResolutionReservationStatusRefunded {
 			return nil
 		}
+		refunded = reservation.Quota
 		if reservation.Status != ResolutionReservationStatusReserved {
 			return fmt.Errorf("resolution billing reservation %q cannot be refunded from status %s", requestId, reservation.Status)
 		}
@@ -407,7 +448,9 @@ func RefundResolutionBillingReservation(requestId, reason string) error {
 			return err
 		}
 		if !reservation.IsPlayground && reservation.Quota > 0 {
-			result := tx.Model(&Token{}).Where("id = ? AND user_id = ?", reservation.TokenId, reservation.UserId).
+			// 令牌可能已被删除或轮换。资金来源已经退回，绝不能因为令牌行不在了
+			// 就回滚整笔退款，把钱永久卡住——结算路径同样容忍令牌缺失。
+			result := tx.Unscoped().Model(&Token{}).Where("id = ? AND user_id = ?", reservation.TokenId, reservation.UserId).
 				Updates(map[string]interface{}{
 					"remain_quota":  gorm.Expr("remain_quota + ?", reservation.Quota),
 					"used_quota":    gorm.Expr("used_quota - ?", reservation.Quota),
@@ -417,10 +460,11 @@ func RefundResolutionBillingReservation(requestId, reason string) error {
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
-				return errors.New("resolution reservation token refund did not update the token")
+				common.SysError(fmt.Sprintf("resolution reservation %s refunded funding but its token %d no longer exists", requestId, reservation.TokenId))
 			}
 		}
-		if err := invalidateResolutionBillingCaches(tx, reservation.UserId, reservation.TokenId, reservation.IsPlayground); err != nil {
+		cacheTargets, err = resolutionCacheTargetsTx(tx, reservation.UserId, reservation.TokenId, reservation.IsPlayground)
+		if err != nil {
 			return err
 		}
 		updates := map[string]interface{}{
@@ -430,7 +474,8 @@ func RefundResolutionBillingReservation(requestId, reason string) error {
 		return tx.Model(&ResolutionBillingReservation{}).Where("id = ?", reservation.Id).Updates(updates).Error
 	})
 	if err == nil {
-		return nil
+		cacheTargets.invalidate()
+		return refunded, nil
 	}
 	audit := DB.Model(&ResolutionBillingReservation{}).
 		Where("request_id = ? AND status = ?", requestId, ResolutionReservationStatusReserved).
@@ -444,7 +489,7 @@ func RefundResolutionBillingReservation(requestId, reason string) error {
 	} else {
 		common.SysError(fmt.Sprintf("resolution reservation refund failed request_id=%s: %v", requestId, err))
 	}
-	return err
+	return 0, err
 }
 
 func refundResolutionSubscriptionTx(tx *gorm.DB, reservation *ResolutionBillingReservation) error {
@@ -476,9 +521,17 @@ func refundResolutionSubscriptionTx(tx *gorm.DB, reservation *ResolutionBillingR
 	return nil
 }
 
-func RefundOrphanedResolutionBillingReservations(cutoff int64, limit int) (int, error) {
+// OrphanedResolutionRefund 描述孤儿清扫实际退还的一笔预留，供调用方补记退款日志。
+type OrphanedResolutionRefund struct {
+	Reservation ResolutionBillingReservation
+	Quota       int
+}
+
+// RefundOrphanedResolutionBillingReservations 退还超过宽限期仍未附着到任务的预留。
+// 单条失败只记录并继续：一条退不掉的预留不能挡住同一批次里其他用户的钱。
+func RefundOrphanedResolutionBillingReservations(cutoff int64, limit int) ([]OrphanedResolutionRefund, error) {
 	if cutoff <= 0 {
-		return 0, errors.New("resolution reservation orphan cutoff must be positive")
+		return nil, errors.New("resolution reservation orphan cutoff must be positive")
 	}
 	if limit <= 0 {
 		limit = 100
@@ -486,14 +539,19 @@ func RefundOrphanedResolutionBillingReservations(cutoff int64, limit int) (int, 
 	var reservations []ResolutionBillingReservation
 	if err := DB.Where("status = ? AND updated_at < ?", ResolutionReservationStatusReserved, cutoff).
 		Order("id").Limit(limit).Find(&reservations).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
-	refunded := 0
+	refunds := make([]OrphanedResolutionRefund, 0, len(reservations))
 	for _, reservation := range reservations {
-		if err := RefundResolutionBillingReservation(reservation.RequestId, "orphaned resolution reservation timed out"); err != nil {
-			return refunded, err
+		quota, err := RefundResolutionBillingReservation(reservation.RequestId, "orphaned resolution reservation timed out")
+		if err != nil {
+			common.SysError(fmt.Sprintf("orphaned resolution reservation %s could not be refunded: %v", reservation.RequestId, err))
+			continue
 		}
-		refunded++
+		if quota == 0 {
+			continue
+		}
+		refunds = append(refunds, OrphanedResolutionRefund{Reservation: reservation, Quota: quota})
 	}
-	return refunded, nil
+	return refunds, nil
 }

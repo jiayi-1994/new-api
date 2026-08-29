@@ -1243,6 +1243,64 @@ func TestResolutionTaskInsertFailureSynchronouslyRefundsReservation(t *testing.T
 	assert.Equal(t, preConsumed, refundLogs[0].Quota)
 }
 
+func TestResolutionTaskInsertRefundLogReportsTheReservationAmount(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 413, 413, 413
+	const userQuota, tokenQuota = 2_000_000, 2_000_000
+	seedUser(t, userID, userQuota)
+	seedToken(t, tokenID, userID, "sk-resolution-quota-mismatch", tokenQuota)
+	seedChannel(t, channelID)
+
+	reserved, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	info := resolutionSubmitRelayInfo("resolution-quota-mismatch", userID, tokenID, channelID, reserved)
+	info.UserSetting.BillingPreference = "wallet_only"
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	require.Nil(t, PreConsumeBilling(c, reserved, info))
+
+	// 结算失败后任务额度与预留不一致：落库会被一致性校验拒绝，此时退款日志必须记
+	// 预留实际退还的金额，而不是任务上那个从未入账的金额。
+	task := makeTask(userID, channelID, reserved*5, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	task.PrivateData.BillingReservationRequestId = info.RequestId
+
+	require.Error(t, PersistSubmittedTask(c, task))
+
+	assert.Equal(t, userQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenQuota, getTokenRemainQuota(t, tokenID))
+	var refundLogs []model.Log
+	require.NoError(t, model.DB.Where("type = ?", model.LogTypeRefund).Find(&refundLogs).Error)
+	require.Len(t, refundLogs, 1)
+	assert.Equal(t, reserved, refundLogs[0].Quota)
+}
+
+func TestSweepOrphanedResolutionReservationsRecordsARefundLog(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 414, 414
+	const userQuota, tokenQuota, quota = 10_000, 8_000, 600
+	seedUser(t, userID, userQuota)
+	seedToken(t, tokenID, userID, "sk-resolution-orphan-log", tokenQuota)
+
+	info := resolutionSubmitRelayInfo("resolution-orphan-log", userID, tokenID, 0, quota)
+	info.UserSetting.BillingPreference = "wallet_only"
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	require.Nil(t, PreConsumeBilling(c, quota, info))
+	expired := time.Now().Add(-resolutionReservationOrphanGrace - time.Minute).Unix()
+	require.NoError(t, model.DB.Model(&model.ResolutionBillingReservation{}).
+		Where("request_id = ?", info.RequestId).
+		Updates(map[string]any{"created_at": expired, "updated_at": expired}).Error)
+
+	sweepOrphanedResolutionReservations(context.Background())
+
+	// 提交时已写过一条消费日志，兜底退款必须补一条退款日志，否则用量报表永久多算
+	assert.Equal(t, userQuota, getUserQuota(t, userID))
+	var refundLogs []model.Log
+	require.NoError(t, model.DB.Where("type = ?", model.LogTypeRefund).Find(&refundLogs).Error)
+	require.Len(t, refundLogs, 1)
+	assert.Equal(t, quota, refundLogs[0].Quota)
+}
+
 func TestResolutionReservationFallsBackToWalletWhenSubscriptionIsExhausted(t *testing.T) {
 	truncate(t)
 	const userID, channelID, planID, subscriptionID = 411, 411, 411, 411
@@ -1594,7 +1652,7 @@ func TestResolutionSettlementStatsTrackFinalQuotaWithoutDoubleCountingRequest(t 
 	}
 }
 
-func TestResolutionSettlementRollsBackWhenFinalStatsCannotReachChannel(t *testing.T) {
+func TestResolutionSettlementCompletesWhenTheChannelWasDeleted(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 410, 410
 	const initialWallet = 1_000_000
@@ -1611,15 +1669,19 @@ func TestResolutionSettlementRollsBackWhenFinalStatsCannotReachChannel(t *testin
 	require.NoError(t, model.DB.Create(task).Error)
 	require.NoError(t, model.DB.Delete(&model.Channel{}, channelID).Error)
 
-	assert.False(t, settleTaskBillingOnComplete(context.Background(), &mockAdaptor{}, task, &relaycommon.TaskInfo{
+	// 渠道统计行缺失只是统计损失；若因此让结算失败，任务永远到不了终态，
+	// 最终会被超时清扫全额退款——用户成功拿到了视频却一分钱不付。
+	assert.True(t, settleTaskBillingOnComplete(context.Background(), &mockAdaptor{}, task, &relaycommon.TaskInfo{
 		Status:                   model.TaskStatusSuccess,
 		EffectiveDurationSeconds: 4,
 	}))
-	assert.Equal(t, initialWallet, getUserQuota(t, userID))
-	assert.Equal(t, preConsumed, getTaskQuota(t, task.ID))
+	actualQuota, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 4, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	assert.Equal(t, initialWallet+(preConsumed-actualQuota), getUserQuota(t, userID))
+	assert.Equal(t, actualQuota, getTaskQuota(t, task.ID))
 	var user model.User
 	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
-	assert.Equal(t, preConsumed, user.UsedQuota)
+	assert.Equal(t, actualQuota, user.UsedQuota)
 	assert.Equal(t, 1, user.RequestCount)
 }
 

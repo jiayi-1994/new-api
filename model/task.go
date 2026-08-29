@@ -642,13 +642,17 @@ func (t *Task) SettleResolutionQuota(actualQuota int, fromStatus TaskStatus) (bo
 			if userStatsResult.RowsAffected != 1 {
 				return fmt.Errorf("resolution settlement usage user %d was not updated", stored.UserId)
 			}
-			channelStatsResult := tx.Model(&Channel{}).Where("id = ?", stored.ChannelId).
-				Update("used_quota", gorm.Expr("used_quota + ?", quotaDelta))
-			if channelStatsResult.Error != nil {
-				return channelStatsResult.Error
-			}
-			if channelStatsResult.RowsAffected != 1 {
-				return fmt.Errorf("resolution settlement usage channel %d was not updated", stored.ChannelId)
+			// 渠道可能在任务执行期间被管理员删除。统计行缺失不能让结算永久失败，
+			// 否则任务到不了终态、预扣额度也永远结不掉，只能记录后继续。
+			if stored.ChannelId > 0 {
+				channelStatsResult := tx.Model(&Channel{}).Where("id = ?", stored.ChannelId).
+					Update("used_quota", gorm.Expr("used_quota + ?", quotaDelta))
+				if channelStatsResult.Error != nil {
+					return channelStatsResult.Error
+				}
+				if channelStatsResult.RowsAffected != 1 {
+					common.SysError(fmt.Sprintf("resolution settlement usage channel %d was not updated", stored.ChannelId))
+				}
 			}
 		}
 

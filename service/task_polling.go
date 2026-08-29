@@ -46,13 +46,30 @@ const resolutionReservationOrphanGrace = 15 * time.Minute
 // 上游提交成功但任务落库失败、且控制器的同步退款也失败时，额度只能靠这里归还。
 func sweepOrphanedResolutionReservations(ctx context.Context) {
 	cutoff := time.Now().Add(-resolutionReservationOrphanGrace).Unix()
-	refunded, err := model.RefundOrphanedResolutionBillingReservations(cutoff, 100)
+	refunds, err := model.RefundOrphanedResolutionBillingReservations(cutoff, 100)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("sweepOrphanedResolutionReservations: refunded %d before error: %s", refunded, err.Error()))
+		logger.LogError(ctx, "sweepOrphanedResolutionReservations: "+err.Error())
+		return
 	}
-	if refunded > 0 {
-		logger.LogInfo(ctx, fmt.Sprintf("sweepOrphanedResolutionReservations: refunded %d orphaned reservations", refunded))
+	if len(refunds) == 0 {
+		return
 	}
+	// 提交时已经写过一条消费日志，这里必须补一条退款日志，否则用量报表会永久多算
+	for _, refund := range refunds {
+		model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+			UserId:    refund.Reservation.UserId,
+			LogType:   model.LogTypeRefund,
+			Content:   "任务提交后未能落库，已由孤儿清扫退还预扣费",
+			ModelName: refund.Reservation.ModelName,
+			Quota:     refund.Quota,
+			TokenId:   refund.Reservation.TokenId,
+			Other: map[string]interface{}{
+				"is_task": true,
+				"reason":  "orphaned resolution reservation timed out",
+			},
+		})
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("sweepOrphanedResolutionReservations: refunded %d orphaned reservations", len(refunds)))
 }
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。

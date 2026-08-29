@@ -137,7 +137,7 @@ func TestLoadOptionsFromDatabaseRejectsInvalidVideoResolutionPriceWithoutPartial
 	lastGetPricingTime = time.Now()
 
 	require.NoError(t, DB.Model(&Option{}).
-		Where("key = ?", ratio_setting.VideoResolutionPriceOptionKey).
+		Where(commonKeyCol+" = ?", ratio_setting.VideoResolutionPriceOptionKey).
 		Update("value", `{"sora-2":{"720p":0}}`).Error)
 
 	loadOptionsFromDatabase()
