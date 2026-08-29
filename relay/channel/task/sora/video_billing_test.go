@@ -93,6 +93,8 @@ func TestSoraResolveVideoBillingUsesMappedUpstreamModelRules(t *testing.T) {
 	assert.Zero(t, selection)
 	require.NotNil(t, taskErr)
 	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Contains(t, taskErr.Message, "1024p")
+	assert.NotContains(t, taskErr.Message, "unknown")
 }
 
 func TestSoraResolveVideoBillingRejectsDurationAboveBound(t *testing.T) {
@@ -150,6 +152,8 @@ func TestSoraRejectsUnsupportedPrewrappedDashScopeBillingParameters(t *testing.T
 	require.NotNil(t, taskErr)
 	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Contains(t, taskErr.Message, "1080p")
+	assert.NotContains(t, taskErr.Message, "unknown")
 }
 
 func TestSoraDashScopeNestedParametersSelect1024pAndEightSeconds(t *testing.T) {
@@ -353,6 +357,7 @@ func TestSoraRemixVideoBillingRejectsInvalidSavedSelectionWithoutLegacyFallback(
 	assert.Zero(t, selection)
 	require.NotNil(t, taskErr)
 	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
+	assert.Contains(t, taskErr.Message, "1080p")
 }
 
 func TestSoraRemixVideoBillingRecovers720pFromLegacyTaskData(t *testing.T) {

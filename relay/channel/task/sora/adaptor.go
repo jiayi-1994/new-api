@@ -146,39 +146,61 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	return relaycommon.ValidateMultipartDirect(c, info)
 }
 
-func soraVideoBillingNotSupported(info *relaycommon.RelayInfo) *dto.TaskError {
+// soraVideoBillingNotSupported builds the strict 400 required by the resolution
+// pricing contract. resolution is the canonical effective resolution when the
+// adapter could determine one; pass "" when it is genuinely undeterminable.
+func soraVideoBillingNotSupported(info *relaycommon.RelayInfo, resolution string) *dto.TaskError {
 	modelName := ""
 	if info != nil {
 		modelName = info.OriginModelName
 	}
+	if resolution == "" {
+		resolution = "unknown"
+	}
 	return service.TaskErrorWrapperLocal(
-		fmt.Errorf("video resolution unknown is not configured for model %s", modelName),
+		fmt.Errorf("video resolution %s is not configured for model %s", resolution, modelName),
 		"video_resolution_not_supported",
 		http.StatusBadRequest,
 	)
 }
 
+// soraUnsupportedResolutionError marks a request whose resolution was
+// recognized (canonical name known) but is not supported by the upstream
+// model, so the strict 400 can name it instead of reporting "unknown".
+type soraUnsupportedResolutionError struct {
+	resolution string
+}
+
+func (e *soraUnsupportedResolutionError) Error() string {
+	return fmt.Sprintf("unsupported Sora resolution %q", e.resolution)
+}
+
+// resolveSoraResolution maps a size string to its canonical resolution.
+// When the size is recognizable but unsupported for the model, the canonical
+// name is still returned alongside ok=false so error messages can cite it.
 func resolveSoraResolution(upstreamModelName, size string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(size)) {
 	case "720x1280", "1280x720":
 		return "720p", true
 	case "1024x1792", "1792x1024":
-		if upstreamModelName == "sora-2" {
-			return "", false
-		}
-		return "1024p", true
+		return "1024p", upstreamModelName != "sora-2"
 	default:
 		return "", false
 	}
 }
 
+// resolveSoraTier follows the same contract as resolveSoraResolution: a
+// recognizable canonical resolution is returned even when ok=false.
 func resolveSoraTier(upstreamModelName, rawResolution string) (string, bool) {
 	resolution, err := common.NormalizeVideoResolutionKey(rawResolution)
-	if err != nil || (resolution != "720p" && resolution != "1024p") {
+	if err != nil {
 		return "", false
 	}
+	if resolution != "720p" && resolution != "1024p" {
+		return resolution, false
+	}
 	if resolution == "1024p" && upstreamModelName == "sora-2" {
-		return "", false
+		return resolution, false
 	}
 	return resolution, true
 }
@@ -257,6 +279,9 @@ func normalizeSoraVideoRequest(
 	if size != "" {
 		sizeResolution, ok := resolveSoraResolution(upstreamModelName, size)
 		if !ok {
+			if sizeResolution != "" {
+				return normalizedSoraVideoRequest{}, &soraUnsupportedResolutionError{resolution: sizeResolution}
+			}
 			return normalizedSoraVideoRequest{}, fmt.Errorf("unsupported Sora size %q", size)
 		}
 		resolution = sizeResolution
@@ -264,6 +289,9 @@ func normalizeSoraVideoRequest(
 	if strings.TrimSpace(req.Resolution) != "" {
 		topResolution, ok := resolveSoraTier(upstreamModelName, req.Resolution)
 		if !ok {
+			if topResolution != "" {
+				return normalizedSoraVideoRequest{}, &soraUnsupportedResolutionError{resolution: topResolution}
+			}
 			return normalizedSoraVideoRequest{}, fmt.Errorf("unsupported Sora resolution %q", req.Resolution)
 		}
 		if err := mergeSoraResolution(&resolution, topResolution); err != nil {
@@ -277,6 +305,9 @@ func normalizeSoraVideoRequest(
 		}
 		canonical, ok := resolveSoraTier(upstreamModelName, nestedResolutionString)
 		if !ok {
+			if canonical != "" {
+				return normalizedSoraVideoRequest{}, &soraUnsupportedResolutionError{resolution: canonical}
+			}
 			return normalizedSoraVideoRequest{}, fmt.Errorf("unsupported Sora resolution %q", nestedResolutionString)
 		}
 		if err := mergeSoraResolution(&resolution, canonical); err != nil {
@@ -346,18 +377,22 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 	if info.Action != constant.TaskActionRemix {
 		req, err := relaycommon.GetTaskRequest(c)
 		if err != nil {
-			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 		}
 		var parameters map[string]any
 		if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
 			parameters, err = readSoraDashScopeParameters(c)
 			if err != nil {
-				return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+				return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 			}
 		}
 		normalized, err := normalizeSoraVideoRequest(req, info.UpstreamModelName, parameters)
 		if err != nil {
-			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+			var unsupported *soraUnsupportedResolutionError
+			if errors.As(err, &unsupported) {
+				return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, unsupported.resolution)
+			}
+			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 		}
 		c.Set(normalizedSoraVideoRequestKey, normalized)
 		return normalized.Selection, nil
@@ -365,11 +400,11 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 
 	originValue, exists := c.Get("origin_task")
 	if !exists {
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 	}
 	originTask, ok := originValue.(*model.Task)
 	if !ok || originTask == nil {
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 	}
 	if billing := originTask.PrivateData.BillingContext; billing != nil && billing.PricingKind == "video_resolution" {
 		selection := relaycommon.VideoBillingSelection{
@@ -381,20 +416,24 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 		if err == nil && (resolved.Selection.EffectiveResolution == "720p" || resolved.Selection.EffectiveResolution == "1024p") {
 			return resolved.Selection, nil
 		}
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		snapshotResolution := ""
+		if canonical, normalizeErr := common.NormalizeVideoResolutionKey(billing.EffectiveResolution); normalizeErr == nil {
+			snapshotResolution = canonical
+		}
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, snapshotResolution)
 	}
 
 	var saved responseTask
 	if err := common.Unmarshal(originTask.Data, &saved); err != nil {
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 	}
 	resolution, ok := resolveSoraResolution(info.UpstreamModelName, saved.Size)
 	if !ok || strings.TrimSpace(string(saved.Seconds)) == "" {
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, resolution)
 	}
 	seconds, err := strconv.Atoi(strings.TrimSpace(string(saved.Seconds)))
 	if err != nil || seconds < 1 || seconds > relaycommon.MaxTaskDurationSeconds {
-		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info)
+		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, resolution)
 	}
 	return relaycommon.VideoBillingSelection{
 		EffectiveResolution:      resolution,
