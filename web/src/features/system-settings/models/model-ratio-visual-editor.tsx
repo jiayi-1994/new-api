@@ -65,6 +65,12 @@ import {
   type ModelRow,
 } from './model-pricing-snapshots'
 import { buildModelRatioColumns } from './model-ratio-table-columns'
+import {
+  parseVideoResolutionPriceOption,
+  sanitizeVideoResolutionPriceMap,
+  serializeVideoResolutionPriceOption,
+  VIDEO_RESOLUTION_PRICE_OPTION_KEY,
+} from './video-resolution-pricing'
 
 type ModelRatioVisualEditorProps = {
   savedModelPrice: string
@@ -78,6 +84,7 @@ type ModelRatioVisualEditorProps = {
   savedBillingMode: string
   savedBillingExpr: string
   savedTaskBillingMode: string
+  savedVideoResolutionPrice: string
   modelPrice: string
   modelRatio: string
   cacheRatio: string
@@ -89,6 +96,7 @@ type ModelRatioVisualEditorProps = {
   billingMode: string
   billingExpr: string
   taskBillingMode: string
+  videoResolutionPrice: string
   candidateModelNames?: string[]
   candidateModelsLoading?: boolean
   filterMode?: 'all' | 'unset'
@@ -119,6 +127,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     savedTaskBillingMode,
+    savedVideoResolutionPrice,
     modelPrice,
     modelRatio,
     cacheRatio,
@@ -130,6 +139,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     billingMode,
     billingExpr,
     taskBillingMode,
+    videoResolutionPrice,
     candidateModelNames,
     candidateModelsLoading,
     filterMode = 'all',
@@ -205,6 +215,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode: savedBillingMode,
       billingExpr: savedBillingExpr,
       taskBillingMode: savedTaskBillingMode,
+      videoResolutionPrice: savedVideoResolutionPrice,
     })
     const draftRows = buildModelSnapshots({
       modelPrice,
@@ -218,6 +229,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionPrice,
     })
 
     const savedByName = new Map(savedRows.map((row) => [row.name, row]))
@@ -262,6 +274,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     savedTaskBillingMode,
+    savedVideoResolutionPrice,
     modelPrice,
     modelRatio,
     cacheRatio,
@@ -273,6 +286,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     billingMode,
     billingExpr,
     taskBillingMode,
+    videoResolutionPrice,
   ])
 
   const modeCounts = useMemo(
@@ -281,7 +295,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
         (acc, model) => {
           const mode =
             model.billingMode === 'per-request' ||
-            model.billingMode === 'tiered_expr'
+            model.billingMode === 'tiered_expr' ||
+            model.billingMode === 'video_resolution'
               ? model.billingMode
               : 'per-token'
           acc[mode] += 1
@@ -290,8 +305,12 @@ const ModelRatioVisualEditorComponent = forwardRef<
         {
           'per-token': 0,
           'per-request': 0,
+          video_resolution: 0,
           tiered_expr: 0,
-        } as Record<'per-token' | 'per-request' | 'tiered_expr', number>
+        } as Record<
+          'per-token' | 'per-request' | 'video_resolution' | 'tiered_expr',
+          number
+        >
       ),
     [models]
   )
@@ -302,6 +321,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
       let editBillingMode: PricingMode = 'per-token'
       if (editableModel.billingMode === 'tiered_expr') {
         editBillingMode = 'tiered_expr'
+      } else if (editableModel.resolutionPrices) {
+        editBillingMode = 'video_resolution'
       } else if (editableModel.price && editableModel.price !== '') {
         editBillingMode = 'per-request'
       }
@@ -319,6 +340,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         billingExpr: editableModel.billingExpr,
         requestRuleExpr: editableModel.requestRuleExpr,
         taskBillingMode: editableModel.taskBillingMode,
+        resolutionPrices: editableModel.resolutionPrices,
       })
       setEditorOpen(true)
       if (isMobile) setSheetOpen(true)
@@ -393,6 +415,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
         taskBillingMode,
         { fallback: {}, silent: true }
       )
+      const resolutionPriceOption =
+        parseVideoResolutionPriceOption(videoResolutionPrice)
 
       delete priceMap[name]
       delete ratioMap[name]
@@ -405,6 +429,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       delete billingModeMap[name]
       delete billingExprMap[name]
       delete taskBillingModeMap[name]
+      delete resolutionPriceOption[name]
 
       onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
       onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
@@ -426,6 +451,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
         JSON.stringify(billingExprMap, null, 2)
       )
       onChange('TaskBillingMode', JSON.stringify(taskBillingModeMap, null, 2))
+      onChange(
+        VIDEO_RESOLUTION_PRICE_OPTION_KEY,
+        serializeVideoResolutionPriceOption(resolutionPriceOption)
+      )
 
       if (editData?.name === name) {
         setEditData(null)
@@ -445,6 +474,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionPrice,
       onChange,
       editData,
     ]
@@ -540,6 +570,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
         taskBillingMode,
         { fallback: {}, silent: true }
       )
+      const resolutionPriceOption =
+        parseVideoResolutionPriceOption(videoResolutionPrice)
 
       const setIfPresent = (
         target: Record<string, number>,
@@ -563,13 +595,20 @@ const ModelRatioVisualEditorComponent = forwardRef<
         delete billingModeMap[name]
         delete billingExprMap[name]
         delete taskBillingModeMap[name]
+        delete resolutionPriceOption[name]
 
         // 任务计费单位只在固定价格模式下有意义；未显式选择时不写入配置
         if (data.billingMode === 'per-request' && data.taskBillingMode) {
           taskBillingModeMap[name] = data.taskBillingMode
         }
 
-        if (data.billingMode === 'tiered_expr') {
+        if (data.billingMode === 'video_resolution') {
+          // 分辨率定价恒为按秒，不写 TaskBillingMode，也不保留互斥的固定价/倍率
+          const prices = sanitizeVideoResolutionPriceMap(data.resolutionPrices)
+          if (Object.keys(prices).length > 0) {
+            resolutionPriceOption[name] = prices
+          }
+        } else if (data.billingMode === 'tiered_expr') {
           const combined = combineBillingExpr(
             data.billingExpr || '',
             data.requestRuleExpr || ''
@@ -623,6 +662,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
         JSON.stringify(billingExprMap, null, 2)
       )
       onChange('TaskBillingMode', JSON.stringify(taskBillingModeMap, null, 2))
+      onChange(
+        VIDEO_RESOLUTION_PRICE_OPTION_KEY,
+        serializeVideoResolutionPriceOption(resolutionPriceOption)
+      )
     },
     [
       modelPrice,
@@ -636,6 +679,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionPrice,
       onChange,
     ]
   )
@@ -870,6 +914,8 @@ export const ModelRatioVisualEditor = memo(
       prevProps.savedBillingMode === nextProps.savedBillingMode &&
       prevProps.savedBillingExpr === nextProps.savedBillingExpr &&
       prevProps.savedTaskBillingMode === nextProps.savedTaskBillingMode &&
+      prevProps.savedVideoResolutionPrice ===
+        nextProps.savedVideoResolutionPrice &&
       prevProps.modelPrice === nextProps.modelPrice &&
       prevProps.modelRatio === nextProps.modelRatio &&
       prevProps.cacheRatio === nextProps.cacheRatio &&
@@ -881,6 +927,7 @@ export const ModelRatioVisualEditor = memo(
       prevProps.billingMode === nextProps.billingMode &&
       prevProps.billingExpr === nextProps.billingExpr &&
       prevProps.taskBillingMode === nextProps.taskBillingMode &&
+      prevProps.videoResolutionPrice === nextProps.videoResolutionPrice &&
       prevProps.candidateModelNames === nextProps.candidateModelNames &&
       prevProps.candidateModelsLoading === nextProps.candidateModelsLoading &&
       prevProps.filterMode === nextProps.filterMode &&

@@ -107,3 +107,43 @@ export function replaceModelInPath(path: string, modelName: string): string {
 export function isTokenBasedModel(model: PricingModel): boolean {
   return model.quota_type === QUOTA_TYPE_VALUES.TOKEN
 }
+
+/**
+ * Per-second resolution prices sorted by resolution, ignoring any non-positive
+ * or non-finite value the backend may still carry for legacy configurations.
+ */
+export function getResolutionPriceEntries(
+  model: PricingModel
+): Array<[string, number]> {
+  // 按有效高度排序，否则 localeCompare 会把 "4k" 排在 "720p" 前面
+  const height = (value: string) => {
+    const numeric = Number.parseInt(value, 10)
+    if (!Number.isFinite(numeric)) return 0
+    return value.endsWith('k') ? numeric * 540 : numeric
+  }
+  return Object.entries(model.resolution_prices ?? {})
+    .filter(([, price]) => Number.isFinite(price) && price > 0)
+    .sort(
+      ([left], [right]) =>
+        height(left) - height(right) || left.localeCompare(right)
+    )
+}
+
+export function getMinimumResolutionPrice(model: PricingModel): number | null {
+  const prices = getResolutionPriceEntries(model).map(([, price]) => price)
+  return prices.length === 0 ? null : Math.min(...prices)
+}
+
+/**
+ * Resolution-priced models are always charged per second, regardless of any
+ * stale legacy task_billing_mode still stored for the same model.
+ */
+export function isResolutionPricedModel(model: PricingModel): boolean {
+  return getResolutionPriceEntries(model).length > 0
+}
+
+export function isPerSecondBilledModel(model: PricingModel): boolean {
+  return (
+    isResolutionPricedModel(model) || model.task_billing_mode === 'per_second'
+  )
+}

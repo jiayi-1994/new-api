@@ -20,7 +20,11 @@ import { formatCurrencyFromUSD } from '@/lib/currency'
 
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
-import { getConfiguredGroupRatio, getDisplayGroupRatio } from './model-helpers'
+import {
+  getConfiguredGroupRatio,
+  getDisplayGroupRatio,
+  getMinimumResolutionPrice,
+} from './model-helpers'
 
 // ----------------------------------------------------------------------------
 // Price Calculation Utilities
@@ -208,6 +212,14 @@ export function formatGroupPrice(
 }
 
 /**
+ * 分辨率定价模型的展示基准价是最低档每秒单价；旧客户端兼容字段 model_price 仅在
+ * 没有分辨率价格时使用。
+ */
+function getBaseFixedPrice(model: PricingModel): number {
+  return getMinimumResolutionPrice(model) ?? model.model_price ?? 0
+}
+
+/**
  * Format fixed price for pay-per-request models (with specific group)
  */
 export function formatFixedPrice(
@@ -223,7 +235,7 @@ export function formatFixedPrice(
   }
 
   const ratio = getConfiguredGroupRatio(groupRatio, group)
-  let priceInUSD = (model.model_price || 0) * ratio
+  let priceInUSD = getBaseFixedPrice(model) * ratio
 
   priceInUSD = applyRechargeRate(
     priceInUSD,
@@ -255,7 +267,7 @@ export function formatRequestPrice(
 
   const displayGroupRatio = getDisplayGroupRatio(model, selectedGroup)
 
-  let priceInUSD = (model.model_price || 0) * displayGroupRatio
+  let priceInUSD = getBaseFixedPrice(model) * displayGroupRatio
 
   priceInUSD = applyRechargeRate(
     priceInUSD,

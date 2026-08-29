@@ -60,6 +60,7 @@ type ModelFormValues = {
   BillingMode: string
   BillingExpr: string
   TaskBillingMode: string
+  VideoResolutionPrice: string
 }
 
 type ModelRatioFormProps = {
@@ -82,6 +83,7 @@ type ModelJsonFieldName =
   | 'AudioRatio'
   | 'AudioCompletionRatio'
   | 'TaskBillingMode'
+  | 'VideoResolutionPrice'
 
 const modelJsonFields: Array<{
   name: ModelJsonFieldName
@@ -137,6 +139,12 @@ const modelJsonFields: Array<{
     labelKey: 'Video task billing unit',
     descriptionKey:
       'JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.',
+  },
+  {
+    name: 'VideoResolutionPrice',
+    labelKey: 'Resolution prices',
+    descriptionKey:
+      'JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.',
   },
 ]
 
@@ -284,6 +292,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
               savedTaskBillingMode={savedValues.TaskBillingMode}
+              savedVideoResolutionPrice={savedValues.VideoResolutionPrice}
               modelPrice={form.watch('ModelPrice')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
@@ -295,6 +304,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
               taskBillingMode={form.watch('TaskBillingMode')}
+              videoResolutionPrice={form.watch('VideoResolutionPrice')}
               candidateModelNames={
                 isUnsetVariant ? enabledModelsQuery.data?.data : undefined
               }

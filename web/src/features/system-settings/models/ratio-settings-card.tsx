@@ -117,6 +117,7 @@ const createModelSchema = (t: Translate) =>
     BillingMode: createJsonStringField(t),
     BillingExpr: createJsonStringField(t),
     TaskBillingMode: createJsonStringField(t),
+    VideoResolutionPrice: createJsonStringField(t),
   })
 
 const createGroupSchema = (t: Translate) =>
@@ -195,6 +196,9 @@ export function RatioSettingsCard({
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     TaskBillingMode: normalizeJsonString(modelDefaults.TaskBillingMode),
+    VideoResolutionPrice: normalizeJsonString(
+      modelDefaults.VideoResolutionPrice
+    ),
   })
   const [savedModelValues, setSavedModelValues] = useState(
     modelNormalizedDefaults.current
@@ -232,6 +236,9 @@ export function RatioSettingsCard({
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
       TaskBillingMode: formatJsonForTextarea(modelDefaults.TaskBillingMode),
+      VideoResolutionPrice: formatJsonForTextarea(
+        modelDefaults.VideoResolutionPrice
+      ),
     },
   })
 
@@ -267,6 +274,9 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
       TaskBillingMode: normalizeJsonString(modelDefaults.TaskBillingMode),
+      VideoResolutionPrice: normalizeJsonString(
+        modelDefaults.VideoResolutionPrice
+      ),
     }
     setSavedModelValues(modelNormalizedDefaults.current)
 
@@ -285,6 +295,9 @@ export function RatioSettingsCard({
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
       TaskBillingMode: formatJsonForTextarea(modelDefaults.TaskBillingMode),
+      VideoResolutionPrice: formatJsonForTextarea(
+        modelDefaults.VideoResolutionPrice
+      ),
     })
   }, [modelDefaults, modelForm])
 
@@ -329,6 +342,7 @@ export function RatioSettingsCard({
         BillingMode: normalizeJsonString(values.BillingMode),
         BillingExpr: normalizeJsonString(values.BillingExpr),
         TaskBillingMode: normalizeJsonString(values.TaskBillingMode),
+        VideoResolutionPrice: normalizeJsonString(values.VideoResolutionPrice),
       }
 
       const apiKeyMap: Record<string, string> = {

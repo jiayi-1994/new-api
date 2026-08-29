@@ -20,6 +20,11 @@ import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-
 
 import { safeJsonParse } from '../utils/json-parser'
 import { formatPricingNumber } from './pricing-format'
+import {
+  parseVideoResolutionPriceOption,
+  sortVideoResolutionPriceMap,
+  type VideoResolutionPriceMap,
+} from './video-resolution-pricing'
 
 export type ModelPricingSnapshotInput = {
   modelPrice: string
@@ -33,6 +38,7 @@ export type ModelPricingSnapshotInput = {
   billingMode: string
   billingExpr: string
   taskBillingMode: string
+  videoResolutionPrice: string
 }
 
 export type ModelPricingSnapshot = {
@@ -50,6 +56,10 @@ export type ModelPricingSnapshot = {
   requestRuleExpr?: string
   /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
   taskBillingMode?: string
+  /** 按分辨率的每秒单价；存在时该模型走 video_resolution 计费 */
+  resolutionPrices?: VideoResolutionPriceMap
+  /** 展示用计费单位；分辨率定价恒为 per_second，不读取 taskBillingMode */
+  displayUnit?: string
   hasConflict: boolean
 }
 
@@ -57,6 +67,7 @@ export const TASK_BILLING_PER_CALL = 'per_call'
 export const TASK_BILLING_PER_SECOND = 'per_second'
 
 export const isTaskPerCallBilling = (snapshot?: ModelPricingSnapshot) =>
+  snapshot?.billingMode !== 'video_resolution' &&
   snapshot?.taskBillingMode === TASK_BILLING_PER_CALL
 
 export type ModelRow = ModelPricingSnapshot & {
@@ -92,6 +103,7 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
+  if (mode === 'video_resolution') return 'Video resolution'
   return 'Per-token'
 }
 
@@ -99,7 +111,7 @@ export const getModeVariant = (
   mode?: string
 ): 'warning' | 'info' | 'success' => {
   if (mode === 'per-request') return 'warning'
-  if (mode === 'tiered_expr') return 'info'
+  if (mode === 'tiered_expr' || mode === 'video_resolution') return 'info'
   return 'success'
 }
 
@@ -114,12 +126,24 @@ const getExpressionSummary = (
   return t('Expression pricing')
 }
 
+/** 分辨率价格按分辨率数值排序后的条目 */
+export const getResolutionPriceEntries = (
+  row: ModelPricingSnapshot
+): Array<[string, number]> =>
+  Object.entries(sortVideoResolutionPriceMap(row.resolutionPrices || {}))
+
 export const getPriceSummary = (
   row: ModelPricingSnapshot,
   t: (key: string) => string
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
+  }
+  if (row.billingMode === 'video_resolution') {
+    const entries = getResolutionPriceEntries(row)
+    if (entries.length === 0) return t('No resolution prices configured')
+    const minimum = Math.min(...entries.map(([, price]) => price))
+    return `${t('From')} $${formatPricingNumber(minimum)} / ${t('second')}`
   }
   if (row.billingMode === 'per-request') {
     return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
@@ -150,6 +174,11 @@ export const getPriceDetail = (
     return row.requestRuleExpr
       ? t('Includes request rules')
       : t('Expression based')
+  }
+  if (row.billingMode === 'video_resolution') {
+    const entries = getResolutionPriceEntries(row)
+    if (entries.length === 0) return t('No resolution prices configured')
+    return `${entries.map(([resolution]) => resolution).join(' · ')} · ${t('Prices shown per second')}`
   }
   if (row.billingMode === 'per-request') {
     return t('Fixed request price')
@@ -184,6 +213,7 @@ export const buildModelSnapshots = ({
   billingMode,
   billingExpr,
   taskBillingMode,
+  videoResolutionPrice,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
   const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
     fallback: {},
@@ -229,6 +259,8 @@ export const buildModelSnapshots = ({
     taskBillingMode,
     { fallback: {}, context: 'task billing mode' }
   )
+  const resolutionPriceMap =
+    parseVideoResolutionPriceOption(videoResolutionPrice)
 
   const modelNames = new Set([
     ...Object.keys(priceMap),
@@ -242,6 +274,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
     ...Object.keys(taskBillingModeMap),
+    ...Object.keys(resolutionPriceMap),
   ])
 
   return Array.from(modelNames).map((name) => {
@@ -254,6 +287,7 @@ export const buildModelSnapshots = ({
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
     const taskMode = taskBillingModeMap[name] || ''
+    const resolutionPrices = resolutionPriceMap[name]
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -274,6 +308,26 @@ export const buildModelSnapshots = ({
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
         taskBillingMode: taskMode,
+        resolutionPrices,
+        hasConflict: false,
+      }
+    }
+
+    if (resolutionPrices) {
+      return {
+        name,
+        price,
+        ratio,
+        cacheRatio: cache,
+        createCacheRatio: createCache,
+        completionRatio: completion,
+        imageRatio: image,
+        audioRatio: audio,
+        audioCompletionRatio: audioCompletion,
+        taskBillingMode: taskMode,
+        resolutionPrices,
+        billingMode: 'video_resolution',
+        displayUnit: TASK_BILLING_PER_SECOND,
         hasConflict: false,
       }
     }
@@ -318,5 +372,8 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
     taskBillingMode: snapshot.taskBillingMode || '',
+    resolutionPrices: snapshot.resolutionPrices
+      ? JSON.stringify(sortVideoResolutionPriceMap(snapshot.resolutionPrices))
+      : '',
   })
 }

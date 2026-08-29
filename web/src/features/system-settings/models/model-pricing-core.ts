@@ -21,6 +21,10 @@ import * as z from 'zod'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 
 import { formatPricingNumber } from './pricing-format'
+import {
+  sortVideoResolutionPriceMap,
+  type VideoResolutionPriceMap,
+} from './video-resolution-pricing'
 
 export const createModelPricingSchema = (t: (key: string) => string) =>
   z.object({
@@ -39,7 +43,11 @@ export type ModelPricingFormValues = z.infer<
   ReturnType<typeof createModelPricingSchema>
 >
 
-export type PricingMode = 'per-token' | 'per-request' | 'tiered_expr'
+export type PricingMode =
+  | 'per-token'
+  | 'per-request'
+  | 'video_resolution'
+  | 'tiered_expr'
 
 export type LaneKey =
   | 'completion'
@@ -64,6 +72,8 @@ export type ModelRatioData = {
   requestRuleExpr?: string
   /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
   taskBillingMode?: string
+  /** 按分辨率的每秒单价；video_resolution 模式下的唯一价格来源 */
+  resolutionPrices?: VideoResolutionPriceMap
 }
 
 export type PreviewRow = {
@@ -218,8 +228,34 @@ export function buildPreviewRows(
   lanePrices: Record<LaneKey, string>,
   laneEnabled: Record<LaneKey, boolean>,
   t: (key: string) => string,
-  taskPerCallBilling = false
+  taskPerCallBilling = false,
+  resolutionPrices: VideoResolutionPriceMap = {}
 ): PreviewRow[] {
+  if (mode === 'video_resolution') {
+    const entries = Object.entries(
+      sortVideoResolutionPriceMap(resolutionPrices)
+    )
+    return [
+      { key: 'mode', label: 'BillingMode', value: 'video_resolution' },
+      {
+        key: 'resolutionPrices',
+        label: t('Resolution prices'),
+        value:
+          entries.length === 0
+            ? t('No resolution prices configured')
+            : entries
+                .map(([resolution, price]) => `${resolution}: $${price}`)
+                .join('\n'),
+        multiline: true,
+      },
+      {
+        key: 'unit',
+        label: t('Video task billing unit'),
+        value: t('Per second (× duration)'),
+      },
+    ]
+  }
+
   if (mode === 'tiered_expr') {
     const effectiveExpr = combineBillingExpr(billingExpr, requestRuleExpr)
     return [

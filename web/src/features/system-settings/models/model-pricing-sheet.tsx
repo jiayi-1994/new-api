@@ -94,6 +94,12 @@ import {
 } from './model-pricing-snapshots'
 import { formatPricingNumber } from './pricing-format'
 import { TieredPricingEditor } from './tiered-pricing-editor'
+import { VideoResolutionPriceEditor } from './video-resolution-price-editor'
+import {
+  validateVideoResolutionPriceRows,
+  videoResolutionPriceRows,
+  type VideoResolutionPriceRow,
+} from './video-resolution-pricing'
 
 export type { ModelRatioData } from './model-pricing-core'
 
@@ -149,6 +155,12 @@ export const ModelPricingSheet = forwardRef<
   )
 })
 
+function resolveInitialPricingMode(data: ModelRatioData): PricingMode {
+  if (data.billingMode === 'tiered_expr') return 'tiered_expr'
+  if (data.resolutionPrices) return 'video_resolution'
+  return data.price ? 'per-request' : 'per-token'
+}
+
 export const ModelPricingEditorPanel = forwardRef<
   ModelPricingEditorPanelHandle,
   ModelPricingEditorPanelProps
@@ -169,6 +181,9 @@ export const ModelPricingEditorPanel = forwardRef<
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
   // '' 表示未显式配置，走系统默认（按秒）
   const [taskBillingMode, setTaskBillingMode] = useState('')
+  const [resolutionRows, setResolutionRows] = useState<
+    VideoResolutionPriceRow[]
+  >([])
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -202,16 +217,11 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      setPricingMode(resolveInitialPricingMode(editData))
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
       setTaskBillingMode(editData.taskBillingMode || '')
+      setResolutionRows(videoResolutionPriceRows(editData.resolutionPrices))
     } else {
       form.reset({
         name: '',
@@ -228,6 +238,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setBillingExpr('')
       setRequestRuleExpr('')
       setTaskBillingMode('')
+      setResolutionRows([])
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -365,6 +376,11 @@ export const ModelPricingEditorPanel = forwardRef<
     }
   }
 
+  const resolutionValidation = useMemo(
+    () => validateVideoResolutionPriceRows(resolutionRows),
+    [resolutionRows]
+  )
+
   const watchedValues = form.watch()
   const previewRows = useMemo(
     () =>
@@ -377,7 +393,8 @@ export const ModelPricingEditorPanel = forwardRef<
         lanePrices,
         laneEnabled,
         t,
-        taskBillingMode === TASK_BILLING_PER_CALL
+        taskBillingMode === TASK_BILLING_PER_CALL,
+        resolutionValidation.prices ?? {}
       ),
     [
       billingExpr,
@@ -386,6 +403,7 @@ export const ModelPricingEditorPanel = forwardRef<
       pricingMode,
       promptPrice,
       requestRuleExpr,
+      resolutionValidation,
       t,
       taskBillingMode,
       watchedValues,
@@ -462,8 +480,24 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    if (pricingMode === 'video_resolution') {
+      // 分辨率价格是该模式下唯一的价格来源，任何无效行都必须阻止保存
+      return (
+        resolutionValidation.prices !== null &&
+        Object.keys(resolutionValidation.prices).length > 0
+      )
+    }
+
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [
+    form,
+    laneEnabled,
+    lanePrices,
+    pricingMode,
+    promptPrice,
+    resolutionValidation,
+    t,
+  ])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
@@ -485,6 +519,19 @@ export const ModelPricingEditorPanel = forwardRef<
         data.requestRuleExpr = requestRuleExpr
       }
 
+      // 分辨率定价与固定价/倍率互斥，且恒为按秒，不写 TaskBillingMode
+      if (pricingMode === 'video_resolution') {
+        data.price = ''
+        data.ratio = ''
+        data.cacheRatio = ''
+        data.createCacheRatio = ''
+        data.completionRatio = ''
+        data.imageRatio = ''
+        data.audioRatio = ''
+        data.audioCompletionRatio = ''
+        data.resolutionPrices = resolutionValidation.prices ?? {}
+      }
+
       // 任务计费单位只对固定价格生效；显式选择（含按秒）才落库，
       // 否则渠道端点推断不出视频模型时展示无法区分按秒/按条
       if (pricingMode === 'per-request' && taskBillingMode) {
@@ -493,7 +540,13 @@ export const ModelPricingEditorPanel = forwardRef<
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr, taskBillingMode]
+    [
+      billingExpr,
+      pricingMode,
+      requestRuleExpr,
+      resolutionValidation,
+      taskBillingMode,
+    ]
   )
 
   useImperativeHandle(
@@ -577,12 +630,15 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-3'>
+                  <TabsList className='grid w-full grid-cols-4'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
                     <TabsTrigger value='per-request'>
                       {t('Per-request')}
+                    </TabsTrigger>
+                    <TabsTrigger value='video_resolution'>
+                      {t('Video resolution')}
                     </TabsTrigger>
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
@@ -706,6 +762,14 @@ export const ModelPricingEditorPanel = forwardRef<
                         </FieldDescription>
                       </Field>
                     </FieldGroup>
+                  </TabsContent>
+
+                  <TabsContent value='video_resolution' className='pt-0'>
+                    <VideoResolutionPriceEditor
+                      rows={resolutionRows}
+                      errorsByRowId={resolutionValidation.errorsByRowId}
+                      onChange={setResolutionRows}
+                    />
                   </TabsContent>
 
                   <TabsContent value='tiered_expr' className='pt-0'>

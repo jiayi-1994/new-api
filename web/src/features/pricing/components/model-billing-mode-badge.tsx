@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 
 import { isDynamicPricingModel } from '../lib/dynamic-price'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import { isPerSecondBilledModel, isTokenBasedModel } from '../lib/model-helpers'
 import type { PricingModel } from '../types'
 
 interface ModelBillingModeBadgeProps {
@@ -40,7 +40,7 @@ export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
   } else if (isTokenBasedModel(props.model)) {
     label = t('Token-based')
     variant = 'info'
-  } else if (props.model.task_billing_mode === 'per_second') {
+  } else if (isPerSecondBilledModel(props.model)) {
     // 按秒计费的视频模型：固定价格只是每秒单价
     label = t('Per Second')
   }

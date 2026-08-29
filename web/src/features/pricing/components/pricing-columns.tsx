@@ -34,7 +34,7 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import { isPerSecondBilledModel, isTokenBasedModel } from '../lib/model-helpers'
 import {
   formatPrice,
   formatRequestPrice,
@@ -228,10 +228,7 @@ export function usePricingColumns(
           <div className='max-w-full min-w-0'>
             <span className='font-mono text-sm tabular-nums'>{price}</span>
             <div className='text-muted-foreground/50 text-[10px]'>
-              /{' '}
-              {model.task_billing_mode === 'per_second'
-                ? t('second')
-                : t('request')}
+              / {isPerSecondBilledModel(model) ? t('second') : t('request')}
             </div>
           </div>
         )

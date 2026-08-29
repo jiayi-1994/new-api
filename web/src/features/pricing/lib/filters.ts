@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { getMinimumResolutionPrice } from './model-helpers'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -102,7 +103,9 @@ export function filterByEndpointType(
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number {
-  return model.quota_type === 0 ? model.model_ratio : model.model_price || 0
+  if (model.quota_type === 0) return model.model_ratio
+  // 分辨率定价按最低档每秒单价排序，与卡片/表格展示的「起」价一致
+  return getMinimumResolutionPrice(model) ?? model.model_price ?? 0
 }
 
 /**

@@ -30,7 +30,11 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import {
+  isPerSecondBilledModel,
+  isResolutionPricedModel,
+  isTokenBasedModel,
+} from '../lib/model-helpers'
 import { formatPrice, formatRequestPrice } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
@@ -179,6 +183,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   } else {
     priceSummary = (
       <span className='text-muted-foreground whitespace-nowrap'>
+        {isResolutionPricedModel(props.model) ? `${t('From')} ` : null}
         <span className='text-foreground font-mono font-semibold'>
           {formatRequestPrice(
             props.model,
@@ -188,10 +193,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             props.selectedGroup
           )}
         </span>{' '}
-        /{' '}
-        {props.model.task_billing_mode === 'per_second'
-          ? t('second')
-          : t('request')}
+        / {isPerSecondBilledModel(props.model) ? t('second') : t('request')}
       </span>
     )
   }

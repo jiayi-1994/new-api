@@ -78,6 +78,14 @@ import {
 } from '@/features/system-settings/hooks/use-system-options'
 import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
+import { VideoResolutionPriceEditor } from '@/features/system-settings/models/video-resolution-price-editor'
+import {
+  buildVideoResolutionOptionUpdate,
+  parseVideoResolutionPriceOption,
+  validateVideoResolutionPriceRows,
+  videoResolutionPriceRows,
+  type VideoResolutionPriceRow,
+} from '@/features/system-settings/models/video-resolution-pricing'
 import type { ModelSettings } from '@/features/system-settings/types'
 import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 
@@ -109,7 +117,7 @@ const extendedModelFormSchema = z.object({
 
 type ExtendedModelFormValues = z.infer<typeof extendedModelFormSchema>
 
-type PricingMode = 'per-token' | 'per-request'
+type PricingMode = 'per-token' | 'per-request' | 'video_resolution'
 type PricingSubMode = 'ratio' | 'price'
 
 type PricingFields = Pick<
@@ -260,6 +268,9 @@ export function ModelMutateDrawer({
   const [pricingSubMode, setPricingSubMode] = useState<PricingSubMode>('ratio')
   // '' 表示未显式配置，走系统默认（按秒）
   const [taskBillingMode, setTaskBillingMode] = useState('')
+  const [resolutionRows, setResolutionRows] = useState<
+    VideoResolutionPriceRow[]
+  >([])
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
@@ -330,6 +341,7 @@ export function ModelMutateDrawer({
       'billing_setting.billing_mode': '{}',
       'billing_setting.billing_expr': '{}',
       TaskBillingMode: '{}',
+      VideoResolutionPrice: '{}',
       'tool_price_setting.prices': '{}',
       TopupGroupRatio: '',
       GroupRatio: '',
@@ -445,6 +457,11 @@ export function ModelMutateDrawer({
       setTaskBillingMode(
         lookupTaskBillingMode(modelSettingsRef.current, model.model_name)
       )
+      const savedResolutionPrices = parseVideoResolutionPriceOption(
+        modelSettingsRef.current?.VideoResolutionPrice
+      )[model.model_name]
+      setResolutionRows(videoResolutionPriceRows(savedResolutionPrices))
+      if (savedResolutionPrices) setPricingMode('video_resolution')
       form.reset({
         id: model.id,
         model_name: model.model_name,
@@ -474,6 +491,11 @@ export function ModelMutateDrawer({
       setTaskBillingMode(
         lookupTaskBillingMode(modelSettingsRef.current, modelName)
       )
+      const savedResolutionPrices = parseVideoResolutionPriceOption(
+        modelSettingsRef.current?.VideoResolutionPrice
+      )[modelName]
+      setResolutionRows(videoResolutionPriceRows(savedResolutionPrices))
+      if (savedResolutionPrices) setPricingMode('video_resolution')
       form.reset({
         model_name: modelName,
         description: '',
@@ -521,10 +543,16 @@ export function ModelMutateDrawer({
         if (response.success) {
           // Handle ratio configuration updates in system settings
           const finalModelName = values.model_name
+          const resolutionPrices =
+            pricingMode === 'video_resolution'
+              ? (validateVideoResolutionPriceRows(resolutionRows).prices ?? {})
+              : {}
           const hasRatioConfig =
             (pricingMode === 'per-request' &&
               values.price &&
               values.price !== '') ||
+            (pricingMode === 'video_resolution' &&
+              Object.keys(resolutionPrices).length > 0) ||
             (pricingMode === 'per-token' &&
               (values.ratio ||
                 values.cacheRatio ||
@@ -726,6 +754,28 @@ export function ModelMutateDrawer({
               })
             }
 
+            // 分辨率价格是独立选项：只在完整文档确有变化时提交一次更新，
+            // 且改名与后端事务保持一致（本地也搬迁旧键），绝不附带 TaskBillingMode
+            if (hasRatioConfig || finalModelName === loadedPricingName) {
+              const resolutionUpdate = buildVideoResolutionOptionUpdate({
+                oldName: isEditing ? oldModelName : '',
+                newName: finalModelName,
+                videoResolutionPrice: parseVideoResolutionPriceOption(
+                  modelSettings.VideoResolutionPrice
+                ),
+                prices: resolutionPrices,
+              })
+              if (
+                normalizeJsonString(resolutionUpdate.value) !==
+                normalizeJsonString(modelSettings.VideoResolutionPrice)
+              ) {
+                updates.push({
+                  key: resolutionUpdate.key,
+                  value: resolutionUpdate.value,
+                })
+              }
+            }
+
             // Apply all updates (including deletions when clearing fields)
             for (const update of updates) {
               await updateOption.mutateAsync(update)
@@ -756,6 +806,7 @@ export function ModelMutateDrawer({
       onOpenChange,
       pricingMode,
       taskBillingMode,
+      resolutionRows,
       oldModelName,
       loadedPricingName,
       modelSettings,
@@ -1051,8 +1102,28 @@ export function ModelMutateDrawer({
                       {t('Per-request (fixed price)')}
                     </Label>
                   </div>
+                  <div className='flex items-center space-x-2'>
+                    <RadioGroupItem
+                      value='video_resolution'
+                      id='video_resolution'
+                    />
+                    <Label htmlFor='video_resolution' className='font-normal'>
+                      {t('Video resolution')}
+                    </Label>
+                  </div>
                 </RadioGroup>
               </div>
+
+              {pricingMode === 'video_resolution' ? (
+                <VideoResolutionPriceEditor
+                  rows={resolutionRows}
+                  errorsByRowId={
+                    validateVideoResolutionPriceRows(resolutionRows)
+                      .errorsByRowId
+                  }
+                  onChange={setResolutionRows}
+                />
+              ) : null}
 
               {pricingMode === 'per-request' ? (
                 <>
