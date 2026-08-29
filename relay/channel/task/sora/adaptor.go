@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -514,6 +515,146 @@ func wrapDashScopeVideoPayload(bodyMap map[string]any) {
 	bodyMap["parameters"] = parameters
 }
 
+// megabyaiHost marks upstreams that only accept their own camelCase video dialect.
+const megabyaiHost = "megabyai.cc"
+
+// megabyaiReferenceURLs collects reference media URLs for one modality. Keys are
+// tried in order against the body and then against `metadata`, so a client may
+// speak the gateway's snake_case/plural aliases or megabyai's own camelCase key.
+// Both a JSON array and a bare string are accepted for each key.
+func megabyaiReferenceURLs(bodyMap map[string]any, keys ...string) []string {
+	scopes := []map[string]any{bodyMap}
+	if metadata, ok := bodyMap["metadata"].(map[string]any); ok {
+		scopes = append(scopes, metadata)
+	}
+	urls := make([]string, 0, 2)
+	for _, scope := range scopes {
+		for _, key := range keys {
+			switch value := scope[key].(type) {
+			case string:
+				if trimmed := strings.TrimSpace(value); trimmed != "" {
+					urls = append(urls, trimmed)
+				}
+			case []any:
+				for _, item := range value {
+					if u, ok := item.(string); ok {
+						if trimmed := strings.TrimSpace(u); trimmed != "" {
+							urls = append(urls, trimmed)
+						}
+					}
+				}
+			}
+			if len(urls) > 0 {
+				return urls
+			}
+		}
+	}
+	return nil
+}
+
+// buildMegabyaiVideoPayload rebuilds an OpenAI-style /v1/videos body into the
+// exact payload megabyai documents. The upstream validates strictly, so the
+// result carries only its own keys instead of being layered onto the original
+// body the way the DashScope dialect is. OpenAI's `size` ("720x1280") is split
+// into megabyai's `ratio` + `resolution`; a client that already sends
+// ratio/resolution/referenceX wins over anything derived.
+func buildMegabyaiVideoPayload(bodyMap map[string]any) map[string]any {
+	payload := map[string]any{"model": bodyMap["model"]}
+	if prompt, _ := bodyMap["prompt"].(string); prompt != "" {
+		payload["prompt"] = prompt
+	}
+
+	duration := 0
+	if seconds, _ := bodyMap["seconds"].(string); seconds != "" {
+		duration, _ = strconv.Atoi(seconds)
+	}
+	if duration <= 0 {
+		switch seconds := bodyMap["seconds"].(type) {
+		case float64:
+			duration = int(seconds)
+		}
+	}
+	if duration <= 0 {
+		if raw, ok := bodyMap["duration"].(float64); ok {
+			duration = int(raw)
+		} else if raw, ok := bodyMap["duration"].(string); ok {
+			duration, _ = strconv.Atoi(raw)
+		}
+	}
+	if duration > 0 {
+		payload["duration"] = duration
+	}
+
+	width, height := 0, 0
+	if size, _ := bodyMap["size"].(string); size != "" {
+		if parts := strings.SplitN(strings.ToLower(size), "x", 2); len(parts) == 2 {
+			width, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
+			height, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+		}
+	}
+
+	ratio, _ := bodyMap["ratio"].(string)
+	if ratio == "" {
+		ratio, _ = bodyMap["aspect_ratio"].(string)
+	}
+	if ratio == "" && width > 0 && height > 0 {
+		// snap to the closest ratio megabyai accepts; exotic sizes such as
+		// 1792x1024 reduce to 7:4, which the upstream rejects
+		best, bestDelta := "", 0.0
+		actual := float64(width) / float64(height)
+		for _, candidate := range []struct {
+			label string
+			value float64
+		}{
+			{"16:9", 16.0 / 9.0}, {"9:16", 9.0 / 16.0}, {"1:1", 1},
+			{"4:3", 4.0 / 3.0}, {"3:4", 3.0 / 4.0}, {"21:9", 21.0 / 9.0}, {"9:21", 9.0 / 21.0},
+		} {
+			delta := math.Abs(actual - candidate.value)
+			if best == "" || delta < bestDelta {
+				best, bestDelta = candidate.label, delta
+			}
+		}
+		ratio = best
+	}
+	if ratio != "" {
+		payload["ratio"] = ratio
+	}
+
+	resolution, _ := bodyMap["resolution"].(string)
+	resolution = strings.ToLower(strings.TrimSpace(resolution))
+	if resolution == "" && width > 0 && height > 0 {
+		shortSide := min(width, height)
+		best, bestDelta := "", 0
+		for _, candidate := range []struct {
+			label string
+			value int
+		}{{"480p", 480}, {"720p", 720}, {"1080p", 1080}, {"1440p", 1440}, {"4k", 2160}} {
+			delta := shortSide - candidate.value
+			if delta < 0 {
+				delta = -delta
+			}
+			if best == "" || delta < bestDelta {
+				best, bestDelta = candidate.label, delta
+			}
+		}
+		resolution = best
+	}
+	if resolution != "" {
+		payload["resolution"] = resolution
+	}
+
+	if images := megabyaiReferenceURLs(bodyMap, "referenceImages", "reference_images", "images", "input_reference", "image"); len(images) > 0 {
+		payload["referenceImages"] = images
+	}
+	if videos := megabyaiReferenceURLs(bodyMap, "referenceVideos", "reference_videos", "videos", "video"); len(videos) > 0 {
+		payload["referenceVideos"] = videos
+	}
+	if audios := megabyaiReferenceURLs(bodyMap, "referenceAudios", "reference_audios", "audios", "audio"); len(audios) > 0 {
+		payload["referenceAudios"] = audios
+	}
+	return payload
+}
+
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -563,7 +704,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 					bodyMap["parameters"] = parameters
 				}
 			}
-			if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
+			// 先归一化再改方言：megabyai 会把 size/seconds 折成 ratio+resolution+duration，
+			// 读到的必须是 ResolveVideoBilling 算账用的那份值，否则计费与载荷会分叉。
+			if strings.Contains(a.baseURL, megabyaiHost) {
+				bodyMap = buildMegabyaiVideoPayload(bodyMap)
+			} else if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
 				wrapDashScopeVideoPayload(bodyMap)
 			}
 			if newBody, err := common.Marshal(bodyMap); err == nil {

@@ -292,6 +292,73 @@ func TestWrapDashScopeVideoPayloadWrapsPromptImagesAndKnobs(t *testing.T) {
 	assert.Equal(t, "15", bodyMap["seconds"])
 }
 
+func TestBuildMegabyaiVideoPayloadMapsOpenAIVideoBody(t *testing.T) {
+	// megabyai rejects unknown keys, so the OpenAI-style body must be replaced,
+	// not extended: size becomes ratio + resolution, seconds becomes duration,
+	// and the reference aliases collapse onto the camelCase keys.
+	bodyMap := map[string]any{
+		"model":           "videos-standard",
+		"prompt":          "让参考角色在樱花树下挥手，镜头缓慢推进",
+		"seconds":         "8",
+		"size":            "720x1280",
+		"input_reference": "https://assets.example.com/character-front.jpg",
+		"response_format": "url",
+		"metadata": map[string]any{
+			"reference_videos": []any{"https://assets.example.com/motion-reference.mp4"},
+			"audios":           "https://assets.example.com/music.mp3",
+		},
+	}
+
+	payload := buildMegabyaiVideoPayload(bodyMap)
+
+	assert.Equal(t, map[string]any{
+		"model":           "videos-standard",
+		"prompt":          "让参考角色在樱花树下挥手，镜头缓慢推进",
+		"duration":        8,
+		"ratio":           "9:16",
+		"resolution":      "720p",
+		"referenceImages": []string{"https://assets.example.com/character-front.jpg"},
+		"referenceVideos": []string{"https://assets.example.com/motion-reference.mp4"},
+		"referenceAudios": []string{"https://assets.example.com/music.mp3"},
+	}, payload)
+}
+
+func TestBuildMegabyaiVideoPayloadKeepsClientDialectFields(t *testing.T) {
+	// a client that already speaks megabyai must pass through unchanged
+	bodyMap := map[string]any{
+		"model":           "videos-pro",
+		"prompt":          "一只猫",
+		"duration":        float64(4),
+		"ratio":           "1:1",
+		"resolution":      "1080p",
+		"referenceImages": []any{"https://assets.example.com/a.jpg", "https://assets.example.com/b.jpg"},
+	}
+
+	payload := buildMegabyaiVideoPayload(bodyMap)
+
+	assert.Equal(t, 4, payload["duration"])
+	assert.Equal(t, "1:1", payload["ratio"])
+	assert.Equal(t, "1080p", payload["resolution"])
+	assert.Equal(t, []string{"https://assets.example.com/a.jpg", "https://assets.example.com/b.jpg"}, payload["referenceImages"])
+}
+
+func TestBuildMegabyaiVideoPayloadSnapsUnsupportedSize(t *testing.T) {
+	// 1792x1024 reduces to 7:4, which megabyai rejects — it must snap to 16:9,
+	// and a text-to-video request must not carry empty reference arrays
+	payload := buildMegabyaiVideoPayload(map[string]any{
+		"model":  "videos-standard",
+		"prompt": "城市夜景",
+		"size":   "1792x1024",
+	})
+
+	assert.Equal(t, "16:9", payload["ratio"])
+	assert.Equal(t, "1080p", payload["resolution"])
+	assert.NotContains(t, payload, "referenceImages")
+	assert.NotContains(t, payload, "referenceVideos")
+	assert.NotContains(t, payload, "referenceAudios")
+	assert.NotContains(t, payload, "duration")
+}
+
 func TestWrapDashScopeVideoPayloadPreservesDialectInputAndRebuildsParameters(t *testing.T) {
 	existingInput := map[string]interface{}{"prompt": "already wrapped", "media": []interface{}{}}
 	bodyMap := map[string]interface{}{
