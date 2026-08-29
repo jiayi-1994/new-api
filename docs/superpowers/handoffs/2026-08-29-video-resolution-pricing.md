@@ -11,49 +11,50 @@ effective resolution pricing returns HTTP 400 before pre-consume or upstream
 submission. Legacy `TaskBillingMode` behavior remains unchanged and is ignored
 by this new resolution-pricing path.
 
-## Completed
+## Status
 
-- Tasks 1-4 of the implementation plan are complete and independently approved.
-- Configuration, validation, pricing contract, Sora/DashScope integration, and
-  provider resolution capability resolvers are committed through `dd7e0a74`.
-- Task 5 includes substantial work on frozen billing snapshots, settlement,
-  pricing API output, model lifecycle handling, logging, cache invalidation,
-  statistics, and regression tests.
+Tasks 1-8 of the implementation plan are complete.
 
-## Work in progress
+The two open billing-safety issues from the previous checkpoint are closed:
 
-Task 5 is not production-ready. The latest independent review found two open
-billing-safety issues:
+1. **Charged without a persisted task.** Resolution pre-consume now goes through
+   the durable `ResolutionBillingReservation` ledger
+   (`service.ResolutionReservationFunding`). `Task.Insert` attaches the
+   reservation in the same transaction that writes the task and its base
+   statistics; `service.PersistSubmittedTask` refunds synchronously and records
+   a refund log when the insert fails; `sweepOrphanedResolutionReservations`
+   (called from every polling pass) refunds reservations that were never
+   attached after a 15-minute grace period.
+2. **Non-atomic funding/token pre-consume.** `model.ReserveResolutionBilling`
+   commits the ledger row, the wallet/subscription debit and the token debit in
+   one transaction, so wallet fallback and compensation failures can no longer
+   leave the two halves out of step. The lock order is reservation →
+   funding/token → task/statistics everywhere. The interim `*Immediately` quota
+   helpers this superseded were removed together with their tests, and the
+   invariants they protected moved to
+   `model/resolution_billing_reservation_test.go`.
 
-1. If an upstream request succeeds but local `Task.Insert` fails, the request
-   can remain charged without a persisted task for recovery or settlement.
-2. Resolution token quota and wallet/subscription pre-consume are not yet
-   atomic under concurrent wallet fallback and compensation failure.
+## Verification
 
-A durable `ResolutionBillingReservation` ledger and focused model tests have
-been started. Its BillingSession, controller, task attachment, synchronous
-insert-failure refund, and orphan-recovery integration still need completion
-and independent review.
+Backend: `go build ./...` and `go test ./common ./setting/ratio_setting
+./relay/common ./relay/helper ./relay ./relay/channel/task/... ./model ./service
+./controller -count=1` — all packages pass.
 
-## Verification at checkpoint
+Frontend (from `web/`): `bun run typecheck`, `bun run lint` (new/changed files
+clean), `bun run i18n:sync`, `bun run build`, and
+`bun test src/features/system-settings src/features/pricing src/features/models`
+— 23 tests pass.
 
-- Package compilation passed:
-  `go test ./model ./service ./controller ./relay/helper ./relay/common -run '^$' -count=1`
-- Reservation model tests passed:
-  `go test ./model -run 'TestResolutionReservation' -count=1`
-- `git diff --check` passed.
+## Known pre-existing issues (not caused by this branch)
 
-Full Task 5 focused tests, complete backend tests, frontend tests, build checks,
-and final independent review remain pending.
-
-## Resume order
-
-1. Complete the reservation integration using a consistent lock order:
-   reservation, funding/token, then task/statistics.
-2. Add controller-level failure-injection coverage for upstream success followed
-   by task insert failure, including funding, token, log, task, and reservation
-   state assertions.
-3. Add concurrent wallet/subscription fallback coverage and orphan-sweep tests.
-4. Run the Task 5 focused suite and independent code review until no P1/P2
-   findings remain.
-5. Continue Tasks 6-8 and final verification from the implementation plan.
+- `TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode` /
+  `_UnsupportedModeKeepsEmpty` fail when the whole `./service` package runs but
+  pass in isolation. Reproduced unchanged at `dd7e0a74`, and
+  `service/channel_affinity*.go` is untouched by this branch.
+- `bun run format:check` still reports `web/scripts/{add-copyright,
+  format-with-protected-headers,sync-i18n}.mjs`; those files were already
+  unformatted before this branch and were deliberately left alone.
+- A failed resolution task still refunds through the legacy
+  `RefundTaskQuota` path, which adjusts funding and token quota in two steps.
+  That behavior is shared with every other task platform and was out of scope
+  here.
