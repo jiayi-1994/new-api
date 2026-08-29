@@ -409,6 +409,16 @@ func increaseTokenQuota(id int, quota int) (err error) {
 	return err
 }
 
+// IncreaseTokenQuotaImmediately bypasses the batch accumulator. Resolution-priced
+// asynchronous tasks use it so their persisted pre-consume state is the same
+// durable state later locked by settlement.
+func IncreaseTokenQuotaImmediately(tokenId int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	return updateTokenQuotaImmediately(tokenId, key, quota, false)
+}
+
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -437,6 +447,60 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 		},
 	).Error
 	return err
+}
+
+// DecreaseTokenQuotaImmediately bypasses the batch accumulator. See
+// IncreaseTokenQuotaImmediately for the resolution-task durability contract.
+func DecreaseTokenQuotaImmediately(tokenId int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	return updateTokenQuotaImmediately(tokenId, key, -quota, false)
+}
+
+// PreConsumeTokenQuotaImmediately performs the availability check and durable
+// debit in one transaction without reading through (or asynchronously filling)
+// Redis. This prevents an old cache-fill goroutine from racing the post-debit
+// invalidation for resolution-priced async tasks.
+func PreConsumeTokenQuotaImmediately(tokenId int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	return updateTokenQuotaImmediately(tokenId, key, -quota, true)
+}
+
+func updateTokenQuotaImmediately(tokenId int, key string, remainDelta int, requireAvailable bool) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if remainDelta == 0 {
+			var count int64
+			if err := tx.Model(&Token{}).Where("id = ?", tokenId).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 1 {
+				return gorm.ErrRecordNotFound
+			}
+		} else {
+			query := tx.Model(&Token{}).Where("id = ?", tokenId)
+			if requireAvailable && remainDelta < 0 {
+				query = query.Where("unlimited_quota = ? OR remain_quota >= ?", true, -remainDelta)
+			}
+			result := query.Updates(map[string]interface{}{
+				"remain_quota":  gorm.Expr("remain_quota + ?", remainDelta),
+				"used_quota":    gorm.Expr("used_quota - ?", remainDelta),
+				"accessed_time": common.GetTimestamp(),
+			})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("token quota is insufficient for resolution task pre-consume")
+			}
+		}
+		if common.RedisEnabled {
+			return cacheDeleteToken(key)
+		}
+		return nil
+	})
 }
 
 // CountUserTokens returns total number of tokens for the given user, used for pagination

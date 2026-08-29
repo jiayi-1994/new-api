@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +77,70 @@ func pricingEndpointTypesFromPricing(pricings []Pricing) map[string][]constant.E
 		byModel[pricing.ModelName] = pricing.SupportedEndpointTypes
 	}
 	return byModel
+}
+
+func resolutionPricingForModel(t *testing.T, modelName string, prices map[string]float64, legacyMode string) Pricing {
+	t.Helper()
+	resetPricingEndpointTestTables(t)
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	priceDocument, err := common.Marshal(map[string]map[string]float64{modelName: prices})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(string(priceDocument)))
+	modeDocument := "{}"
+	if legacyMode != "" {
+		raw, err := common.Marshal(map[string]string{modelName: legacyMode})
+		require.NoError(t, err)
+		modeDocument = string(raw)
+	}
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(modeDocument))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+		InvalidatePricingCache()
+	})
+
+	insertPricingEndpointChannel(t, 9901, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 9901, modelName)
+	for _, pricing := range GetPricing() {
+		if pricing.ModelName == modelName {
+			return pricing
+		}
+	}
+	require.FailNow(t, "resolution-priced model missing from pricing endpoint")
+	return Pricing{}
+}
+
+func TestPricingEndpointExposesResolutionPrices(t *testing.T) {
+	pricing := resolutionPricingForModel(t, "zz-video-resolution-endpoint", map[string]float64{
+		"720p":  0.10,
+		"1080p": 0.18,
+	}, "")
+
+	assert.Equal(t, 1, pricing.QuotaType)
+	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)
+	assert.Equal(t, map[string]float64{"720p": 0.10, "1080p": 0.18}, pricing.ResolutionPrices)
+}
+
+func TestPricingLegacySummaryUsesMinimumResolutionPrice(t *testing.T) {
+	pricing := resolutionPricingForModel(t, "zz-video-resolution-min", map[string]float64{
+		"720p":  0.10,
+		"4k":    0.35,
+		"1080p": 0.18,
+	}, "")
+
+	assert.Equal(t, 0.10, pricing.ModelPrice)
+	assert.Equal(t, 1, pricing.QuotaType)
+}
+
+func TestPricingResolutionModelReportsDerivedPerSecondUnit(t *testing.T) {
+	pricing := resolutionPricingForModel(t, "zz-video-resolution-unit", map[string]float64{"720p": 0.1}, "")
+	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)
+}
+
+func TestPricingResolutionModelIgnoresLegacyPerCallMode(t *testing.T) {
+	pricing := resolutionPricingForModel(t, "zz-video-resolution-ignore-mode", map[string]float64{"720p": 0.1}, ratio_setting.TaskBillingModePerCall)
+	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)
 }
 
 func TestPricingAdvancedCustomUsesConfiguredEndpointTypes(t *testing.T) {

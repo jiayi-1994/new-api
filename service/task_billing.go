@@ -19,12 +19,21 @@ import (
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
+	var resolvedVideoBilling *relaycommon.ResolvedVideoBilling
+	if info.TaskRelayInfo != nil {
+		resolvedVideoBilling = info.TaskRelayInfo.ResolvedVideoBilling
+	}
 	// 支持任务仅按次计费：额度不随参数变化，但参数（时长等）仍需记录以便追溯
-	perCallBilling := ratio_setting.IsTaskPerCallBilling(info.OriginModelName)
+	perCallBilling := resolvedVideoBilling == nil && ratio_setting.IsTaskPerCallBilling(info.OriginModelName)
 	if perCallBilling {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
 	}
-	if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
+	otherRatios := info.PriceData.OtherRatios()
+	if resolvedVideoBilling != nil {
+		otherRatios = resolvedVideoBilling.Selection.IndependentRatios
+		logContent = fmt.Sprintf("%s，按秒计费（%s）", logContent, resolvedVideoBilling.Selection.EffectiveResolution)
+	}
+	if len(otherRatios) > 0 {
 		var contents []string
 		for key, ra := range otherRatios {
 			if 1.0 != ra {
@@ -43,11 +52,24 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
-	other["model_price"] = info.PriceData.ModelPrice
+	if resolvedVideoBilling == nil {
+		other["model_price"] = info.PriceData.ModelPrice
+	} else {
+		adminInfo := map[string]interface{}{
+			"video_resolution_billing": map[string]interface{}{
+				"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
+				"selected_price_per_second":  resolvedVideoBilling.SelectedResolutionPrice,
+				"submitted_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
+				"effective_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
+				"independent_ratios":         resolvedVideoBilling.Selection.IndependentRatios,
+			},
+		}
+		other["admin_info"] = adminInfo
+	}
 	if perCallBilling {
 		other["task_per_call_billing"] = true
 	}
-	if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
+	if len(otherRatios) > 0 {
 		other["task_ratios"] = otherRatios
 	}
 	if info.PriceData.ModelRatio > 0 {
@@ -72,8 +94,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Group:     info.UsingGroup,
 		Other:     other,
 	})
-	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	if resolvedVideoBilling == nil {
+		model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
+		model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -132,14 +156,35 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
 	if bc := task.PrivateData.BillingContext; bc != nil {
-		other["model_price"] = bc.ModelPrice
-		if bc.ModelRatio > 0 {
-			other["model_ratio"] = bc.ModelRatio
-		}
-		other["group_ratio"] = bc.GroupRatio
-		if priceData := taskBillingContextPriceData(bc); priceData != nil {
-			for k, v := range priceData.OtherRatios() {
-				other[k] = v
+		if bc.PricingKind == model.TaskPricingKindVideoResolution {
+			effectiveDuration := bc.SettledDurationSeconds
+			if effectiveDuration <= 0 {
+				effectiveDuration = bc.EffectiveDurationSeconds
+			}
+			billingInfo := map[string]interface{}{
+				"effective_resolution":       bc.EffectiveResolution,
+				"selected_price_per_second":  bc.SelectedResolutionPrice,
+				"submitted_duration_seconds": bc.EffectiveDurationSeconds,
+				"effective_duration_seconds": effectiveDuration,
+			}
+			if len(bc.IndependentRatios) > 0 {
+				billingInfo["independent_ratios"] = bc.IndependentRatios
+				other["task_ratios"] = bc.IndependentRatios
+			}
+			other["admin_info"] = map[string]interface{}{
+				"video_resolution_billing": billingInfo,
+			}
+			other["group_ratio"] = bc.GroupRatio
+		} else {
+			other["model_price"] = bc.ModelPrice
+			if bc.ModelRatio > 0 {
+				other["model_ratio"] = bc.ModelRatio
+			}
+			other["group_ratio"] = bc.GroupRatio
+			if priceData := taskBillingContextPriceData(bc); priceData != nil {
+				for k, v := range priceData.OtherRatios() {
+					other[k] = v
+				}
 			}
 		}
 	}
@@ -160,6 +205,25 @@ func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData 
 		return nil
 	}
 	return priceData
+}
+
+// CalculateVideoResolutionSnapshotQuota recalculates a video task exclusively
+// from its frozen per-second resolution billing snapshot.
+func CalculateVideoResolutionSnapshotQuota(bc *model.TaskBillingContext, effectiveDurationSeconds int) (int, *common.QuotaClamp, error) {
+	if bc == nil || bc.PricingKind != model.TaskPricingKindVideoResolution {
+		return 0, nil, fmt.Errorf("video resolution billing snapshot is missing")
+	}
+	resolution, err := common.NormalizeVideoResolutionKey(bc.EffectiveResolution)
+	if err != nil || resolution != bc.EffectiveResolution {
+		return 0, nil, fmt.Errorf("video resolution billing snapshot has invalid resolution")
+	}
+	return relaycommon.CalculateVideoResolutionQuotaAtUnit(
+		bc.SelectedResolutionPrice,
+		effectiveDurationSeconds,
+		bc.GroupRatio,
+		bc.IndependentRatios,
+		bc.QuotaPerUnit,
+	)
 }
 
 // taskModelName 从 BillingContext 或 Properties 中获取模型名称。
@@ -282,6 +346,95 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Other:     other,
 		NodeName:  task.PrivateData.NodeName,
 	})
+}
+
+// RecalculateResolutionTaskQuota atomically commits the resolution task's
+// funding/token delta together with its quota and private billing snapshot.
+// A false result means no settlement was committed, so callers must restore
+// any in-memory snapshot mutation; retrying the same frozen calculation is
+// safe because the model layer compares the persisted pre-consume state.
+func RecalculateResolutionTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamp *common.QuotaClamp, fromStatuses ...model.TaskStatus) bool {
+	if actualQuota < 0 {
+		return false
+	}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.PricingKind != model.TaskPricingKindVideoResolution {
+		return false
+	}
+	if bc.SettlementCompleted {
+		return true
+	}
+	fromStatus := task.Status
+	if len(fromStatuses) > 0 {
+		fromStatus = fromStatuses[0]
+	}
+
+	preConsumedQuota := task.Quota
+	if bc.SettlementPending {
+		if bc.SettlementActualQuota != actualQuota || bc.SettlementPreConsumed < 0 {
+			logger.LogError(ctx, fmt.Sprintf("resolution task settlement outbox conflict for task %s", task.TaskID))
+			return false
+		}
+		preConsumedQuota = bc.SettlementPreConsumed
+	} else {
+		bc.SettlementPending = true
+		bc.SettlementPreConsumed = preConsumedQuota
+		bc.SettlementActualQuota = actualQuota
+		bc.SettlementQuotaClamp = clamp
+		if _, err := task.SettleResolutionQuota(actualQuota, fromStatus); err != nil {
+			bc.SettlementPending = false
+			bc.SettlementPreConsumed = 0
+			bc.SettlementActualQuota = 0
+			bc.SettlementQuotaClamp = nil
+			logger.LogError(ctx, fmt.Sprintf("resolution task settlement failed for task %s: %s", task.TaskID, err.Error()))
+			return false
+		}
+	}
+
+	quotaDelta := actualQuota - preConsumedQuota
+	var logType int
+	var logQuota int
+	if quotaDelta > 0 {
+		logType = model.LogTypeConsume
+		logQuota = quotaDelta
+	} else if quotaDelta < 0 {
+		logType = model.LogTypeRefund
+		logQuota = -quotaDelta
+	}
+	other := taskBillingOther(task)
+	other["task_id"] = task.TaskID
+	other["pre_consumed_quota"] = preConsumedQuota
+	other["actual_quota"] = actualQuota
+	attachQuotaSaturationToOther(other, bc.SettlementQuotaClamp)
+	if err := task.PublishResolutionSettlement(model.RecordTaskBillingLogParams{
+		UserId:    task.UserId,
+		LogType:   logType,
+		Content:   reason,
+		ChannelId: task.ChannelId,
+		ModelName: taskModelName(task),
+		Quota:     logQuota,
+		TokenId:   task.PrivateData.TokenId,
+		Group:     task.Group,
+		Other:     other,
+		NodeName:  task.PrivateData.NodeName,
+	}); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("resolution task settlement publication failed for task %s: %s", task.TaskID, err.Error()))
+		return false
+	}
+
+	if quotaDelta == 0 {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
+			task.TaskID, logger.LogQuota(actualQuota), reason))
+		return true
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("任务 %s 差额结算：delta=%s（实际：%s，预扣：%s，%s）",
+		task.TaskID,
+		logger.LogQuota(quotaDelta),
+		logger.LogQuota(actualQuota),
+		logger.LogQuota(preConsumedQuota),
+		reason,
+	))
+	return true
 }
 
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。

@@ -389,20 +389,28 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	}
 	cacheGetChannel, err := model.CacheGetChannel(channelId)
 	if err != nil {
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
+		failReason := fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId)
 		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
+			task, ok := taskM[upstreamID]
+			if !ok || task == nil {
+				continue
 			}
-		}
-		errUpdate := model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if errUpdate != nil {
-			common.SysLog(fmt.Sprintf("UpdateVideoTask error: %v", errUpdate))
+			if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution &&
+				(bc.SettlementPending || bc.SettlementCompleted) {
+				continue
+			}
+			failed := *task
+			failed.FailReason = failReason
+			failed.Status = model.TaskStatusFailure
+			failed.Progress = taskcommon.ProgressComplete
+			won, updateErr := failed.UpdateWithStatus(task.Status)
+			if updateErr != nil {
+				common.SysLog(fmt.Sprintf("UpdateVideoTask error: %v", updateErr))
+				continue
+			}
+			if won {
+				*task = failed
+			}
 		}
 		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
@@ -495,6 +503,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	task.Data = redactVideoResponseBody(responseBody)
 
 	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution &&
+		(bc.SettlementPending || bc.SettlementCompleted) {
+		taskResult.Status = model.TaskStatusSuccess
+		if taskResult.Url == "" {
+			taskResult.Url = task.PrivateData.ResultURL
+		}
+	}
 
 	now := time.Now().Unix()
 	if taskResult.Status == "" {
@@ -570,6 +585,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskResult.Progress
 	}
 
+	if shouldSettle {
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
+			if !settleTaskBillingOnComplete(ctx, adaptor, task, taskResult, snap.Status) {
+				return nil
+			}
+			shouldSettle = false
+		}
+	}
+
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
 		won, err := task.UpdateWithStatus(snap.Status)
@@ -640,21 +664,63 @@ func truncateBase64(s string) string {
 //
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
-func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo, fromStatuses ...model.TaskStatus) bool {
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
+		fromStatus := task.Status
+		if len(fromStatuses) > 0 {
+			fromStatus = fromStatuses[0]
+		}
+		if bc.SettlementCompleted {
+			return true
+		}
+		if bc.SettlementPending {
+			return RecalculateResolutionTaskQuota(
+				ctx,
+				task,
+				bc.SettlementActualQuota,
+				"video resolution per-second settlement",
+				bc.SettlementQuotaClamp,
+				fromStatus,
+			)
+		}
+		effectiveDuration := taskResult.EffectiveDurationSeconds
+		if effectiveDuration < 0 || effectiveDuration > relaycommon.MaxTaskDurationSeconds {
+			logger.LogWarn(ctx, fmt.Sprintf("task %s returned invalid video duration %d; retain pre-consume quota", task.TaskID, effectiveDuration))
+			return true
+		}
+		if effectiveDuration == 0 {
+			effectiveDuration = bc.EffectiveDurationSeconds
+		}
+		actualQuota, clamp, err := CalculateVideoResolutionSnapshotQuota(bc, effectiveDuration)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("task %s has invalid video resolution billing snapshot: %s", task.TaskID, err.Error()))
+			return true
+		}
+		previousSettledDuration := bc.SettledDurationSeconds
+		if taskResult.EffectiveDurationSeconds > 0 {
+			bc.SettledDurationSeconds = effectiveDuration
+		}
+		if !RecalculateResolutionTaskQuota(ctx, task, actualQuota, "video resolution per-second settlement", clamp, fromStatus) {
+			bc.SettledDurationSeconds = previousSettledDuration
+			return false
+		}
+		return true
+	}
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
-		return
+		return true
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
 		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
-		return
+		return true
 	}
 	// 2. 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
-		return
+		return true
 	}
 	// 3. 无调整，保持预扣额度
+	return true
 }

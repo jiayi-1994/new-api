@@ -26,6 +26,23 @@ func TestCalculateVideoResolutionQuotaAlwaysMultipliesDurationOnce(t *testing.T)
 	assert.Equal(t, 600, quota)
 }
 
+func TestCalculateVideoResolutionQuotaAtUnitUsesExplicitSnapshot(t *testing.T) {
+	originalQuotaPerUnit := rootcommon.QuotaPerUnit
+	rootcommon.QuotaPerUnit = 1_000
+	t.Cleanup(func() { rootcommon.QuotaPerUnit = originalQuotaPerUnit })
+
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500)
+
+	require.NoError(t, err)
+	assert.Nil(t, clamp)
+	assert.Equal(t, 300, quota)
+
+	quota, clamp, err = CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, nil, 0)
+	assert.Error(t, err)
+	assert.Zero(t, quota)
+	assert.Nil(t, clamp)
+}
+
 func TestCalculateVideoResolutionQuotaRejectsUnsafeInputs(t *testing.T) {
 	tests := []struct {
 		name       string

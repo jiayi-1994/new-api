@@ -1254,6 +1254,21 @@ func increaseUserQuota(id int, quota int) (err error) {
 	return err
 }
 
+// IncreaseUserQuotaImmediately persists before invalidating cache and bypasses
+// the batch accumulator. Resolution-priced async tasks use this durable path
+// because their later settlement locks the database balance.
+func IncreaseUserQuotaImmediately(id int, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota)).Error; err != nil {
+			return err
+		}
+		return invalidateUserCache(id)
+	})
+}
+
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -1277,6 +1292,29 @@ func decreaseUserQuota(id int, quota int) (err error) {
 		return err
 	}
 	return err
+}
+
+// DecreaseUserQuotaImmediately is the debit counterpart of
+// IncreaseUserQuotaImmediately.
+func DecreaseUserQuotaImmediately(id int, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if quota == 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&User{}).
+			Where("id = ? AND quota >= ?", id, quota).
+			Update("quota", gorm.Expr("quota - ?", quota))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("%w: need=%d", ErrInsufficientUserQuota, quota)
+		}
+		return invalidateUserCache(id)
+	})
 }
 
 func DeltaUpdateUserQuota(id int, delta int) (err error) {

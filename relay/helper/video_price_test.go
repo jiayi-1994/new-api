@@ -40,6 +40,17 @@ func videoPriceTestContext(t *testing.T) (*gin.Context, *relaycommon.RelayInfo) 
 	return c, info
 }
 
+func TestHasModelBillingConfigIncludesResolutionOnlyModel(t *testing.T) {
+	original := ratio_setting.VideoResolutionPrice2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"resolution-only-model":{"720p":0.1}}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(original))
+	})
+
+	assert.True(t, HasModelBillingConfig("resolution-only-model"))
+	assert.False(t, HasModelBillingConfig("missing-resolution-model"))
+}
+
 func TestBuildVideoResolutionPriceDataAlwaysMultipliesDuration(t *testing.T) {
 	c, info := videoPriceTestContext(t)
 	selection := relaycommon.VideoBillingSelection{
@@ -58,9 +69,12 @@ func TestBuildVideoResolutionPriceDataAlwaysMultipliesDuration(t *testing.T) {
 	assert.Equal(t, 1.0, priceData.GroupRatioInfo.GroupRatio)
 	assert.Equal(t, map[string]float64{"video_input": 1.5}, priceData.OtherRatios())
 	require.NotNil(t, info.ResolvedVideoBilling)
+	assert.Equal(t, 500.0, info.ResolvedVideoBilling.QuotaPerUnit)
 	selection.IndependentRatios["video_input"] = 9
 	assert.Equal(t, map[string]float64{"video_input": 1.5}, info.ResolvedVideoBilling.Selection.IndependentRatios)
 	assert.Equal(t, 0.1, info.ResolvedVideoBilling.SelectedResolutionPrice)
+	common.QuotaPerUnit = 1_000
+	assert.Equal(t, 600, priceData.Quota)
 }
 
 func TestBuildVideoResolutionPriceDataIgnoresLegacyPerCallMode(t *testing.T) {

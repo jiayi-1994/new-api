@@ -588,14 +588,7 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  ratio_setting.IsTaskPerCallBilling(relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
-		}
+		task.PrivateData.BillingContext = taskBillingContextFromRelayInfo(relayInfo)
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
@@ -606,6 +599,41 @@ func RelayTask(c *gin.Context) {
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+	}
+}
+
+func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.TaskBillingContext {
+	if relayInfo == nil {
+		return nil
+	}
+	if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.ResolvedVideoBilling != nil {
+		resolved := relayInfo.TaskRelayInfo.ResolvedVideoBilling
+		independentRatios := make(map[string]float64, len(resolved.Selection.IndependentRatios))
+		for name, ratio := range resolved.Selection.IndependentRatios {
+			independentRatios[name] = ratio
+		}
+		if len(independentRatios) == 0 {
+			independentRatios = nil
+		}
+		return &model.TaskBillingContext{
+			ModelPrice:               resolved.SelectedResolutionPrice,
+			GroupRatio:               relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			OriginModelName:          relayInfo.OriginModelName,
+			PricingKind:              model.TaskPricingKindVideoResolution,
+			EffectiveResolution:      resolved.Selection.EffectiveResolution,
+			SelectedResolutionPrice:  resolved.SelectedResolutionPrice,
+			EffectiveDurationSeconds: resolved.Selection.EffectiveDurationSeconds,
+			QuotaPerUnit:             resolved.QuotaPerUnit,
+			IndependentRatios:        independentRatios,
+		}
+	}
+	return &model.TaskBillingContext{
+		ModelPrice:      relayInfo.PriceData.ModelPrice,
+		GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+		ModelRatio:      relayInfo.PriceData.ModelRatio,
+		OtherRatios:     relayInfo.PriceData.OtherRatios(),
+		OriginModelName: relayInfo.OriginModelName,
+		PerCallBilling:  ratio_setting.IsTaskPerCallBilling(relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
 	}
 }
 

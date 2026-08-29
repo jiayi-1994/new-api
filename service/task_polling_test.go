@@ -3,8 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +19,10 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type taskPollingFetchAdaptor struct {
@@ -28,6 +33,33 @@ type taskPollingFetchAdaptor struct {
 	blockStarted chan struct{}
 	releaseBlock chan struct{}
 	blockOnce    sync.Once
+}
+
+type resolutionSuccessPollingAdaptor struct {
+	adjustCalls int
+}
+
+func (a *resolutionSuccessPollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
+
+func (a *resolutionSuccessPollingAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBufferString(`{"provider_status":"complete"}`)),
+	}, nil
+}
+
+func (a *resolutionSuccessPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{
+		Status:                   model.TaskStatusSuccess,
+		Url:                      "https://example.invalid/video.mp4",
+		EffectiveDurationSeconds: 4,
+		TotalTokens:              999999,
+	}, nil
+}
+
+func (a *resolutionSuccessPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	a.adjustCalls++
+	return 123456
 }
 
 type sunoFailurePollingAdaptor struct {
@@ -163,6 +195,255 @@ func seedPollingTask(t *testing.T, channelID int, publicID string, upstreamID st
 	}
 	require.NoError(t, model.DB.Create(task).Error)
 	return task
+}
+
+func TestResolutionPricedTaskPollingSettlesPerSecondDifference(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 120, 120
+	seedUser(t, userID, 1_000_000)
+	seedTaskPollingChannel(t, channelID, true)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_resolution_polling"
+	task.Platform = constant.TaskPlatform("kling")
+	task.Action = constant.TaskActionGenerate
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "30%"
+	task.PrivateData.UpstreamTaskID = "upstream_resolution_polling"
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	require.NoError(t, model.DB.Create(task).Error)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	adaptor := &resolutionSuccessPollingAdaptor{}
+
+	err = updateVideoSingleTask(context.Background(), adaptor, &channel, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	})
+	require.NoError(t, err)
+
+	want, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 4, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	assert.Equal(t, want, task.Quota)
+	assert.Zero(t, adaptor.adjustCalls)
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	require.NotNil(t, reloaded.PrivateData.BillingContext)
+	assert.Equal(t, 4, reloaded.PrivateData.BillingContext.SettledDurationSeconds)
+}
+
+func TestResolutionPollingKeepsTerminalTaskRetryableWhenSettlementPersistenceFails(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 392, 392
+	seedUser(t, userID, 1_000_000)
+	seedTaskPollingChannel(t, channelID, true)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_resolution_terminal_retry"
+	task.Platform = constant.TaskPlatform("kling")
+	task.Action = constant.TaskActionGenerate
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "30%"
+	task.PrivateData.UpstreamTaskID = "upstream_resolution_terminal_retry"
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	require.NoError(t, model.DB.Create(task).Error)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+
+	const callbackName = "test:fail_resolution_polling_settlement_task_update"
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Task" {
+			return
+		}
+		values, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok {
+			return
+		}
+		if _, hasQuota := values["quota"]; hasQuota {
+			tx.AddError(errors.New("forced resolution settlement persistence failure"))
+		}
+	}))
+	callbackRegistered := true
+	t.Cleanup(func() {
+		if callbackRegistered {
+			require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+		}
+	})
+
+	adaptor := &resolutionSuccessPollingAdaptor{}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &channel, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	}))
+	var afterFailure model.Task
+	require.NoError(t, model.DB.First(&afterFailure, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), afterFailure.Status)
+	assert.Equal(t, preConsumed, afterFailure.Quota)
+	assert.True(t, model.HasUnfinishedSyncTasks())
+	assert.Zero(t, countLogs(t))
+
+	require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	callbackRegistered = false
+	require.NoError(t, model.DB.First(&afterFailure, task.ID).Error)
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &channel, afterFailure.GetUpstreamTaskID(), map[string]*model.Task{
+		afterFailure.GetUpstreamTaskID(): &afterFailure,
+	}))
+	var afterRetry model.Task
+	require.NoError(t, model.DB.First(&afterRetry, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), afterRetry.Status)
+	assert.False(t, afterRetry.PrivateData.BillingContext.SettlementPending)
+	assert.False(t, model.HasUnfinishedSyncTasks())
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestResolutionPollingDeduplicatesLogWhenPendingClearFails(t *testing.T) {
+	truncate(t)
+	originalLogDB := model.LOG_DB
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+	model.LOG_DB = logDB
+	t.Cleanup(func() { model.LOG_DB = originalLogDB })
+
+	const userID, channelID = 393, 393
+	seedUser(t, userID, 1_000_000)
+	seedTaskPollingChannel(t, channelID, true)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_resolution_log_dedupe"
+	task.Platform = constant.TaskPlatform("kling")
+	task.Action = constant.TaskActionGenerate
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "30%"
+	task.PrivateData.UpstreamTaskID = "upstream_resolution_log_dedupe"
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	require.NoError(t, model.DB.Create(task).Error)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+
+	const callbackName = "test:fail_resolution_pending_clear"
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Task" {
+			return
+		}
+		values, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok {
+			return
+		}
+		if _, hasPrivateData := values["private_data"]; hasPrivateData {
+			if _, hasQuota := values["quota"]; !hasQuota {
+				tx.AddError(errors.New("forced settlement pending clear failure"))
+			}
+		}
+	}))
+	callbackRegistered := true
+	t.Cleanup(func() {
+		if callbackRegistered {
+			require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+		}
+	})
+
+	adaptor := &resolutionSuccessPollingAdaptor{}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &channel, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	}))
+	var pending model.Task
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), pending.Status)
+	require.NotNil(t, pending.PrivateData.BillingContext)
+	assert.True(t, pending.PrivateData.BillingContext.SettlementPending)
+	assert.Equal(t, int64(1), countLogs(t))
+	var firstLog model.Log
+	require.NoError(t, model.LOG_DB.First(&firstLog).Error)
+	assert.Equal(t, "task-resolution-settlement-"+strconv.FormatInt(task.ID, 10), firstLog.RequestId)
+
+	require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	callbackRegistered = false
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &channel, pending.GetUpstreamTaskID(), map[string]*model.Task{
+		pending.GetUpstreamTaskID(): &pending,
+	}))
+	var afterRetry model.Task
+	require.NoError(t, model.DB.First(&afterRetry, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), afterRetry.Status)
+	assert.False(t, afterRetry.PrivateData.BillingContext.SettlementPending)
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestResolutionPollingSerializesSeparateLogDatabasePublicationAcrossSQLiteSessions(t *testing.T) {
+	originalDB, originalLogDB := model.DB, model.LOG_DB
+	tempDir := t.TempDir()
+	mainDSN := "file:" + filepath.ToSlash(filepath.Join(tempDir, "main.db")) + "?_busy_timeout=5000"
+	logDSN := "file:" + filepath.ToSlash(filepath.Join(tempDir, "log.db")) + "?_busy_timeout=5000"
+	mainDB, err := gorm.Open(sqlite.Open(mainDSN), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open(logDSN), &gorm.Config{})
+	require.NoError(t, err)
+	mainSQLDB, err := mainDB.DB()
+	require.NoError(t, err)
+	mainSQLDB.SetMaxOpenConns(4)
+	logSQLDB, err := logDB.DB()
+	require.NoError(t, err)
+	logSQLDB.SetMaxOpenConns(4)
+	require.NoError(t, mainDB.AutoMigrate(&model.Task{}, &model.User{}, &model.Channel{}))
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+	model.DB, model.LOG_DB = mainDB, logDB
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = originalDB, originalLogDB
+		require.NoError(t, mainSQLDB.Close())
+		require.NoError(t, logSQLDB.Close())
+	})
+
+	const userID, channelID = 402, 402
+	seedUser(t, userID, 1_000_000)
+	seedTaskPollingChannel(t, channelID, true)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_resolution_cross_database_concurrency"
+	task.Platform = constant.TaskPlatform("kling")
+	task.Action = constant.TaskActionGenerate
+	task.PrivateData.UpstreamTaskID = "upstream_resolution_cross_database_concurrency"
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	require.NoError(t, model.DB.Create(task).Error)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	var firstPollerTask, secondPollerTask model.Task
+	require.NoError(t, model.DB.First(&firstPollerTask, task.ID).Error)
+	require.NoError(t, model.DB.First(&secondPollerTask, task.ID).Error)
+
+	start := make(chan struct{})
+	errorsByPoller := make(chan error, 2)
+	var pollers sync.WaitGroup
+	for _, pollerTask := range []*model.Task{&firstPollerTask, &secondPollerTask} {
+		pollerTask := pollerTask
+		pollers.Add(1)
+		go func() {
+			defer pollers.Done()
+			<-start
+			errorsByPoller <- updateVideoSingleTask(context.Background(), &resolutionSuccessPollingAdaptor{}, &channel, pollerTask.GetUpstreamTaskID(), map[string]*model.Task{
+				pollerTask.GetUpstreamTaskID(): pollerTask,
+			})
+		}()
+	}
+	close(start)
+	pollers.Wait()
+	close(errorsByPoller)
+	for pollerErr := range errorsByPoller {
+		require.NoError(t, pollerErr)
+	}
+
+	var persisted model.Task
+	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+	require.NotNil(t, persisted.PrivateData.BillingContext)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), persisted.Status)
+	assert.False(t, persisted.PrivateData.BillingContext.SettlementPending)
+	assert.True(t, persisted.PrivateData.BillingContext.SettlementCompleted)
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, "task-resolution-settlement-"+strconv.FormatInt(task.ID, 10), logs[0].RequestId)
 }
 
 func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {
@@ -495,4 +776,97 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	assert.Contains(t, reloadedModern.FailReason, "任务超时")
 	assert.Equal(t, initialQuota+modernTaskQuota, getUserQuota(t, userID))
 	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestSweepTimedOutTasksDoesNotCrossResolutionSettlementMarkers(t *testing.T) {
+	truncate(t)
+	const userID = 404
+	seedUser(t, userID, 10_000)
+	for index, state := range []struct {
+		name      string
+		pending   bool
+		completed bool
+	}{
+		{name: "pending", pending: true},
+		{name: "completed", completed: true},
+	} {
+		task := makeTask(userID, 0, 1_200+index, 0, BillingSourceWallet, 0)
+		task.TaskID = "resolution_timeout_guard_" + state.name
+		task.Progress = "50%"
+		task.SubmitTime = time.Now().Add(-2 * time.Minute).Unix()
+		task.PrivateData.BillingContext = resolutionBillingContext(8)
+		task.PrivateData.BillingContext.SettlementPending = state.pending
+		task.PrivateData.BillingContext.SettlementCompleted = state.completed
+		if state.pending {
+			task.PrivateData.BillingContext.SettlementPreConsumed = 1_500
+			task.PrivateData.BillingContext.SettlementActualQuota = task.Quota
+		}
+		require.NoError(t, model.DB.Create(task).Error)
+	}
+
+	previousTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
+	sweepTimedOutTasks(context.Background())
+
+	var tasks []model.Task
+	require.NoError(t, model.DB.Where("task_id LIKE ?", "resolution_timeout_guard_%").Order("id").Find(&tasks).Error)
+	require.Len(t, tasks, 2)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), tasks[0].Status)
+	assert.True(t, tasks[0].PrivateData.BillingContext.SettlementPending)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), tasks[1].Status)
+	assert.True(t, tasks[1].PrivateData.BillingContext.SettlementCompleted)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+	assert.Zero(t, countLogs(t))
+}
+
+func TestChannelLookupFailureDoesNotTerminalizeResolutionSettlementMarkers(t *testing.T) {
+	truncate(t)
+	const userID, missingChannelID = 405, 405
+	seedUser(t, userID, 10_000)
+	taskIDs := make([]string, 0, 2)
+	tasksByUpstreamID := make(map[string]*model.Task, 2)
+	for index, state := range []struct {
+		name      string
+		pending   bool
+		completed bool
+	}{
+		{name: "pending", pending: true},
+		{name: "completed", completed: true},
+	} {
+		task := makeTask(userID, missingChannelID, 1_200+index, 0, BillingSourceWallet, 0)
+		task.TaskID = "resolution_missing_channel_" + state.name
+		task.Platform = constant.TaskPlatform("kling")
+		task.Action = constant.TaskActionGenerate
+		task.PrivateData.UpstreamTaskID = "upstream_resolution_missing_channel_" + state.name
+		task.PrivateData.BillingContext = resolutionBillingContext(8)
+		task.PrivateData.BillingContext.SettlementPending = state.pending
+		task.PrivateData.BillingContext.SettlementCompleted = state.completed
+		if state.pending {
+			task.PrivateData.BillingContext.SettlementPreConsumed = 1_500
+			task.PrivateData.BillingContext.SettlementActualQuota = task.Quota
+		}
+		require.NoError(t, model.DB.Create(task).Error)
+		taskIDs = append(taskIDs, task.GetUpstreamTaskID())
+		tasksByUpstreamID[task.GetUpstreamTaskID()] = task
+	}
+	legacyTask := makeTask(userID, missingChannelID, 900, 0, BillingSourceWallet, 0)
+	legacyTask.TaskID = "resolution_missing_channel_legacy"
+	legacyTask.Platform = constant.TaskPlatform("kling")
+	legacyTask.Action = constant.TaskActionGenerate
+	legacyTask.PrivateData.UpstreamTaskID = "upstream_resolution_missing_channel_legacy"
+	legacyTask.PrivateData.BillingContext = nil
+	require.NoError(t, model.DB.Create(legacyTask).Error)
+	taskIDs = append(taskIDs, legacyTask.GetUpstreamTaskID())
+	tasksByUpstreamID[legacyTask.GetUpstreamTaskID()] = legacyTask
+
+	require.Error(t, updateVideoTasks(context.Background(), constant.TaskPlatform("kling"), missingChannelID, taskIDs, tasksByUpstreamID))
+	var tasks []model.Task
+	require.NoError(t, model.DB.Where("task_id LIKE ?", "resolution_missing_channel_%").Order("id").Find(&tasks).Error)
+	require.Len(t, tasks, 3)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), tasks[0].Status)
+	assert.True(t, tasks[0].PrivateData.BillingContext.SettlementPending)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), tasks[1].Status)
+	assert.True(t, tasks[1].PrivateData.BillingContext.SettlementCompleted)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusFailure), tasks[2].Status)
 }

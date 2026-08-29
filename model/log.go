@@ -414,17 +414,38 @@ type RecordTaskBillingLogParams struct {
 	Group     string
 	Other     map[string]interface{}
 	NodeName  string // 任务发起节点；为空时回退当前节点
+	RequestId string // 可选的幂等 request_id；resolution settlement 使用确定值
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
-	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
-	}
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
 	if params.TokenId > 0 {
 		if token, err := GetTokenById(params.TokenId); err == nil {
 			tokenName = token.Name
+		}
+	}
+	created, createdAt, err := recordTaskBillingLogOnce(LOG_DB, params, username, tokenName)
+	if err != nil {
+		common.SysLog("failed to record task billing log: " + err.Error())
+		return
+	}
+	if created {
+		exportTaskBillingLog(params, username, createdAt)
+	}
+}
+
+func recordTaskBillingLogOnce(logDB *gorm.DB, params RecordTaskBillingLogParams, username string, tokenName string) (bool, int64, error) {
+	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
+		return false, 0, nil
+	}
+	if params.RequestId != "" {
+		var count int64
+		if err := logDB.Model(&Log{}).Where("request_id = ?", params.RequestId).Limit(1).Count(&count).Error; err != nil {
+			return false, 0, err
+		}
+		if count > 0 {
+			return false, 0, nil
 		}
 	}
 	createdAt := common.GetTimestamp()
@@ -441,11 +462,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		TokenId:   params.TokenId,
 		Group:     params.Group,
 		Other:     common.MapToJsonStr(params.Other),
+		RequestId: params.RequestId,
 	}
-	err := createLog(log)
-	if err != nil {
-		common.SysLog("failed to record task billing log: " + err.Error())
+	ensureLogRequestId(log)
+	if err := logDB.Create(log).Error; err != nil {
+		return false, 0, err
 	}
+	return true, createdAt, nil
+}
+
+func exportTaskBillingLog(params RecordTaskBillingLogParams, username string, createdAt int64) {
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		nodeName := params.NodeName
 		if nodeName == "" {

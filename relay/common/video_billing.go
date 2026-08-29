@@ -23,6 +23,7 @@ type VideoBillingSelection struct {
 type ResolvedVideoBilling struct {
 	Selection               VideoBillingSelection
 	SelectedResolutionPrice float64
+	QuotaPerUnit            float64
 }
 
 // NewResolvedVideoBilling validates and defensively copies billing inputs so
@@ -63,6 +64,25 @@ func CalculateVideoResolutionQuota(
 	groupRatio float64,
 	independentRatios map[string]float64,
 ) (int, *rootcommon.QuotaClamp, error) {
+	return CalculateVideoResolutionQuotaAtUnit(
+		resolutionPrice,
+		durationSeconds,
+		groupRatio,
+		independentRatios,
+		rootcommon.QuotaPerUnit,
+	)
+}
+
+// CalculateVideoResolutionQuotaAtUnit calculates against an explicit quota
+// conversion basis so asynchronous settlement can use the submission-time
+// snapshot even when the live system option changes while a task is running.
+func CalculateVideoResolutionQuotaAtUnit(
+	resolutionPrice float64,
+	durationSeconds int,
+	groupRatio float64,
+	independentRatios map[string]float64,
+	quotaPerUnit float64,
+) (int, *rootcommon.QuotaClamp, error) {
 	if err := validatePositiveFinite("resolution price", resolutionPrice); err != nil {
 		return 0, nil, err
 	}
@@ -70,6 +90,9 @@ func CalculateVideoResolutionQuota(
 		return 0, nil, err
 	}
 	if err := validatePositiveFinite("group ratio", groupRatio); err != nil {
+		return 0, nil, err
+	}
+	if err := validatePositiveFinite("quota per unit", quotaPerUnit); err != nil {
 		return 0, nil, err
 	}
 
@@ -84,7 +107,7 @@ func CalculateVideoResolutionQuota(
 		priceData.AddOtherRatio(name, ratio)
 	}
 
-	quotaValue := resolutionPrice * rootcommon.QuotaPerUnit * groupRatio * float64(durationSeconds)
+	quotaValue := resolutionPrice * quotaPerUnit * groupRatio * float64(durationSeconds)
 	quotaValue = priceData.ApplyOtherRatiosToFloat(quotaValue)
 	quota, clamp := rootcommon.QuotaFromFloatChecked(quotaValue)
 	return quota, clamp, nil

@@ -26,12 +26,15 @@ func BuildVideoResolutionPriceData(
 	if err != nil {
 		return hosttypes.PriceData{}, nil, err
 	}
+	quotaPerUnit := common.QuotaPerUnit
+	resolved.QuotaPerUnit = quotaPerUnit
 	groupRatioInfo := HandleGroupRatio(c, info)
-	quota, clamp, err := relaycommon.CalculateVideoResolutionQuota(
+	quota, clamp, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(
 		resolved.SelectedResolutionPrice,
 		resolved.Selection.EffectiveDurationSeconds,
 		groupRatioInfo.GroupRatio,
 		resolved.Selection.IndependentRatios,
+		quotaPerUnit,
 	)
 	if err != nil {
 		return hosttypes.PriceData{}, nil, err

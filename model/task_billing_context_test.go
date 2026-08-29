@@ -8,12 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskBillingContextVideoResolutionFieldsRoundTrip(t *testing.T) {
+func TestTaskBillingContextRoundTripsFrozenResolutionSelection(t *testing.T) {
 	want := TaskBillingContext{
 		PricingKind:              "video_resolution",
 		EffectiveResolution:      "1080p",
 		SelectedResolutionPrice:  0.18,
 		EffectiveDurationSeconds: 8,
+		QuotaPerUnit:             500_000,
 		IndependentRatios:        map[string]float64{"video_input": 1.2},
 	}
 

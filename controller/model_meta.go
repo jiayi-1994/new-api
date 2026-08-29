@@ -161,7 +161,7 @@ func DeleteModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Model{}, id).Error; err != nil {
+	if err := model.DeleteModelMetaByID(id); err != nil {
 		common.ApiError(c, err)
 		return
 	}

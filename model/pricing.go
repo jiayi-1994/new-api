@@ -2,8 +2,8 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"strings"
-
 	"sync"
 	"time"
 
@@ -35,9 +35,10 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	// TaskBillingMode 视频任务计费单位（per_second/per_call），仅对按次定价的视频模型输出
-	TaskBillingMode string `json:"task_billing_mode,omitempty"`
-	PricingVersion  string `json:"pricing_version,omitempty"`
+	// TaskBillingMode 是旧客户端兼容字段；分辨率定价始终派生为 per_second。
+	TaskBillingMode  string             `json:"task_billing_mode,omitempty"`
+	ResolutionPrices map[string]float64 `json:"resolution_prices,omitempty"`
+	PricingVersion   string             `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -375,28 +376,48 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
-		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
-		if findPrice {
-			pricing.ModelPrice = modelPrice
-			pricing.QuotaType = 1
-			// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长。
-			// 显式配置（页面或 TASK_PRICE_PATCH）无条件生效——渠道类型不一定
-			// 声明 openai-video 端点；未配置时仅对声明视频端点的模型推断默认按秒。
-			if mode, ok := ratio_setting.GetTaskBillingMode(model); ok {
-				pricing.TaskBillingMode = mode
-			} else {
-				for _, et := range pricing.SupportedEndpointTypes {
-					if et == constant.EndpointTypeOpenAIVideo {
-						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
-						break
-					}
+		resolutionPrices, hasResolutionPrices := ratio_setting.GetVideoResolutionPrices(model)
+		hasResolutionPrices = hasResolutionPrices && len(resolutionPrices) > 0
+		if hasResolutionPrices {
+			minimumPrice := math.Inf(1)
+			for _, price := range resolutionPrices {
+				if price > 0 && !math.IsNaN(price) && !math.IsInf(price, 0) && price < minimumPrice {
+					minimumPrice = price
 				}
 			}
-		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
-			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
-			pricing.QuotaType = 0
+			if math.IsInf(minimumPrice, 1) {
+				hasResolutionPrices = false
+			} else {
+				pricing.ResolutionPrices = resolutionPrices
+				pricing.ModelPrice = minimumPrice
+				pricing.QuotaType = 1
+				pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+			}
+		}
+		if !hasResolutionPrices {
+			modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
+			if findPrice {
+				pricing.ModelPrice = modelPrice
+				pricing.QuotaType = 1
+				// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长。
+				// 显式配置（页面或 TASK_PRICE_PATCH）无条件生效——渠道类型不一定
+				// 声明 openai-video 端点；未配置时仅对声明视频端点的模型推断默认按秒。
+				if mode, ok := ratio_setting.GetTaskBillingMode(model); ok {
+					pricing.TaskBillingMode = mode
+				} else {
+					for _, et := range pricing.SupportedEndpointTypes {
+						if et == constant.EndpointTypeOpenAIVideo {
+							pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+							break
+						}
+					}
+				}
+			} else {
+				modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+				pricing.ModelRatio = modelRatio
+				pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+				pricing.QuotaType = 0
+			}
 		}
 		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
 			pricing.CacheRatio = &cacheRatio
@@ -415,10 +436,13 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
-				pricing.BillingMode = billingMode
-				pricing.BillingExpr = expr
+		if !hasResolutionPrices {
+			billingMode := billing_setting.GetBillingMode(model)
+			if billingMode == "tiered_expr" {
+				if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+					pricing.BillingMode = billingMode
+					pricing.BillingExpr = expr
+				}
 			}
 		}
 		pricingMap = append(pricingMap, pricing)
@@ -426,7 +450,7 @@ func updatePricing() {
 
 	// 防止大更新后数据不通用
 	if len(pricingMap) > 0 {
-		pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
+		pricingMap[0].PricingVersion = "c4c19308cabd14478787cb624af846fb6a97b699f9b3dba12547b230d572bfaf"
 	}
 
 	// 刷新缓存映射，供高并发快速查询

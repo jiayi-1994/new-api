@@ -8,10 +8,87 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "video-model",
+		PriceData: hosttypes.PriceData{
+			ModelPrice: 0.18,
+			UsePrice:   true,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 1.25,
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				Selection: relaycommon.VideoBillingSelection{
+					EffectiveResolution:      "1080p",
+					EffectiveDurationSeconds: 8,
+					IndependentRatios:        map[string]float64{"video_input": 1.2},
+				},
+				SelectedResolutionPrice: 0.18,
+				QuotaPerUnit:            321_000,
+			},
+		},
+	}
+
+	context := taskBillingContextFromRelayInfo(info)
+	require.NotNil(t, context)
+	assert.Equal(t, "video_resolution", context.PricingKind)
+	assert.False(t, context.PerCallBilling)
+	assert.Equal(t, "1080p", context.EffectiveResolution)
+	assert.Equal(t, 0.18, context.SelectedResolutionPrice)
+	assert.Equal(t, 8, context.EffectiveDurationSeconds)
+	assert.Equal(t, 321_000.0, context.QuotaPerUnit)
+	assert.Equal(t, map[string]float64{"video_input": 1.2}, context.IndependentRatios)
+	assert.Empty(t, context.OtherRatios)
+
+	raw, err := common.Marshal(context)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "billing_unit")
+}
+
+func TestResolutionPricingAdminTaskIncludesBillingDetailsAndUserTaskOmitsThem(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	task := &model.Task{
+		ID:       1,
+		TaskID:   "suno-task",
+		Platform: constant.TaskPlatformSuno,
+		PrivateData: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{
+				PricingKind:              model.TaskPricingKindVideoResolution,
+				EffectiveResolution:      "1080p",
+				SelectedResolutionPrice:  0.18,
+				EffectiveDurationSeconds: 8,
+				SettledDurationSeconds:   4,
+				IndependentRatios:        map[string]float64{"video_input": 1.2},
+			},
+		},
+	}
+
+	adminTasks, err := tasksToDto([]*model.Task{task}, true)
+	require.NoError(t, err)
+	require.Len(t, adminTasks, 1)
+	require.NotNil(t, adminTasks[0].BillingDetails)
+	assert.Equal(t, "1080p", adminTasks[0].BillingDetails.Resolution)
+	assert.Equal(t, 0.18, adminTasks[0].BillingDetails.SelectedPricePerSecond)
+	assert.Equal(t, 8, adminTasks[0].BillingDetails.SubmittedDurationSeconds)
+	assert.Equal(t, 4, adminTasks[0].BillingDetails.EffectiveDurationSeconds)
+	assert.Equal(t, map[string]float64{"video_input": 1.2}, adminTasks[0].BillingDetails.IndependentRatios)
+
+	userTasks, err := tasksToDto([]*model.Task{task}, false)
+	require.NoError(t, err)
+	require.Len(t, userTasks, 1)
+	assert.Nil(t, userTasks[0].BillingDetails)
+}
 
 func TestTasksToDtoProjectsNonSunoTasksWithoutUpstreamData(t *testing.T) {
 	const upstreamTaskID = "upstream/task?X-Amz-Signature=secret"

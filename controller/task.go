@@ -109,6 +109,28 @@ func tasksToDto(tasks []*model.Task, fillUser bool) ([]*dto.TaskDto, error) {
 			}
 		}
 		result[i] = relay.TaskModel2Dto(task)
+		if fillUser {
+			if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
+				independentRatios := make(map[string]float64, len(bc.IndependentRatios))
+				for name, ratio := range bc.IndependentRatios {
+					independentRatios[name] = ratio
+				}
+				if len(independentRatios) == 0 {
+					independentRatios = nil
+				}
+				effectiveDuration := bc.SettledDurationSeconds
+				if effectiveDuration <= 0 {
+					effectiveDuration = bc.EffectiveDurationSeconds
+				}
+				result[i].BillingDetails = &dto.TaskBillingDetails{
+					Resolution:               bc.EffectiveResolution,
+					SelectedPricePerSecond:   bc.SelectedResolutionPrice,
+					SubmittedDurationSeconds: bc.EffectiveDurationSeconds,
+					EffectiveDurationSeconds: effectiveDuration,
+					IndependentRatios:        independentRatios,
+				}
+			}
+		}
 		if task.Platform == constant.TaskPlatformSuno {
 			continue
 		}
