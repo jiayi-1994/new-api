@@ -9,9 +9,12 @@ on:
       - v1.0
       - v1.1
       - v1.3
+      - v1.4
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/new-api
+  # 只有这条分支的构建才会改写 :latest
+  LATEST_BRANCH: v1.3
 
 jobs:
   build:
@@ -46,6 +49,18 @@ jobs:
           sha="$(git rev-parse --short HEAD)"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          # 整份 tag 列表在这里拼好，避免给 build-push-action 传空行。
+          # :latest 只跟随 LATEST_BRANCH，其它分支不得改写它——否则按 latest 拉的
+          # 环境会在毫无预期的情况下切到另一条发布线。
+          {
+            echo "tags<<TAGS_EOF"
+            echo "${IMAGE}:${branch}"
+            echo "${IMAGE}:${branch}-${sha}"
+            if [ "${GITHUB_REF_NAME}" = "${LATEST_BRANCH}" ]; then
+              echo "${IMAGE}:latest"
+            fi
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -53,18 +68,15 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.branch }}
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Image summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           echo "### Image pushed" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${IMAGE}:${{ steps.meta.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "${IMAGE}:${{ steps.meta.outputs.branch }}-${{ steps.meta.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "${IMAGE}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "${TAGS}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
