@@ -535,6 +535,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	status := strings.ToLower(strings.TrimSpace(resTask.Status))
+	inlineFailureReason := ""
+	if prefix, reason, ok := strings.Cut(strings.TrimSpace(resTask.Status), ":"); ok {
+		switch strings.ToLower(strings.TrimSpace(prefix)) {
+		case "failed", "cancelled", "canceled":
+			status = strings.ToLower(strings.TrimSpace(prefix))
+			inlineFailureReason = strings.TrimSpace(reason)
+		}
+	}
 	switch status {
 	case "unknown":
 		taskResult.Status = model.TaskStatusQueued
@@ -555,6 +563,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusFailure
 		if resTask.Error != nil {
 			taskResult.Reason = resTask.Error.Message
+		} else if inlineFailureReason != "" {
+			taskResult.Reason = inlineFailureReason
 		} else {
 			taskResult.Reason = "task failed"
 		}
