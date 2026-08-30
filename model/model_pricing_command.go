@@ -111,6 +111,29 @@ func (e *OptionConflictError) Error() string {
 	return fmt.Sprintf("option %q changed since it was read", e.Key)
 }
 
+type PricingValidationError struct {
+	Err error
+}
+
+func (e *PricingValidationError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *PricingValidationError) Unwrap() error {
+	return e.Err
+}
+
+func pricingValidationErrorf(format string, args ...any) error {
+	return &PricingValidationError{Err: fmt.Errorf(format, args...)}
+}
+
+func pricingValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PricingValidationError{Err: err}
+}
+
 type pricingTransactionMutation func(tx *gorm.DB, documents *PricingDocuments) (map[string]string, error)
 
 // publishPricingDocumentsAfterCommit is the failpoint-bearing publication
@@ -284,7 +307,7 @@ func pricingDocumentValues(documents *PricingDocuments) (map[string]string, erro
 	}
 	values[ratio_setting.VideoResolutionPriceOptionKey] = string(resolutionValue)
 	if _, err := parsePricingDocuments(values); err != nil {
-		return nil, err
+		return nil, pricingValidationError(err)
 	}
 	return values, nil
 }
@@ -583,17 +606,17 @@ func validateSelectionNumber(field string, value *float64) error {
 		return nil
 	}
 	if math.IsNaN(*value) || math.IsInf(*value, 0) {
-		return fmt.Errorf("%s must be finite", field)
+		return pricingValidationErrorf("%s must be finite", field)
 	}
 	return nil
 }
 
 func applyPricingSelection(documents *PricingDocuments, target string, selection *ModelPricingSelection) error {
 	if strings.TrimSpace(target) == "" {
-		return fmt.Errorf("target model name is required")
+		return pricingValidationErrorf("target model name is required")
 	}
 	if selection == nil {
-		return fmt.Errorf("pricing selection is required")
+		return pricingValidationErrorf("pricing selection is required")
 	}
 	for field, value := range map[string]*float64{
 		"price":                  selection.ModelPrice,
@@ -612,7 +635,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 
 	if selection.Mode == PricingModeVideoResolution {
 		if len(selection.ResolutionPrices) == 0 {
-			return fmt.Errorf("video resolution pricing requires at least one resolution")
+			return pricingValidationErrorf("video resolution pricing requires at least one resolution")
 		}
 		prices := make(map[string]float64, len(selection.ResolutionPrices))
 		for resolution, price := range selection.ResolutionPrices {
@@ -631,7 +654,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 	switch selection.Mode {
 	case PricingModeFixed:
 		if selection.ModelPrice == nil {
-			return fmt.Errorf("fixed pricing requires price")
+			return pricingValidationErrorf("fixed pricing requires price")
 		}
 		setNumber("ModelPrice", selection.ModelPrice)
 		if selection.TaskBillingMode != nil {
@@ -647,7 +670,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		setNumber("AudioCompletionRatio", selection.AudioCompletionRatio)
 	case PricingModeExpression:
 		if selection.BillingExpr == nil || strings.TrimSpace(*selection.BillingExpr) == "" {
-			return fmt.Errorf("expression pricing requires billing expression")
+			return pricingValidationErrorf("expression pricing requires billing expression")
 		}
 		documents.Strings["billing_setting.billing_mode"][target] = billing_setting.BillingModeTieredExpr
 		documents.Strings["billing_setting.billing_expr"][target] = *selection.BillingExpr
@@ -660,7 +683,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		setNumber("AudioRatio", selection.AudioRatio)
 		setNumber("AudioCompletionRatio", selection.AudioCompletionRatio)
 	default:
-		return fmt.Errorf("unsupported pricing mode %q", selection.Mode)
+		return pricingValidationErrorf("unsupported pricing mode %q", selection.Mode)
 	}
 	return nil
 }
@@ -851,7 +874,7 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 			}
 		case PricingCommandRename:
 			if strings.TrimSpace(command.SourceName) == "" || strings.TrimSpace(command.TargetName) == "" {
-				return nil, fmt.Errorf("source and target model names are required")
+				return nil, pricingValidationErrorf("source and target model names are required")
 			}
 			renamePricingName(documents, command.SourceName, command.TargetName)
 			if command.Selection != nil {
@@ -861,7 +884,7 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 			}
 		case PricingCommandCopy:
 			if strings.TrimSpace(command.SourceName) == "" || strings.TrimSpace(command.TargetName) == "" {
-				return nil, fmt.Errorf("source and target model names are required")
+				return nil, pricingValidationErrorf("source and target model names are required")
 			}
 			copyPricingName(documents, command.SourceName, command.TargetName)
 			if command.Selection != nil {
@@ -871,7 +894,7 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 			}
 		case PricingCommandDelete:
 			if strings.TrimSpace(command.TargetName) == "" {
-				return nil, fmt.Errorf("target model name is required")
+				return nil, pricingValidationErrorf("target model name is required")
 			}
 			deletePricingName(documents, command.TargetName)
 		case PricingCommandReplaceDocuments:
@@ -884,7 +907,7 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 			}
 			return values, nil
 		default:
-			return nil, fmt.Errorf("unsupported pricing command %q", command.Kind)
+			return nil, pricingValidationErrorf("unsupported pricing command %q", command.Kind)
 		}
 
 		values, err := pricingDocumentValues(documents)
@@ -905,13 +928,13 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 
 func replacePricingDocuments(tx *gorm.DB, documents *PricingDocuments, values, expected map[string]string) (map[string]string, error) {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("replacement values are required")
+		return nil, pricingValidationErrorf("replacement values are required")
 	}
 	finalValues := clonePricingValues(documents.Raw)
 	keys := make([]string, 0, len(values))
 	for key, value := range values {
 		if _, ok := modelPricingOptionKeySet[key]; !ok {
-			return nil, fmt.Errorf("option %q is not a protected pricing document", key)
+			return nil, pricingValidationErrorf("option %q is not a protected pricing document", key)
 		}
 		if expected != nil && documents.Raw[key] != expected[key] {
 			return nil, &OptionConflictError{Key: key, CurrentValue: documents.Raw[key]}
@@ -920,7 +943,7 @@ func replacePricingDocuments(tx *gorm.DB, documents *PricingDocuments, values, e
 		keys = append(keys, key)
 	}
 	if _, err := parsePricingDocuments(finalValues); err != nil {
-		return nil, err
+		return nil, pricingValidationError(err)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {

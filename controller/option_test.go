@@ -257,13 +257,69 @@ func TestPricingCommandRouteInvalidSaveRollsBack(t *testing.T) {
 
 	UpdatePricingOption(ctx)
 
-	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
 	for key, value := range expected {
 		var stored model.Option
 		require.NoError(t, db.First(&stored, "key = ?", key).Error)
 		assert.JSONEq(t, value, stored.Value, key)
 	}
+}
+
+func TestPricingCommandRouteBulkValidationErrorsUseHTTP400(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body func(map[string]string) string
+	}{
+		{
+			name: "unknown option",
+			body: func(_ map[string]string) string {
+				return `{
+					"kind":"replace_documents",
+					"values":{"Unknown":"{}"},
+					"expected_documents":{"Unknown":"{}"}
+				}`
+			},
+		},
+		{
+			name: "invalid raw document",
+			body: func(expected map[string]string) string {
+				return fmt.Sprintf(`{
+					"kind":"replace_documents",
+					"values":{"ModelPrice":"not-json"},
+					"expected_documents":{"ModelPrice":%q}
+				}`, expected["ModelPrice"])
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupOptionControllerTest(t)
+			expected := seedControllerPricingDocuments(t, "bulk-invalid")
+			ctx, recorder := optionControllerContext(test.body(expected), common.RoleRootUser)
+
+			UpdatePricingOption(ctx)
+
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+		})
+	}
+}
+
+func TestPricingCommandRouteStoredDocumentErrorUsesHTTP500(t *testing.T) {
+	db := setupOptionControllerTest(t)
+	seedControllerPricingDocuments(t, "stored-invalid")
+	require.NoError(t, db.Model(&model.Option{}).
+		Where("key = ?", "ModelPrice").
+		Update("value", "not-json").Error)
+	ctx, recorder := optionControllerContext(
+		`{"kind":"delete","target_name":"stored-invalid"}`,
+		common.RoleRootUser,
+	)
+
+	UpdatePricingOption(ctx)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":false`)
 }
 
 func TestPricingCommandRouteBulkCASRequiresEveryExpectedDocument(t *testing.T) {

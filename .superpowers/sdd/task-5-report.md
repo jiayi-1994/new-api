@@ -24,6 +24,8 @@ Implemented and verified the HTTP/controller/model lifecycle wiring on top of Ta
 - `PUT /api/option/pricing` accepts semantic `save`, `copy`, and `delete` commands.
 - The endpoint also accepts Task 6's one-shot bulk CAS command, `replace_documents`, with `values` and `expected_documents`. Every changed key must have an exact expected raw string; Task 4 performs the recheck while all pricing rows are locked.
 - Bulk-CAS conflicts use the same HTTP 409 contract and never partially write another changed document.
+- Client-correctable command validation failures return HTTP 400, including unknown/non-protected bulk keys, malformed raw pricing documents, and incomplete semantic selections. `PricingValidationError` is the stable model/controller classification boundary; the controller does not match error strings.
+- `OptionConflictError` remains HTTP 409. Stored-document corruption and database/internal command failures remain HTTP 5xx, so transport status accurately drives mutation clients.
 - Successful semantic/bulk commands return all 12 committed raw documents in `data`, plus `committed`, `publication_recovered`, and `publication_pending`.
 - A recovered publication returns HTTP success with a recovery message. A pending post-commit publication returns HTTP success and explicitly says `do not retry`, so clients do not repeat an already committed mutation.
 
@@ -56,6 +58,7 @@ Implemented and verified the HTTP/controller/model lifecycle wiring on top of Ta
 - Protected `PUT /api/option/` accepted missing/stale CAS inputs instead of the required 400/409 behavior.
 - Legacy model rename/delete changed only `VideoResolutionPrice`; new lifecycle tests showed the other protected documents were untouched.
 - Bulk `replace_documents` was rejected with HTTP 400; conflict/success contract tests failed until values and exact expected documents were wired.
+- Follow-up RED reproduced that unknown bulk keys, malformed replacement documents, and a `per_request` save without `price` all returned HTTP 200 with `success:false`; a stored malformed document also returned HTTP 200 instead of 5xx.
 
 ### GREEN
 
@@ -63,6 +66,7 @@ Implemented and verified the HTTP/controller/model lifecycle wiring on top of Ta
 - Focused model lifecycle tests pass.
 - Full `model`, `controller`, and `router` package tests pass.
 - Scoped `go vet` and `git diff --check` pass.
+- Follow-up focused tests prove typed client validation maps to 400, conflicts remain 409, and stored/internal document errors map to 500.
 
 ## Files
 
@@ -72,12 +76,16 @@ Implemented and verified the HTTP/controller/model lifecycle wiring on top of Ta
 - `controller/option_test.go`
 - `model/model_meta.go`
 - `model/model_meta_test.go`
+- `model/model_pricing_command.go` (follow-up typed validation boundary)
+- `model/model_pricing_command_test.go`
 - `router/api-router.go`
 - `router/api-router_test.go` (explicitly authorized route/auth contract test)
 
 ## Verification evidence
 
 - `go test ./model ./controller ./router -count=1` — PASS
+- `go test ./controller -run 'TestPricingCommandRoute(InvalidSaveRollsBack|BulkValidationErrorsUseHTTP400|StoredDocumentErrorUsesHTTP500|BulkCASReturnsConflictWithoutPartialWrite)$' -count=1` — PASS
+- `go test ./model -run 'TestExecuteModelPricingCommandClassifiesClientValidationErrors$' -count=1` — PASS
 - `go test ./controller ./router -run 'Test(ModelMetaPricing|UpdateOptionCAS|PricingCommandRoute)' -count=1` — PASS
 - Focused `TestModelMeta...` lifecycle command — PASS
 - `go vet ./model ./controller ./router` — PASS
@@ -90,5 +98,6 @@ Implemented and verified the HTTP/controller/model lifecycle wiring on top of Ta
 - Confirmed no database-specific SQL or locking syntax was added.
 - Confirmed same-name admin authorization cannot race into a rename because `UpdateMetadata` binds the expected source name inside the namespace transaction.
 - Independent review initially found missing bulk CAS, suppressed denial auditing, weak copy/delete assertions, and missing real legacy-admin route coverage. All were addressed and re-reviewed.
-- Independent re-review found no remaining Critical or Important issue.
+- Independent re-review found one Important transport-status issue: client validation and internal failures were both emitted through the legacy HTTP-200 error helper. The follow-up fix introduced a typed model validation error and explicit 400/409/500 controller mapping without duplicating validation rules.
+- Follow-up independent re-review found no remaining Critical or Important issue.
 - Non-blocking limitation: recovered/pending HTTP formatting uses constructed Task 4 results at the controller boundary because the publication failpoint is model-private. Task 4 tests exercise real failure/recovery/pending production; controller tests verify those result flags are emitted as successful, non-retry responses.

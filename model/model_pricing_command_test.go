@@ -99,6 +99,46 @@ func resolutionPricingDocument(t *testing.T, values map[string]string) map[strin
 	return document
 }
 
+func TestExecuteModelPricingCommandClassifiesClientValidationErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		command ModelPricingCommand
+	}{
+		{
+			name: "unknown option",
+			command: ModelPricingCommand{
+				Kind:   PricingCommandReplaceDocuments,
+				Values: map[string]string{"Unknown": `{}`},
+			},
+		},
+		{
+			name: "invalid raw document",
+			command: ModelPricingCommand{
+				Kind:   PricingCommandReplaceDocuments,
+				Values: map[string]string{"ModelPrice": `not-json`},
+			},
+		},
+		{
+			name: "missing semantic field",
+			command: ModelPricingCommand{
+				Kind:       PricingCommandSave,
+				TargetName: "missing-price",
+				Selection:  &ModelPricingSelection{Mode: PricingModeFixed},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			seedPricingDocuments(t, pricingCommandFixture())
+
+			_, err := ExecuteModelPricingCommand(test.command)
+
+			var validationError *PricingValidationError
+			require.ErrorAs(t, err, &validationError)
+		})
+	}
+}
+
 func TestExecuteModelPricingCommandResolutionSavePreservesLegacy(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()

@@ -202,7 +202,12 @@ func UpdatePricingOption(c *gin.Context) {
 			writeOptionConflict(c, conflict)
 			return
 		}
-		common.ApiError(c, err)
+		var validation *model.PricingValidationError
+		if errors.As(err, &validation) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 	recordManageAudit(c, "option.pricing", map[string]interface{}{
