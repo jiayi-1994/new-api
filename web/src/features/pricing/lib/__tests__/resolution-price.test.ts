@@ -25,7 +25,6 @@ import {
   getResolutionPriceEntries,
   isPerSecondBilledModel,
   isResolutionPricedModel,
-  isVideoModelMissingResolutionPrices,
 } from '../model-helpers'
 import { formatFixedPrice, formatRequestPrice } from '../price'
 
@@ -95,40 +94,24 @@ describe('resolution price helpers', () => {
     assert.equal(isPerSecondBilledModel(model), true)
   })
 
-  // 后端会拒绝没有分辨率价格的视频请求：这种模型必须标记为不可用，
-  // 而不是把遗留的 ModelPrice 展示为生效价格。
-  test('video models with only a legacy fixed price are marked unsupported', () => {
-    const model = pricingModel({
+  // 没有分辨率表的旧版视频模型继续走历史价格与 task_billing_mode，
+  // 不再被强制标记为不可用。
+  test('legacy video models keep their historical billing mode', () => {
+    const perCall = pricingModel({
       model_price: 0.5,
+      task_billing_mode: 'per_call',
+      supported_endpoint_types: ['openai-video'],
+    })
+    const perSecond = pricingModel({
+      model_price: 0.5,
+      task_billing_mode: 'per_second',
       supported_endpoint_types: ['openai-video'],
     })
 
-    assert.equal(isVideoModelMissingResolutionPrices(model), true)
-  })
-
-  test('resolution-priced and non-video models are not marked unsupported', () => {
-    const priced = pricingModel({
-      supported_endpoint_types: ['openai-video'],
-      resolution_prices: { '720p': 0.1 },
-    })
-    const nonVideo = pricingModel({ model_price: 0.5 })
-    const tokenBased = pricingModel({
-      quota_type: 0,
-      supported_endpoint_types: ['openai-video'],
-    })
-
-    assert.equal(isVideoModelMissingResolutionPrices(priced), false)
-    assert.equal(isVideoModelMissingResolutionPrices(nonVideo), false)
-    assert.equal(isVideoModelMissingResolutionPrices(tokenBased), false)
-  })
-
-  test('a video model whose configured prices are all invalid is unsupported', () => {
-    const model = pricingModel({
-      supported_endpoint_types: ['openai-video'],
-      resolution_prices: { '720p': 0 },
-    })
-
-    assert.equal(isVideoModelMissingResolutionPrices(model), true)
+    assert.equal(isResolutionPricedModel(perCall), false)
+    assert.equal(isPerSecondBilledModel(perCall), false)
+    assert.equal(isResolutionPricedModel(perSecond), false)
+    assert.equal(isPerSecondBilledModel(perSecond), true)
   })
 })
 
@@ -168,6 +151,26 @@ describe('resolution price formatting', () => {
         1,
         1,
         { default: 1 }
+      )
+    )
+  })
+
+  test('legacy video models format their fixed price like any request-priced model', () => {
+    const legacyVideo = pricingModel({
+      model_price: 0.5,
+      task_billing_mode: 'per_call',
+      supported_endpoint_types: ['openai-video'],
+      group_ratio: { default: 1 },
+    })
+
+    assert.equal(
+      formatRequestPrice(legacyVideo, false, 1, 1, 'default'),
+      formatRequestPrice(
+        pricingModel({ model_price: 0.5, group_ratio: { default: 1 } }),
+        false,
+        1,
+        1,
+        'default'
       )
     )
   })

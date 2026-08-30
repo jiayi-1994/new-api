@@ -376,8 +376,14 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
-		resolutionPrices, hasResolutionPrices := ratio_setting.GetVideoResolutionPrices(model)
-		hasResolutionPrices = hasResolutionPrices && len(resolutionPrices) > 0
+		// Suno 由共享分类器判定、始终走旧版计费，与请求冻结(PrepareTaskBillingPlan)
+		// 使用同一条激活规则：分辨率表只对非 Suno 模型生效。
+		var resolutionPrices map[string]float64
+		hasResolutionPrices := false
+		if !constant.IsSunoModel(model) {
+			resolutionPrices, hasResolutionPrices = ratio_setting.GetVideoResolutionPrices(model)
+			hasResolutionPrices = hasResolutionPrices && len(resolutionPrices) > 0
+		}
 		if hasResolutionPrices {
 			minimumPrice := math.Inf(1)
 			for _, price := range resolutionPrices {
@@ -399,24 +405,24 @@ func updatePricing() {
 			if findPrice {
 				pricing.ModelPrice = modelPrice
 				pricing.QuotaType = 1
-				// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长。
-				// 显式配置（页面或 TASK_PRICE_PATCH）无条件生效——渠道类型不一定
-				// 声明 openai-video 端点；未配置时仅对声明视频端点的模型推断默认按秒。
-				if mode, ok := ratio_setting.GetTaskBillingMode(model); ok {
-					pricing.TaskBillingMode = mode
-				} else {
-					for _, et := range pricing.SupportedEndpointTypes {
-						if et == constant.EndpointTypeOpenAIVideo {
-							pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
-							break
-						}
-					}
-				}
 			} else {
 				modelRatio, _, _ := ratio_setting.GetModelRatio(model)
 				pricing.ModelRatio = modelRatio
 				pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
 				pricing.QuotaType = 0
+			}
+			// 视频模型区分按秒/按条：固定价格对按秒模型只是单价，实际乘以时长。
+			// 显式配置（页面或 TASK_PRICE_PATCH）无条件生效——渠道类型不一定
+			// 声明 openai-video 端点；未配置时仅对声明视频端点的模型推断默认按秒。
+			if mode, ok := ratio_setting.GetTaskBillingMode(model); ok {
+				pricing.TaskBillingMode = mode
+			} else {
+				for _, et := range pricing.SupportedEndpointTypes {
+					if et == constant.EndpointTypeOpenAIVideo {
+						pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+						break
+					}
+				}
 			}
 		}
 		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {

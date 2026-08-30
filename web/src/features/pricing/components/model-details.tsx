@@ -73,7 +73,6 @@ import {
   isPerSecondBilledModel,
   isResolutionPricedModel,
   isTokenBasedModel,
-  isVideoModelMissingResolutionPrices,
 } from '../lib/model-helpers'
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import type {
@@ -710,24 +709,6 @@ function PriceSection(props: {
   }
 
   if (!isTokenBased) {
-    if (isVideoModelMissingResolutionPrices(props.model)) {
-      return (
-        <section>
-          <SectionTitle>{t('Base Price')}</SectionTitle>
-          <div className='rounded-lg border border-amber-200/70 bg-amber-50/70 p-3 dark:border-amber-500/20 dark:bg-amber-500/10'>
-            <div className='text-sm font-medium text-amber-800 dark:text-amber-200'>
-              {t('Unsupported')}
-            </div>
-            <p className='text-muted-foreground mt-1 text-xs'>
-              {t(
-                'Video requests to this model are rejected until an administrator configures resolution prices.'
-              )}
-            </p>
-          </div>
-        </section>
-      )
-    }
-
     if (isResolutionPricedModel(props.model)) {
       return (
         <section>
@@ -966,20 +947,6 @@ function GroupPricingSection(props: {
         <p className='text-muted-foreground text-sm'>
           {t(
             'This model is not available in any group, or no group pricing information is configured.'
-          )}
-        </p>
-      </section>
-    )
-  }
-
-  if (isVideoModelMissingResolutionPrices(props.model)) {
-    return (
-      <section>
-        <SectionTitle>{t('Pricing by Group')}</SectionTitle>
-        <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
-        <p className='text-muted-foreground text-sm'>
-          {t(
-            'Video requests to this model are rejected until an administrator configures resolution prices.'
           )}
         </p>
       </section>

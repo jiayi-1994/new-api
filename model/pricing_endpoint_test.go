@@ -111,6 +111,107 @@ func resolutionPricingForModel(t *testing.T, modelName string, prices map[string
 	return Pricing{}
 }
 
+func legacyPricingForModel(t *testing.T, modelName string, price float64, ratio float64, legacyMode string) Pricing {
+	t.Helper()
+	resetPricingEndpointTestTables(t)
+	originalResolutionPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	originalModelPrices := ratio_setting.ModelPrice2JSONString()
+	originalModelRatios := ratio_setting.ModelRatio2JSONString()
+	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString("{}"))
+	if price > 0 {
+		raw, err := common.Marshal(map[string]float64{modelName: price})
+		require.NoError(t, err)
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(raw)))
+	}
+	if ratio > 0 {
+		raw, err := common.Marshal(map[string]float64{modelName: ratio})
+		require.NoError(t, err)
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(raw)))
+	}
+	modeDocument := "{}"
+	if legacyMode != "" {
+		raw, err := common.Marshal(map[string]string{modelName: legacyMode})
+		require.NoError(t, err)
+		modeDocument = string(raw)
+	}
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(modeDocument))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalResolutionPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatios))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+		InvalidatePricingCache()
+	})
+
+	insertPricingEndpointChannel(t, 9902, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 9902, modelName)
+	for _, pricing := range GetPricing() {
+		if pricing.ModelName == modelName {
+			return pricing
+		}
+	}
+	require.FailNow(t, "legacy-priced model missing from pricing endpoint")
+	return Pricing{}
+}
+
+func TestPricingExposesLegacyFixedVideoWithoutResolutionTable(t *testing.T) {
+	pricing := legacyPricingForModel(t, "zz-video-fixed", 0.3, 0, ratio_setting.TaskBillingModePerCall)
+	assert.Equal(t, 1, pricing.QuotaType)
+	assert.Equal(t, 0.3, pricing.ModelPrice)
+	assert.Equal(t, ratio_setting.TaskBillingModePerCall, pricing.TaskBillingMode)
+	assert.Empty(t, pricing.ResolutionPrices)
+}
+
+func TestPricingExposesLegacyRatioVideoWithoutResolutionTable(t *testing.T) {
+	pricing := legacyPricingForModel(t, "zz-video-ratio", 0, 1.5, ratio_setting.TaskBillingModePerSecond)
+	assert.Equal(t, 0, pricing.QuotaType)
+	assert.Equal(t, 1.5, pricing.ModelRatio)
+	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)
+	assert.Empty(t, pricing.ResolutionPrices)
+}
+
+func TestPricingResolutionTableWinsOverRetainedLegacy(t *testing.T) {
+	pricing := resolutionPricingForModel(t, "zz-video-resolution", map[string]float64{"720p": 0.1}, ratio_setting.TaskBillingModePerCall)
+	assert.Equal(t, 1, pricing.QuotaType)
+	assert.Equal(t, 0.1, pricing.ModelPrice)
+	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)
+	assert.Equal(t, map[string]float64{"720p": 0.1}, pricing.ResolutionPrices)
+}
+
+// Suno 由共享分类器 constant.IsSunoModel 判定，与渠道选择无关：
+// 即使存在完全匹配的分辨率价格表，也必须只暴露旧版合同。
+func TestPricingSunoModelStaysLegacyDespiteMatchingResolutionTable(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	require.True(t, constant.IsSunoModel("suno_music"))
+	originalResolutionPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	originalModelPrices := ratio_setting.ModelPrice2JSONString()
+	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"suno_music":{"720p":0.1}}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"suno_music":0.4}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"suno_music":"per_call"}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalResolutionPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrices))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+		InvalidatePricingCache()
+	})
+
+	insertPricingEndpointChannel(t, 9903, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 9903, "suno_music")
+	for _, pricing := range GetPricing() {
+		if pricing.ModelName != "suno_music" {
+			continue
+		}
+		assert.Equal(t, 1, pricing.QuotaType)
+		assert.Equal(t, 0.4, pricing.ModelPrice)
+		assert.Equal(t, ratio_setting.TaskBillingModePerCall, pricing.TaskBillingMode)
+		assert.Empty(t, pricing.ResolutionPrices)
+		return
+	}
+	require.FailNow(t, "suno model missing from pricing endpoint")
+}
+
 func TestPricingEndpointExposesResolutionPrices(t *testing.T) {
 	pricing := resolutionPricingForModel(t, "zz-video-resolution-endpoint", map[string]float64{
 		"720p":  0.10,
