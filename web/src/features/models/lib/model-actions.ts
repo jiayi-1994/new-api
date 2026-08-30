@@ -16,9 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+
+import {
+  adoptCommittedPricingDocuments,
+  ensureSystemOptionsCacheBase,
+} from '@/features/system-settings/models/pricing-document-cache'
 
 import { updateModelStatus, deleteModel as deleteModelAPI } from '../api'
 import { modelsQueryKeys } from './query-keys'
@@ -104,10 +109,28 @@ export async function handleDeleteModel(
   onSuccess?: () => void
 ): Promise<void> {
   try {
+    if (queryClient) {
+      await ensureSystemOptionsCacheBase(queryClient)
+    }
     const response = await deleteModelAPI(id)
     if (response.success) {
+      if (queryClient && response.pricing_documents) {
+        await adoptCommittedPricingDocuments(
+          queryClient,
+          response.pricing_documents
+        )
+      }
       toast.success(i18next.t('Model deleted successfully'))
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      if (response.publication_pending) {
+        toast.warning(
+          i18next.t(
+            'Pricing was saved, but live settings are still converging. Do not retry.'
+          )
+        )
+      } else {
+        queryClient?.invalidateQueries({ queryKey: ['system-options'] })
+      }
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t('Failed to delete model'))
@@ -133,21 +156,42 @@ export async function handleBatchDeleteModels(
   }
 
   try {
-    const deletePromises = ids.map((id) => deleteModelAPI(id))
-    const results = await Promise.all(deletePromises)
-
     let successCount = 0
     let failedCount = 0
+    let publicationPending = false
 
-    results.forEach((res, index) => {
-      if (res.success) {
-        successCount++
-      } else {
+    if (queryClient) {
+      await ensureSystemOptionsCacheBase(queryClient)
+    }
+    for (const id of ids) {
+      let response: Awaited<ReturnType<typeof deleteModelAPI>>
+      try {
+        response = await deleteModelAPI(id)
+      } catch (error: unknown) {
         failedCount++
         // eslint-disable-next-line no-console
-        console.error(`Failed to delete model ${ids[index]}:`, res.message)
+        console.error(
+          `Failed to delete model ${id}:`,
+          (error as Error)?.message
+        )
+        continue
       }
-    })
+      if (!response.success) {
+        failedCount++
+        // eslint-disable-next-line no-console
+        console.error(`Failed to delete model ${id}:`, response.message)
+        continue
+      }
+
+      successCount++
+      publicationPending = Boolean(response.publication_pending)
+      if (queryClient && response.pricing_documents) {
+        await adoptCommittedPricingDocuments(
+          queryClient,
+          response.pricing_documents
+        )
+      }
+    }
 
     if (successCount > 0) {
       toast.success(
@@ -156,6 +200,15 @@ export async function handleBatchDeleteModels(
         })
       )
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      if (publicationPending) {
+        toast.warning(
+          i18next.t(
+            'Pricing was saved, but live settings are still converging. Do not retry.'
+          )
+        )
+      } else {
+        queryClient?.invalidateQueries({ queryKey: ['system-options'] })
+      }
       onSuccess?.(successCount)
     }
 

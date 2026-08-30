@@ -154,6 +154,41 @@ func TestModelMetaPricingLegacyCreateWithoutPricing(t *testing.T) {
 	assert.Equal(t, "legacy", stored.Description)
 }
 
+func TestModelMetaPricingValidationUsesHTTP400(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "negative fixed price",
+			body: `{"model_name":"invalid-negative","pricing":{"mode":"per_request","price":-1}}`,
+		},
+		{
+			name: "missing per-token ratio",
+			body: `{"model_name":"invalid-ratio","pricing":{"mode":"per_token"}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupModelMetaControllerTest(t)
+			expected := seedControllerPricingDocuments(t, "existing")
+			c, recorder := modelMetaContext(http.MethodPost, "/api/models/", test.body, common.RoleRootUser)
+
+			CreateModelMeta(c)
+
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			var count int64
+			require.NoError(t, db.Model(&model.Model{}).Count(&count).Error)
+			assert.Zero(t, count)
+			for key, value := range expected {
+				var option model.Option
+				require.NoError(t, db.First(&option, "key = ?", key).Error)
+				assert.JSONEq(t, value, option.Value, key)
+			}
+		})
+	}
+}
+
 func TestModelMetaPricingMetadataUpdateDoesNotTouchPricing(t *testing.T) {
 	db := setupModelMetaControllerTest(t)
 	item := &model.Model{ModelName: "metadata-only", Description: "before", Status: 1, SyncOfficial: 1}

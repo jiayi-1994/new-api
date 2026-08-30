@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -100,6 +101,9 @@ func resolutionPricingDocument(t *testing.T, values map[string]string) map[strin
 }
 
 func TestExecuteModelPricingCommandClassifiesClientValidationErrors(t *testing.T) {
+	negative := -1.0
+	nan := math.NaN()
+	positiveInfinity := math.Inf(1)
 	for _, test := range []struct {
 		name    string
 		command ModelPricingCommand
@@ -126,6 +130,38 @@ func TestExecuteModelPricingCommandClassifiesClientValidationErrors(t *testing.T
 				Selection:  &ModelPricingSelection{Mode: PricingModeFixed},
 			},
 		},
+		{
+			name: "missing per-token ratio",
+			command: ModelPricingCommand{
+				Kind:       PricingCommandSave,
+				TargetName: "missing-ratio",
+				Selection:  &ModelPricingSelection{Mode: PricingModeRatio},
+			},
+		},
+		{
+			name: "negative typed price",
+			command: ModelPricingCommand{
+				Kind:       PricingCommandSave,
+				TargetName: "negative-price",
+				Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &negative},
+			},
+		},
+		{
+			name: "NaN typed price",
+			command: ModelPricingCommand{
+				Kind:       PricingCommandSave,
+				TargetName: "nan-price",
+				Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &nan},
+			},
+		},
+		{
+			name: "infinite typed price",
+			command: ModelPricingCommand{
+				Kind:       PricingCommandSave,
+				TargetName: "infinite-price",
+				Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &positiveInfinity},
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			setupPricingCommandTest(t)
@@ -135,6 +171,38 @@ func TestExecuteModelPricingCommandClassifiesClientValidationErrors(t *testing.T
 
 			var validationError *PricingValidationError
 			require.ErrorAs(t, err, &validationError)
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandRejectsNegativeRawNumericDocumentsWithoutMutation(t *testing.T) {
+	for _, key := range []string{
+		"AudioCompletionRatio",
+		"AudioRatio",
+		"CacheRatio",
+		"CompletionRatio",
+		"CreateCacheRatio",
+		"ImageRatio",
+		"ModelPrice",
+		"ModelRatio",
+	} {
+		t.Run(key, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			fixture := pricingCommandFixture()
+			seedPricingDocuments(t, fixture)
+
+			result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+				Kind:   PricingCommandReplaceDocuments,
+				Values: map[string]string{key: `{"owned":-1}`},
+			})
+
+			var validationError *PricingValidationError
+			require.ErrorAs(t, err, &validationError)
+			assert.False(t, result.Committed)
+			stored := storedPricingDocuments(t)
+			for documentKey, expected := range fixture {
+				assert.JSONEq(t, expected, stored[documentKey], documentKey)
+			}
 		})
 	}
 }

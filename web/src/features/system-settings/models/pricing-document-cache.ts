@@ -18,27 +18,67 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { QueryClient } from '@tanstack/react-query'
 
+import { getSystemOptions } from '../api'
 import type { SystemOptionsResponse } from '../types'
 import {
   PRICING_DOCUMENT_KEYS,
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 
+const SYSTEM_OPTIONS_QUERY_KEY = ['system-options'] as const
+
+function hasCompletePricingDocuments(
+  response: SystemOptionsResponse | undefined
+): response is SystemOptionsResponse {
+  return Boolean(
+    response?.success &&
+    PRICING_DOCUMENT_KEYS.every((key) =>
+      response.data.some((option) => option.key === key)
+    )
+  )
+}
+
+export async function ensureSystemOptionsCacheBase(
+  queryClient: QueryClient
+): Promise<SystemOptionsResponse> {
+  const cached = queryClient.getQueryData<SystemOptionsResponse>(
+    SYSTEM_OPTIONS_QUERY_KEY
+  )
+  if (hasCompletePricingDocuments(cached)) return cached
+
+  const response = await queryClient.fetchQuery({
+    queryKey: SYSTEM_OPTIONS_QUERY_KEY,
+    queryFn: getSystemOptions,
+  })
+  if (!hasCompletePricingDocuments(response)) {
+    throw new Error('System options response is missing pricing documents')
+  }
+  return response
+}
+
 export async function adoptCommittedPricingDocuments(
   queryClient: QueryClient,
   documents: Record<PricingDocumentKey, string>
 ): Promise<void> {
-  await queryClient.cancelQueries({ queryKey: ['system-options'] })
+  await queryClient.cancelQueries({ queryKey: SYSTEM_OPTIONS_QUERY_KEY })
+  const current = queryClient.getQueryData<SystemOptionsResponse>(
+    SYSTEM_OPTIONS_QUERY_KEY
+  )
+  if (!hasCompletePricingDocuments(current)) {
+    throw new Error(
+      'System options cache must be initialized before adopting pricing documents'
+    )
+  }
   queryClient.setQueryData<SystemOptionsResponse>(
-    ['system-options'],
-    (current) => ({
+    SYSTEM_OPTIONS_QUERY_KEY,
+    () => ({
       success: true,
-      message: current?.message ?? '',
+      message: current.message,
       data: [
-        ...(current?.data.filter(
+        ...current.data.filter(
           (option) =>
             !PRICING_DOCUMENT_KEYS.includes(option.key as PricingDocumentKey)
-        ) ?? []),
+        ),
         ...PRICING_DOCUMENT_KEYS.map((key) => ({
           key,
           value: documents[key],

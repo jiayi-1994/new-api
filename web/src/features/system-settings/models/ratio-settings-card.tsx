@@ -44,7 +44,10 @@ import {
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 import { ModelRatioForm } from './model-ratio-form'
-import { adoptCommittedPricingDocuments } from './pricing-document-cache'
+import {
+  adoptCommittedPricingDocuments,
+  ensureSystemOptionsCacheBase,
+} from './pricing-document-cache'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
@@ -427,6 +430,7 @@ export function RatioSettingsCard({
 
         if (hasPricingChanges) {
           try {
+            await ensureSystemOptionsCacheBase(queryClient)
             const pricingResponse = await pricingMutation.mutateAsync({
               kind: 'replace_documents',
               target_name: '',

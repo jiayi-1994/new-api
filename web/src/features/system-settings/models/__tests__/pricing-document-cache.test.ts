@@ -26,7 +26,25 @@ import {
   PRICING_DOCUMENT_KEYS,
   type PricingDocumentKey,
 } from '../model-pricing-persistence'
-import { adoptCommittedPricingDocuments } from '../pricing-document-cache'
+import {
+  adoptCommittedPricingDocuments,
+  ensureSystemOptionsCacheBase,
+} from '../pricing-document-cache'
+
+const documents = Object.fromEntries(
+  PRICING_DOCUMENT_KEYS.map((key) => [key, `committed-${key}`])
+) as Record<PricingDocumentKey, string>
+
+function completeOptionsResponse(): SystemOptionsResponse {
+  return {
+    success: true,
+    message: 'full response',
+    data: [
+      { key: 'UnrelatedOption', value: 'preserved' },
+      ...PRICING_DOCUMENT_KEYS.map((key) => ({ key, value: `old-${key}` })),
+    ],
+  }
+}
 
 describe('committed pricing document cache adoption', () => {
   test('cancels stale reads before replacing all pricing documents and preserving other options', async () => {
@@ -39,9 +57,6 @@ describe('committed pricing document cache adoption', () => {
         ...PRICING_DOCUMENT_KEYS.map((key) => ({ key, value: `old-${key}` })),
       ],
     })
-    const documents = Object.fromEntries(
-      PRICING_DOCUMENT_KEYS.map((key) => [key, `committed-${key}`])
-    ) as Record<PricingDocumentKey, string>
     let cacheWasOldWhenCancelled = false
     const originalCancel = queryClient.cancelQueries.bind(queryClient)
     queryClient.cancelQueries = (async (...args) => {
@@ -73,6 +88,53 @@ describe('committed pricing document cache adoption', () => {
       ),
       documents
     )
+    queryClient.clear()
+  })
+
+  test('refuses to manufacture a pricing-only response from a cold cache', async () => {
+    const queryClient = new QueryClient()
+
+    await assert.rejects(() =>
+      adoptCommittedPricingDocuments(queryClient, documents)
+    )
+    assert.equal(
+      queryClient.getQueryData<SystemOptionsResponse>(['system-options']),
+      undefined
+    )
+    queryClient.clear()
+  })
+
+  test('awaits an in-flight full options query before committed adoption', async () => {
+    const queryClient = new QueryClient()
+    let fetchCount = 0
+    let resolveBase: ((value: SystemOptionsResponse) => void) | undefined
+    const baseResponse = new Promise<SystemOptionsResponse>((resolve) => {
+      resolveBase = resolve
+    })
+    const inFlight = queryClient.fetchQuery({
+      queryKey: ['system-options'],
+      queryFn: () => {
+        fetchCount += 1
+        return baseResponse
+      },
+    })
+
+    const ensured = ensureSystemOptionsCacheBase(queryClient)
+    await Promise.resolve()
+    assert.equal(fetchCount, 1)
+    assert.ok(resolveBase)
+    resolveBase(completeOptionsResponse())
+    await Promise.all([inFlight, ensured])
+    await adoptCommittedPricingDocuments(queryClient, documents)
+
+    const cached = queryClient.getQueryData<SystemOptionsResponse>([
+      'system-options',
+    ])
+    assert.equal(
+      cached?.data.find((option) => option.key === 'UnrelatedOption')?.value,
+      'preserved'
+    )
+    assert.equal(fetchCount, 1)
     queryClient.clear()
   })
 })

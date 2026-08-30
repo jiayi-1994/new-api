@@ -54,7 +54,10 @@ import {
   buildPricingDocumentReplacement,
   type PricingDocumentKey,
 } from './model-pricing-persistence'
-import { adoptCommittedPricingDocuments } from './pricing-document-cache'
+import {
+  adoptCommittedPricingDocuments,
+  ensureSystemOptionsCacheBase,
+} from './pricing-document-cache'
 import {
   NUMERIC_SYNC_FIELDS,
   RATIO_SYNC_FIELDS,
@@ -433,6 +436,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
           modelRatios
         )
 
+        await ensureSystemOptionsCacheBase(queryClient)
         await syncMutate({
           kind: 'replace_documents',
           target_name: '',
@@ -446,7 +450,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         syncInFlightRef.current = false
       }
     },
-    [modelRatios, resolutions, syncMutate]
+    [modelRatios, queryClient, resolutions, syncMutate]
   )
 
   const findSourceChannel = (

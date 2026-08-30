@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -106,6 +107,15 @@ func requireRootPricingMutation(c *gin.Context) bool {
 	return false
 }
 
+func writeModelPricingCommandError(c *gin.Context, err error) {
+	var validation *model.PricingValidationError
+	if errors.As(err, &validation) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	common.ApiError(c, err)
+}
+
 func CreateModelMeta(c *gin.Context) {
 	var request ModelMutationRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -147,7 +157,7 @@ func CreateModelMeta(c *gin.Context) {
 			},
 		})
 		if err != nil {
-			common.ApiError(c, err)
+			writeModelPricingCommandError(c, err)
 			return
 		}
 	}
@@ -239,7 +249,7 @@ func UpdateModelMeta(c *gin.Context) {
 				},
 			})
 			if err != nil {
-				common.ApiError(c, err)
+				writeModelPricingCommandError(c, err)
 				return
 			}
 			usedPricingCommand = true
@@ -268,7 +278,7 @@ func DeleteModelMeta(c *gin.Context) {
 	}
 	result, err := model.DeleteModelMetaByIDWithPricingResult(id)
 	if err != nil {
-		common.ApiError(c, err)
+		writeModelPricingCommandError(c, err)
 		return
 	}
 	if !result.PublicationPending {

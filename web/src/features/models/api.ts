@@ -97,7 +97,7 @@ export async function updateModel(
 export type ModelMutationResponse = {
   success: boolean
   message?: string
-  data?: Model
+  data?: Model | null
   pricing_documents?: Record<PricingDocumentKey, string>
   committed?: boolean
   publication_recovered?: boolean

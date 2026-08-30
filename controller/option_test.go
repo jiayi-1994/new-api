@@ -266,6 +266,75 @@ func TestPricingCommandRouteInvalidSaveRollsBack(t *testing.T) {
 	}
 }
 
+func TestPricingCommandRouteTypedNumericValidationUsesHTTP400(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing per-token ratio",
+			body: `{"kind":"save","target_name":"atomic-source","pricing":{"mode":"per_token"}}`,
+		},
+		{
+			name: "negative fixed price",
+			body: `{"kind":"save","target_name":"atomic-source","pricing":{"mode":"per_request","price":-1}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupOptionControllerTest(t)
+			expected := seedControllerPricingDocuments(t, "atomic-source")
+			ctx, recorder := optionControllerContext(test.body, common.RoleRootUser)
+
+			UpdatePricingOption(ctx)
+
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			for key, value := range expected {
+				var stored model.Option
+				require.NoError(t, db.First(&stored, "key = ?", key).Error)
+				assert.JSONEq(t, value, stored.Value, key)
+			}
+		})
+	}
+}
+
+func TestPricingCommandRoutePreservesValidZeroPricing(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		body        string
+		documentKey string
+	}{
+		{
+			name:        "fixed price",
+			body:        `{"kind":"save","target_name":"zero-target","pricing":{"mode":"per_request","price":0}}`,
+			documentKey: "ModelPrice",
+		},
+		{
+			name:        "per-token ratio",
+			body:        `{"kind":"save","target_name":"zero-target","pricing":{"mode":"per_token","ratio":0}}`,
+			documentKey: "ModelRatio",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupOptionControllerTest(t)
+			seedControllerPricingDocuments(t, "existing")
+			ctx, recorder := optionControllerContext(test.body, common.RoleRootUser)
+
+			UpdatePricingOption(ctx)
+
+			assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), `"success":true`)
+			var stored model.Option
+			require.NoError(t, db.First(&stored, "key = ?", test.documentKey).Error)
+			var document map[string]float64
+			require.NoError(t, common.UnmarshalJsonStr(stored.Value, &document))
+			value, exists := document["zero-target"]
+			assert.True(t, exists)
+			assert.Zero(t, value)
+		})
+	}
+}
+
 func TestPricingCommandRouteBulkValidationErrorsUseHTTP400(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -291,9 +360,39 @@ func TestPricingCommandRouteBulkValidationErrorsUseHTTP400(t *testing.T) {
 				}`, expected["ModelPrice"])
 			},
 		},
+		{
+			name: "negative raw document",
+			body: func(expected map[string]string) string {
+				return fmt.Sprintf(`{
+					"kind":"replace_documents",
+					"values":{"ModelPrice":"{\"bulk-invalid\":-1}"},
+					"expected_documents":{"ModelPrice":%q}
+				}`, expected["ModelPrice"])
+			},
+		},
+		{
+			name: "NaN raw document",
+			body: func(expected map[string]string) string {
+				return fmt.Sprintf(`{
+					"kind":"replace_documents",
+					"values":{"ModelPrice":"{\"bulk-invalid\":NaN}"},
+					"expected_documents":{"ModelPrice":%q}
+				}`, expected["ModelPrice"])
+			},
+		},
+		{
+			name: "infinite raw document",
+			body: func(expected map[string]string) string {
+				return fmt.Sprintf(`{
+					"kind":"replace_documents",
+					"values":{"ModelPrice":"{\"bulk-invalid\":Infinity}"},
+					"expected_documents":{"ModelPrice":%q}
+				}`, expected["ModelPrice"])
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			setupOptionControllerTest(t)
+			db := setupOptionControllerTest(t)
 			expected := seedControllerPricingDocuments(t, "bulk-invalid")
 			ctx, recorder := optionControllerContext(test.body(expected), common.RoleRootUser)
 
@@ -301,6 +400,11 @@ func TestPricingCommandRouteBulkValidationErrorsUseHTTP400(t *testing.T) {
 
 			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			for key, value := range expected {
+				var stored model.Option
+				require.NoError(t, db.First(&stored, "key = ?", key).Error)
+				assert.JSONEq(t, value, stored.Value, key)
+			}
 		})
 	}
 }

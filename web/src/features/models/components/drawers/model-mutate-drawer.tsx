@@ -80,7 +80,10 @@ import {
   buildModelPricingSelection,
   type ModelPricingSelection,
 } from '@/features/system-settings/models/model-pricing-persistence'
-import { adoptCommittedPricingDocuments } from '@/features/system-settings/models/pricing-document-cache'
+import {
+  adoptCommittedPricingDocuments,
+  ensureSystemOptionsCacheBase,
+} from '@/features/system-settings/models/pricing-document-cache'
 import { VideoResolutionPriceEditor } from '@/features/system-settings/models/video-resolution-price-editor'
 import {
   parseVideoResolutionPriceOption,
@@ -634,6 +637,17 @@ export function ModelMutateDrawer({
                   ...pricingFields,
                   taskBillingMode,
                 })
+        }
+
+        const persistedModelName =
+          modelData?.data?.model_name ?? currentRow?.model_name
+        const usesPricingCommand =
+          Boolean(pricing) ||
+          (isEditing &&
+            persistedModelName !== undefined &&
+            submittedModelName !== persistedModelName)
+        if (usesPricingCommand) {
+          await ensureSystemOptionsCacheBase(queryClient)
         }
 
         const response =

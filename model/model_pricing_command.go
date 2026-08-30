@@ -249,6 +249,9 @@ func parsePricingDocuments(values map[string]string) (*PricingDocuments, error) 
 			if math.IsNaN(value) || math.IsInf(value, 0) {
 				return nil, fmt.Errorf("pricing option %q contains a non-finite value for model %q", key, model)
 			}
+			if value < 0 {
+				return nil, fmt.Errorf("pricing option %q contains a negative value for model %q", key, model)
+			}
 		}
 		documents.Numeric[key] = document
 	}
@@ -608,6 +611,9 @@ func validateSelectionNumber(field string, value *float64) error {
 	if math.IsNaN(*value) || math.IsInf(*value, 0) {
 		return pricingValidationErrorf("%s must be finite", field)
 	}
+	if *value < 0 {
+		return pricingValidationErrorf("%s must be non-negative", field)
+	}
 	return nil
 }
 
@@ -645,6 +651,23 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		return nil
 	}
 
+	switch selection.Mode {
+	case PricingModeFixed:
+		if selection.ModelPrice == nil {
+			return pricingValidationErrorf("fixed pricing requires price")
+		}
+	case PricingModeRatio:
+		if selection.ModelRatio == nil {
+			return pricingValidationErrorf("per-token pricing requires ratio")
+		}
+	case PricingModeExpression:
+		if selection.BillingExpr == nil || strings.TrimSpace(*selection.BillingExpr) == "" {
+			return pricingValidationErrorf("expression pricing requires billing expression")
+		}
+	default:
+		return pricingValidationErrorf("unsupported pricing mode %q", selection.Mode)
+	}
+
 	deletePricingName(documents, target)
 	setNumber := func(key string, value *float64) {
 		if value != nil {
@@ -653,9 +676,6 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 	}
 	switch selection.Mode {
 	case PricingModeFixed:
-		if selection.ModelPrice == nil {
-			return pricingValidationErrorf("fixed pricing requires price")
-		}
 		setNumber("ModelPrice", selection.ModelPrice)
 		if selection.TaskBillingMode != nil {
 			documents.Strings["TaskBillingMode"][target] = *selection.TaskBillingMode
@@ -669,9 +689,6 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		setNumber("AudioRatio", selection.AudioRatio)
 		setNumber("AudioCompletionRatio", selection.AudioCompletionRatio)
 	case PricingModeExpression:
-		if selection.BillingExpr == nil || strings.TrimSpace(*selection.BillingExpr) == "" {
-			return pricingValidationErrorf("expression pricing requires billing expression")
-		}
 		documents.Strings["billing_setting.billing_mode"][target] = billing_setting.BillingModeTieredExpr
 		documents.Strings["billing_setting.billing_expr"][target] = *selection.BillingExpr
 		setNumber("ModelPrice", selection.ModelPrice)
@@ -682,8 +699,6 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		setNumber("ImageRatio", selection.ImageRatio)
 		setNumber("AudioRatio", selection.AudioRatio)
 		setNumber("AudioCompletionRatio", selection.AudioCompletionRatio)
-	default:
-		return pricingValidationErrorf("unsupported pricing mode %q", selection.Mode)
 	}
 	return nil
 }
