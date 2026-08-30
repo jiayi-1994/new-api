@@ -118,48 +118,56 @@ type pricingTransactionMutation func(tx *gorm.DB, documents *PricingDocuments) (
 // low-level publisher directly.
 var publishPricingDocumentsAfterCommit = publishPricingDocumentsWithHooks
 
-func currentPricingOptionValue(key string) string {
+func currentPricingOptionDefaults() map[string]string {
+	values := make(map[string]string, len(modelPricingOptionKeys))
 	common.OptionMapRWMutex.RLock()
-	value, ok := common.OptionMap[key]
+	for _, key := range modelPricingOptionKeys {
+		if value := common.OptionMap[key]; value != "" {
+			values[key] = value
+		}
+	}
 	common.OptionMapRWMutex.RUnlock()
-	if ok && value != "" {
-		return value
-	}
+	billingModes, billingExpressions := billing_setting.PricingDocumentsJSON()
+	values["billing_setting.billing_mode"] = billingModes
+	values["billing_setting.billing_expr"] = billingExpressions
 
-	switch key {
-	case "AudioCompletionRatio":
-		return ratio_setting.AudioCompletionRatio2JSONString()
-	case "AudioRatio":
-		return ratio_setting.AudioRatio2JSONString()
-	case "CacheRatio":
-		return ratio_setting.CacheRatio2JSONString()
-	case "CompletionRatio":
-		return ratio_setting.CompletionRatio2JSONString()
-	case "CreateCacheRatio":
-		return ratio_setting.CreateCacheRatio2JSONString()
-	case "ImageRatio":
-		return ratio_setting.ImageRatio2JSONString()
-	case "ModelPrice":
-		return ratio_setting.ModelPrice2JSONString()
-	case "ModelRatio":
-		return ratio_setting.ModelRatio2JSONString()
-	case "TaskBillingMode":
-		return ratio_setting.TaskBillingMode2JSONString()
-	case ratio_setting.VideoResolutionPriceOptionKey:
-		return ratio_setting.VideoResolutionPrice2JSONString()
-	case "billing_setting.billing_expr":
-		return billing_setting.BillingExpr2JSONString()
-	case "billing_setting.billing_mode":
-		return billing_setting.BillingMode2JSONString()
-	default:
-		return "{}"
+	for _, key := range modelPricingOptionKeys {
+		if _, ok := values[key]; ok {
+			continue
+		}
+		switch key {
+		case "AudioCompletionRatio":
+			values[key] = ratio_setting.AudioCompletionRatio2JSONString()
+		case "AudioRatio":
+			values[key] = ratio_setting.AudioRatio2JSONString()
+		case "CacheRatio":
+			values[key] = ratio_setting.CacheRatio2JSONString()
+		case "CompletionRatio":
+			values[key] = ratio_setting.CompletionRatio2JSONString()
+		case "CreateCacheRatio":
+			values[key] = ratio_setting.CreateCacheRatio2JSONString()
+		case "ImageRatio":
+			values[key] = ratio_setting.ImageRatio2JSONString()
+		case "ModelPrice":
+			values[key] = ratio_setting.ModelPrice2JSONString()
+		case "ModelRatio":
+			values[key] = ratio_setting.ModelRatio2JSONString()
+		case "TaskBillingMode":
+			values[key] = ratio_setting.TaskBillingMode2JSONString()
+		case ratio_setting.VideoResolutionPriceOptionKey:
+			values[key] = ratio_setting.VideoResolutionPrice2JSONString()
+		default:
+			values[key] = "{}"
+		}
 	}
+	return values
 }
 
 func lockPricingDocuments(tx *gorm.DB) (*PricingDocuments, error) {
 	values := make(map[string]string, len(modelPricingOptionKeys))
+	defaults := currentPricingOptionDefaults()
 	for _, key := range modelPricingOptionKeys {
-		missing := Option{Key: key, Value: currentPricingOptionValue(key)}
+		missing := Option{Key: key, Value: defaults[key]}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&missing).Error; err != nil {
 			return nil, fmt.Errorf("materialize pricing option %q: %w", key, err)
 		}
@@ -459,10 +467,7 @@ func publishPricingDocuments(values map[string]string, videoPublisher func(strin
 	if _, err := parsePricingDocuments(values); err != nil {
 		return err
 	}
-	current := make(map[string]string, len(modelPricingOptionKeys))
-	for _, key := range modelPricingOptionKeys {
-		current[key] = currentPricingOptionValue(key)
-	}
+	current := currentPricingOptionDefaults()
 	steps, err := pricingPublicationSteps(current, values)
 	if err != nil {
 		return err
@@ -673,24 +678,6 @@ func modelMutationID(mutation *ModelRowMutation) int {
 	return 0
 }
 
-func lockModelRowForMutation(tx *gorm.DB, mutation *ModelRowMutation) (*Model, error) {
-	if mutation == nil || mutation.Kind == "create" {
-		return nil, nil
-	}
-	if mutation.Kind != "update" && mutation.Kind != "delete" {
-		return nil, fmt.Errorf("unsupported model mutation %q", mutation.Kind)
-	}
-	id := modelMutationID(mutation)
-	if id == 0 {
-		return nil, fmt.Errorf("%s model mutation requires id", mutation.Kind)
-	}
-	var current Model
-	if err := lockForUpdate(tx).Where("id = ?", id).First(&current).Error; err != nil {
-		return nil, err
-	}
-	return &current, nil
-}
-
 func validateModelMutationCoupling(command ModelPricingCommand, current *Model) error {
 	mutation := command.ModelMutation
 	if mutation == nil {
@@ -798,33 +785,43 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 	var lockedModel *Model
 	modelMutationApplied := false
 	prelock := func(tx *gorm.DB) error {
-		var err error
-		lockedModel, err = lockModelRowForMutation(tx, command.ModelMutation)
-		if err != nil {
-			return err
-		}
-		if err := validateModelMutationCoupling(command, lockedModel); err != nil {
-			return err
-		}
 		if command.ModelMutation == nil {
-			return nil
+			return validateModelMutationCoupling(command, nil)
 		}
 		mutation := command.ModelMutation
 		switch mutation.Kind {
 		case "create":
-			if err := ensureActiveModelNameAvailable(tx, mutation.Model.ModelName, 0); err != nil {
+			if err := validateModelMutationCoupling(command, nil); err != nil {
+				return err
+			}
+			if _, err := lockModelNameMutation(tx, 0, nil, &mutation.Model.ModelName); err != nil {
 				return err
 			}
 			if err := applyModelRowMutation(tx, mutation, nil); err != nil {
 				return err
 			}
 			modelMutationApplied = true
-		case "update":
-			if lockedModel.ModelName != mutation.Model.ModelName {
-				if err := ensureActiveModelNameAvailable(tx, mutation.Model.ModelName, lockedModel.Id); err != nil {
-					return err
-				}
+		case "update", "delete":
+			id := modelMutationID(mutation)
+			if id == 0 {
+				return fmt.Errorf("%s model mutation requires id", mutation.Kind)
 			}
+			expectedSourceName := &command.TargetName
+			if command.Kind == PricingCommandRename {
+				expectedSourceName = &command.SourceName
+			}
+			var targetName *string
+			if mutation.Kind == "update" {
+				targetName = &command.TargetName
+			}
+			var err error
+			lockedModel, err = lockModelNameMutation(tx, id, expectedSourceName, targetName)
+			if err != nil {
+				return err
+			}
+			return validateModelMutationCoupling(command, lockedModel)
+		default:
+			return fmt.Errorf("unsupported model mutation %q", mutation.Kind)
 		}
 		return nil
 	}

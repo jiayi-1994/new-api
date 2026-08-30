@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -36,10 +37,7 @@ func setupPricingCommandTest(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&Option{}, &Model{}))
 	require.NoError(t, DB.Where(commonKeyCol+" IN ?", modelPricingOptionKeys).Delete(&Option{}).Error)
 	require.NoError(t, DB.Unscoped().Where("1 = 1").Delete(&Model{}).Error)
-	originalPricingValues := make(map[string]string, len(modelPricingOptionKeys))
-	for _, key := range modelPricingOptionKeys {
-		originalPricingValues[key] = currentPricingOptionValue(key)
-	}
+	originalPricingValues := currentPricingOptionDefaults()
 
 	common.OptionMapRWMutex.Lock()
 	originalOptionMap := common.OptionMap
@@ -602,6 +600,11 @@ func TestInsertModelWithActiveNameGuardSerializesAbsentTargetAcrossConnections(t
 		callbackName := fmt.Sprintf("active-name-read-%d-%s", index, t.Name())
 		require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
 			if tx.Statement.Table == "models" {
+				select {
+				case <-release:
+					return
+				default:
+				}
 				ready <- struct{}{}
 				<-release
 			}
@@ -633,6 +636,164 @@ func TestInsertModelWithActiveNameGuardSerializesAbsentTargetAcrossConnections(t
 	var count int64
 	require.NoError(t, firstDB.Model(&Model{}).Where("model_name = ?", "concurrent").Count(&count).Error)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestModelNameMutationLocksExistingRowsInStableIDOrder(t *testing.T) {
+	setupPricingCommandTest(t)
+	low := Model{ModelName: "lock-low", Status: 1, SyncOfficial: 1}
+	high := Model{ModelName: "lock-high", Status: 1, SyncOfficial: 1}
+	require.NoError(t, DB.Create(&low).Error)
+	require.NoError(t, DB.Create(&high).Error)
+	require.Less(t, low.Id, high.Id)
+
+	callbackName := "model-name-stable-lock-order-" + t.Name()
+	lockedIDs := make([]int, 0, 4)
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		row, ok := tx.Statement.Dest.(*Model)
+		if !ok {
+			return
+		}
+		if row.Id != low.Id && row.Id != high.Id {
+			return
+		}
+		lockedIDs = append(lockedIDs, row.Id)
+	}))
+	t.Cleanup(func() { require.NoError(t, DB.Callback().Query().Remove(callbackName)) })
+
+	for _, mutation := range []struct {
+		sourceID   int
+		sourceName string
+		targetName string
+	}{
+		{sourceID: high.Id, sourceName: high.ModelName, targetName: low.ModelName},
+		{sourceID: low.Id, sourceName: low.ModelName, targetName: high.ModelName},
+	} {
+		err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
+			_, lockErr := lockModelNameMutation(tx, mutation.sourceID, &mutation.sourceName, &mutation.targetName)
+			return lockErr
+		})
+		var conflict *ModelNameConflictError
+		require.ErrorAs(t, err, &conflict)
+	}
+
+	assert.Equal(t, []int{low.Id, high.Id, low.Id, high.Id}, lockedIDs,
+		"opposite renames must issue primary-key locking reads in the same explicit order")
+}
+
+func TestModelUpdateRejectsBlankNameWithoutMovingResolutionPricing(t *testing.T) {
+	for _, invalidName := range []string{"", "   "} {
+		t.Run(fmt.Sprintf("name_%q", invalidName), func(t *testing.T) {
+			setupPricingCommandTest(t)
+			item := Model{ModelName: "legacy-update-name", Description: "before", Status: 1, SyncOfficial: 1}
+			require.NoError(t, item.Insert())
+			require.NoError(t, UpdateOption(ratio_setting.VideoResolutionPriceOptionKey, `{"legacy-update-name":{"720p":0.5}}`))
+
+			item.ModelName = invalidName
+			item.Description = "after"
+			err := item.Update()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "model name is required")
+
+			var stored Model
+			require.NoError(t, DB.Where("id = ?", item.Id).First(&stored).Error)
+			assert.Equal(t, "legacy-update-name", stored.ModelName)
+			assert.Equal(t, "before", stored.Description)
+
+			var option Option
+			require.NoError(t, DB.Where("key = ?", ratio_setting.VideoResolutionPriceOptionKey).First(&option).Error)
+			var prices map[string]map[string]float64
+			require.NoError(t, common.Unmarshal([]byte(option.Value), &prices))
+			assert.Equal(t, map[string]float64{"720p": 0.5}, prices["legacy-update-name"])
+			assert.NotContains(t, prices, invalidName)
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandRejectsBlankMutationNamesAndRollsBack(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		setupPricingCommandTest(t)
+		fixture := pricingCommandFixture()
+		seedPricingDocuments(t, fixture)
+		price := 1.25
+		created := Model{ModelName: "   ", Status: 1, SyncOfficial: 1}
+
+		_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+			Kind:          PricingCommandSave,
+			TargetName:    "   ",
+			Selection:     &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+			ModelMutation: &ModelRowMutation{Kind: "create", Model: &created},
+		})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "model name is required")
+		var count int64
+		require.NoError(t, DB.Model(&Model{}).Count(&count).Error)
+		assert.Zero(t, count)
+		stored := storedPricingDocuments(t)
+		for key, expected := range fixture {
+			assert.JSONEq(t, expected, stored[key], key)
+		}
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		setupPricingCommandTest(t)
+		fixture := pricingCommandFixture()
+		seedPricingDocuments(t, fixture)
+		item := Model{ModelName: "owned", Status: 1, SyncOfficial: 1}
+		require.NoError(t, item.Insert())
+		renamed := item
+		renamed.ModelName = "   "
+
+		_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+			Kind:          PricingCommandRename,
+			SourceName:    "owned",
+			TargetName:    "   ",
+			ModelMutation: &ModelRowMutation{Kind: "update", ID: item.Id, Model: &renamed},
+		})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "model name is required")
+		var stored Model
+		require.NoError(t, DB.Where("id = ?", item.Id).First(&stored).Error)
+		assert.Equal(t, "owned", stored.ModelName)
+		storedDocuments := storedPricingDocuments(t)
+		for key, expected := range fixture {
+			assert.JSONEq(t, expected, storedDocuments[key], key)
+		}
+	})
+}
+
+func TestPricingOptionMaterializationDefaultsUsePairedBillingSnapshot(t *testing.T) {
+	setupPricingCommandTest(t)
+
+	oldModes := `{"paired-default":"ratio"}`
+	oldExpressions := `{"paired-default":"tier(\"old\", p * 1)"}`
+	newModes := `{"paired-default":"tiered_expr"}`
+	newExpressions := `{"paired-default":"tier(\"new\", p * 2)"}`
+	require.NoError(t, billing_setting.UpdatePricingDocuments(oldModes, oldExpressions))
+
+	callbackName := "publish-between-billing-option-materialization-" + t.Name()
+	var publishErr error
+	require.NoError(t, DB.Callback().Create().After("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		option, ok := tx.Statement.Dest.(*Option)
+		if ok && option.Key == "billing_setting.billing_expr" {
+			publishErr = billing_setting.UpdatePricingDocuments(newModes, newExpressions)
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, DB.Callback().Create().Remove(callbackName)) })
+
+	var documents *PricingDocuments
+	require.NoError(t, modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
+		var err error
+		documents, err = lockPricingDocuments(tx)
+		return err
+	}))
+	require.NoError(t, publishErr)
+
+	var modes map[string]string
+	var expressions map[string]string
+	require.NoError(t, common.Unmarshal([]byte(documents.Raw["billing_setting.billing_mode"]), &modes))
+	require.NoError(t, common.Unmarshal([]byte(documents.Raw["billing_setting.billing_expr"]), &expressions))
+	assert.Equal(t, billing_setting.BillingModeRatio, modes["paired-default"])
+	assert.Equal(t, `tier("old", p * 1)`, expressions["paired-default"])
 }
 
 func TestUpdateOptionCASUsesExactRawDocument(t *testing.T) {

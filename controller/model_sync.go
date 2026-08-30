@@ -412,36 +412,12 @@ func SyncUpstreamModels(c *gin.Context) {
 
 			// 应用字段覆盖（事务）
 			_ = model.DB.Transaction(func(tx *gorm.DB) error {
-				needUpdate := false
-				if containsField(ow.Fields, "description") {
-					local.Description = up.Description
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "icon") {
-					local.Icon = up.Icon
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "tags") {
-					local.Tags = up.Tags
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "vendor") {
-					local.VendorID = newVendorID
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "name_rule") {
-					local.NameRule = up.NameRule
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "status") {
-					local.Status = chooseStatus(up.Status, local.Status)
-					needUpdate = true
-				}
-				if !needUpdate {
-					return nil
-				}
-				if err := tx.Save(&local).Error; err != nil {
+				updated, err := applyOfficialModelOverwrite(tx, &local, up, ow.Fields, newVendorID)
+				if err != nil {
 					return err
+				}
+				if !updated {
+					return nil
 				}
 				updatedModels++
 				updatedList = append(updatedList, ow.ModelName)
@@ -466,6 +442,52 @@ func SyncUpstreamModels(c *gin.Context) {
 			},
 		},
 	})
+}
+
+// applyOfficialModelOverwrite updates only fields that official metadata owns.
+// The transaction-external local snapshot supplies only the stable row ID;
+// identity, soft-delete, and unspecified status fields are never persisted.
+func applyOfficialModelOverwrite(tx *gorm.DB, local *model.Model, upstream upstreamModel, fields []string, vendorID int) (bool, error) {
+	if local == nil || local.Id == 0 {
+		return false, errors.New("official model overwrite requires a model id")
+	}
+	columns := make([]string, 0, 6)
+	updates := make(map[string]any, 6)
+	if containsField(fields, "description") {
+		columns = append(columns, "description")
+		updates["description"] = upstream.Description
+	}
+	if containsField(fields, "icon") {
+		columns = append(columns, "icon")
+		updates["icon"] = upstream.Icon
+	}
+	if containsField(fields, "tags") {
+		columns = append(columns, "tags")
+		updates["tags"] = upstream.Tags
+	}
+	if containsField(fields, "vendor") {
+		columns = append(columns, "vendor_id")
+		updates["vendor_id"] = vendorID
+	}
+	if containsField(fields, "name_rule") {
+		columns = append(columns, "name_rule")
+		updates["name_rule"] = upstream.NameRule
+	}
+	if containsField(fields, "status") && upstream.Status != 0 {
+		columns = append(columns, "status")
+		updates["status"] = upstream.Status
+	}
+	if len(columns) == 0 {
+		return false, nil
+	}
+	result := tx.Model(&model.Model{}).
+		Where("id = ? AND sync_official <> ?", local.Id, 0).
+		Select(columns).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected != 0, nil
 }
 
 func containsField(fields []string, key string) bool {

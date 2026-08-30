@@ -2,7 +2,9 @@ package model
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -60,27 +62,96 @@ func modelNamespaceTransaction(db *gorm.DB, transaction func(*gorm.DB) error) er
 	return db.Transaction(transaction, &sql.TxOptions{Isolation: sql.LevelSerializable})
 }
 
-// ensureActiveModelNameAvailable performs an indexed locking read inside a
-// serializable transaction. Existing rows are locked directly; an absent name
-// is protected by the database's serializable predicate/range semantics so
-// concurrent creators cannot both commit.
-func ensureActiveModelNameAvailable(tx *gorm.DB, name string, excludeID int) error {
-	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("model name is required")
+// lockModelNameMutation resolves existing target IDs, then issues one primary-
+// key locking read per source/target row in ascending ID order. Reversed
+// renames therefore request the actual database row locks in the same order.
+// A final indexed target read preserves the absent-name predicate in the
+// serializable transaction before any insert or rename.
+func lockModelNameMutation(tx *gorm.DB, sourceID int, expectedSourceName, targetName *string) (*Model, error) {
+	if expectedSourceName != nil && strings.TrimSpace(*expectedSourceName) == "" {
+		return nil, fmt.Errorf("model name is required")
 	}
-	query := lockForUpdate(tx).Where("model_name = ?", name)
-	if excludeID != 0 {
-		query = query.Where("id <> ?", excludeID)
+	if targetName != nil && strings.TrimSpace(*targetName) == "" {
+		return nil, fmt.Errorf("model name is required")
 	}
-	var existing Model
-	result := query.Order("id ASC").Limit(1).Find(&existing)
-	if result.Error != nil {
-		return result.Error
+	if sourceID == 0 && targetName == nil {
+		return nil, fmt.Errorf("model name is required")
 	}
-	if result.RowsAffected != 0 {
-		return &ModelNameConflictError{Name: name, ExistingID: existing.Id}
+
+	candidateIDs := make([]int, 0, 3)
+	if sourceID != 0 {
+		candidateIDs = append(candidateIDs, sourceID)
 	}
-	return nil
+	if targetName != nil {
+		var targetIDs []int
+		if err := tx.Model(&Model{}).
+			Where("model_name = ?", *targetName).
+			Order("id ASC").
+			Pluck("id", &targetIDs).Error; err != nil {
+			return nil, err
+		}
+		candidateIDs = append(candidateIDs, targetIDs...)
+	}
+	sort.Ints(candidateIDs)
+	uniqueIDs := candidateIDs[:0]
+	for _, id := range candidateIDs {
+		if len(uniqueIDs) == 0 || uniqueIDs[len(uniqueIDs)-1] != id {
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+
+	lockedRows := make([]Model, 0, len(uniqueIDs))
+	for _, id := range uniqueIDs {
+		var row Model
+		result := lockForUpdate(tx).Where("id = ?", id).Take(&row)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		lockedRows = append(lockedRows, row)
+	}
+
+	var source *Model
+	var targetConflict *ModelNameConflictError
+	for index := range lockedRows {
+		row := &lockedRows[index]
+		if row.Id == sourceID {
+			source = row
+		}
+		if targetConflict == nil && targetName != nil && row.ModelName == *targetName && row.Id != sourceID {
+			targetConflict = &ModelNameConflictError{Name: *targetName, ExistingID: row.Id}
+		}
+	}
+	if sourceID != 0 {
+		if source == nil {
+			return nil, gorm.ErrRecordNotFound
+		}
+		if expectedSourceName != nil && source.ModelName != *expectedSourceName {
+			return nil, fmt.Errorf("model mutation row %q does not match expected source %q", source.ModelName, *expectedSourceName)
+		}
+	}
+	if targetConflict != nil {
+		return nil, targetConflict
+	}
+	if targetName == nil {
+		return source, nil
+	}
+
+	var currentTargetIDs []int
+	if err := tx.Model(&Model{}).
+		Where("model_name = ?", *targetName).
+		Order("id ASC").
+		Pluck("id", &currentTargetIDs).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range currentTargetIDs {
+		if id != sourceID {
+			return nil, &ModelNameConflictError{Name: *targetName, ExistingID: id}
+		}
+	}
+	return source, nil
 }
 
 func createModelRecord(tx *gorm.DB, model *Model) error {
@@ -99,7 +170,7 @@ func createModelRecord(tx *gorm.DB, model *Model) error {
 
 func insertModelWithActiveNameGuard(db *gorm.DB, model *Model) error {
 	return modelNamespaceTransaction(db, func(tx *gorm.DB) error {
-		if err := ensureActiveModelNameAvailable(tx, model.ModelName, 0); err != nil {
+		if _, err := lockModelNameMutation(tx, 0, nil, &model.ModelName); err != nil {
 			return err
 		}
 		return createModelRecord(tx, model)
@@ -126,14 +197,9 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	var publishedValue string
 	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
-		var current Model
-		if err := lockForUpdate(tx).Where("id = ?", mi.Id).First(&current).Error; err != nil {
+		current, err := lockModelNameMutation(tx, mi.Id, nil, &mi.ModelName)
+		if err != nil {
 			return err
-		}
-		if current.ModelName != mi.ModelName {
-			if err := ensureActiveModelNameAvailable(tx, mi.ModelName, current.Id); err != nil {
-				return err
-			}
 		}
 		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
 		if err != nil {
@@ -162,45 +228,40 @@ func (mi *Model) Update() error {
 }
 
 func (mi *Model) Delete() error {
-	return DB.Delete(mi).Error
+	if mi.Id == 0 {
+		return fmt.Errorf("delete model requires id")
+	}
+	return modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
+		current, err := lockModelNameMutation(tx, mi.Id, nil, nil)
+		if err != nil {
+			return err
+		}
+		return tx.Delete(current).Error
+	})
 }
 
 func DeleteModelMetaByID(id int) error {
 	videoResolutionPriceOptionMu.Lock()
 	defer videoResolutionPriceOptionMu.Unlock()
 
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
+	var publishedValue string
+	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
+		current, err := lockModelNameMutation(tx, id, nil, nil)
+		if err != nil {
+			return err
 		}
-	}()
-
-	var current Model
-	if err := lockForUpdate(tx).Where("id = ?", id).First(&current).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
+		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
+		if err != nil {
+			return err
+		}
+		delete(priceDocument, current.ModelName)
+		publishedValue, err = saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
+		if err != nil {
+			return err
+		}
+		return tx.Delete(current).Error
+	})
 	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	delete(priceDocument, current.ModelName)
-	publishedValue, err := saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Delete(&Model{}, id).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Commit().Error; err != nil {
 		return err
 	}
 	return publishVideoResolutionPriceOption(publishedValue)

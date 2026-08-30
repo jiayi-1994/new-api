@@ -118,3 +118,86 @@ DONE — transactional pricing document store, whole-document CAS writers, model
 - No live MySQL/PostgreSQL services were available for integration tests; compatibility is based on standard serializable transactions, indexed GORM locking reads, and the existing cross-dialect `lockForUpdate` helper. No migration or dialect-specific SQL was added.
 - `go test -race` cannot start test binaries in this Windows Go 1.25.1 environment and exits with loader status `0xc0000139`; deterministic channel-coordinated concurrency tests pass under normal execution. A full `go vet ./...` produced no output for 90 seconds and was stopped; the four changed package scopes pass vet.
 - Future request code that needs both billing mode and expression must use `GetBillingModeAndExpr`; separate compatibility getters are synchronized individually but intentionally do not form a cross-call snapshot.
+
+## Second External Review Remediation (2026-08-30)
+
+### Official Sync Identity Safety
+
+- Replaced the official-model overwrite `Save(&local)` with `applyOfficialModelOverwrite`, which persists only the requested synchronization-owned columns: description, icon, tags, vendor ID, name rule, and status.
+- The transaction-external model snapshot is used only for its stable row ID. `model_name`, `deleted_at`, timestamps, pricing ownership, and all other fields are absent from both the `Select` list and update map; an unspecified upstream status is also omitted rather than reconstructed from stale state.
+- Added a regression that reads an `A` snapshot, atomically renames the model and its twelve pricing documents to `B`, poisons the stale snapshot's soft-delete field, and then applies the official overwrite. The stored row remains active under `B`, while `ModelPrice` and `VideoResolutionPrice` remain owned only by `B`.
+
+### Stable Model Namespace Locking
+
+- Replaced source-then-target locking with the shared `lockModelNameMutation` helper used by create, legacy update/delete, `DeleteModelMetaByID`, and command create/update/delete.
+- Inside each serializable transaction, the helper resolves the existing source/target candidate IDs, sorts and deduplicates them in Go, then issues one primary-key `lockForUpdate` point read per ID in ascending order. Opposite `A→B` and `B→A` attempts therefore make the storage engine request existing row locks in the same explicit call order instead of depending on optimizer/filesort order.
+- After locking, the helper revalidates source existence, the expected source name, and active target conflict. Source mismatch is deliberately reported before target conflict so a stale or misbound mutation cannot be disguised as an unrelated name collision.
+- A final indexed `model_name` revalidation preserves the target-name predicate/range in the serializable transaction when the target is absent or changed. Create completes this namespace read and inserts the model before any pricing option is materialized or locked; document failure rolls the early insert back with the transaction.
+- No migration or dialect-specific SQL was added. The implementation uses GORM point reads/order/transactions and the shared `lockForUpdate` boundary, which emits `FOR UPDATE` on MySQL/PostgreSQL and omits it for SQLite. PostgreSQL serializable predicate conflicts, MySQL InnoDB serializable range locks, and SQLite write serialization remain the cross-instance absent-target conflict boundary.
+
+### Paired Missing-Document Defaults
+
+- Replaced per-key billing default reads with `currentPricingOptionDefaults`. It copies ordinary option defaults, calls `billing_setting.PricingDocumentsJSON()` exactly once, and assigns both billing documents from that one immutable snapshot before the missing-row loop.
+- Missing `billing_mode` and `billing_expr` rows can therefore never be materialized from different live generations. Publication baseline reads use the same paired helper.
+- The paired regression exercises `lockPricingDocuments` itself and deterministically publishes a new live pair after the expression option is created but before the mode option is created. Both materialized rows still contain the old pair captured before the loop; no random loops or sleeps are used.
+
+### Second-Round RED Evidence
+
+- `go test ./controller -run 'TestApplyOfficialModelOverwritePreservesConcurrentIdentityAndPricingRename$' -count=1` — RED compile failure: `undefined: applyOfficialModelOverwrite` while the production path still used `Save(&local)`.
+- `go test ./model -run 'TestModelNameMutationLocksExistingRowsInStableIDOrder$' -count=1` — RED compile failure: `undefined: lockModelNameMutation`; the retained writers still acquired source then target.
+- `go test ./model -run 'TestPricingOptionMaterializationDefaultsUsePairedBillingSnapshot$' -count=1` — RED compile failure: `undefined: currentPricingOptionDefaults`; missing rows still used separate billing getters.
+- During GREEN integration, `TestInsertModelWithActiveNameGuardSerializesAbsentTargetAcrossConnections` initially timed out because its query callback waited at the new post-release predicate read. The timeout stack pointed to the test callback channel send, not a database lock. The deterministic barrier now becomes inert after release; the test passes and still proves exactly one concurrent absent-target creator commits.
+- The first full controller run exposed two older pricing-list fixtures that published `tiered_expr` modes with blank/missing expressions. The strict whole-pair validator correctly rejected the entire snapshot. The fixtures now publish only their valid tiered model; the invalid/unconfigured ability entries remain excluded by the same observable assertions. Production whole-pair validation was not weakened or changed to partial publication.
+
+### Second-Round GREEN / Verification Evidence
+
+- `go test ./model -run 'Test(ExecuteModelPricingCommand|UpdateOptionCAS|UpdateOptionsBulkCAS|PricingPublication|ModelNameMutationLocksExistingRowsInStableIDOrder|PricingOptionMaterializationDefaultsUsePairedBillingSnapshot|InsertModelWithActiveNameGuard)' -count=1 -timeout=90s` — PASS.
+- `go test ./controller -run 'Test(ApplyOfficialModelOverwrite|ListModelsIncludesTieredBillingModel|ListModelsTokenLimitIncludesTieredBillingModel)' -count=1 -timeout=90s` — PASS.
+- `go test ./model ./controller ./setting/billing_setting ./relay/helper -count=1 -timeout=120s` — PASS.
+- `go vet ./model ./controller ./setting/billing_setting ./relay/helper` — PASS.
+- `git diff --check` — PASS.
+
+### Second-Round Files and Attention Points
+
+- Added `controller/model_sync_test.go`.
+- Modified `controller/model_sync.go` and corrected the strict paired-config fixtures in `controller/model_list_test.go`.
+- Modified `model/model_meta.go`, `model/model_pricing_command.go`, and `model/model_pricing_command_test.go`.
+- Real MySQL/PostgreSQL services remain unavailable, so the stable-lock and absent-predicate implementation is verified by generated GORM behavior, SQLite concurrency regressions, cross-dialect primitives, and static lock-order review rather than live engine integration.
+- Windows race-loader limitation from the first remediation remains unchanged; deterministic synchronization tests and scoped vet pass.
+
+## Adversarial Re-review Remediation (2026-08-30)
+
+### Blank Names and Transaction Rollback
+
+- `lockModelNameMutation` now represents optional expected-source and target names explicitly with pointers. Any supplied empty or whitespace-only name returns the retained `model name is required` error before model or pricing mutation; source-only delete operations use `nil` rather than overloading an empty string.
+- Legacy `Model.Update`, guarded insert, and command create/update/delete all use the explicit interface. Regression coverage proves legacy blank/whitespace updates retain the model row and resolution table, while command create and rename reject blank targets and leave both model rows and all twelve documents unchanged.
+
+### Actual Point-Lock Order
+
+- Removed the optimizer-dependent `IN (subquery) ORDER BY id` lock query. Candidate target IDs are resolved, combined with the known source ID, sorted, and deduplicated; each existing row is then point-locked by primary key in a sequential ascending-ID call.
+- The query-callback regression now observes the individual `*Model` point reads rather than the returned order of a bulk slice. Both opposite rename directions emit `low, high`; `low, high`, which protects the application-controlled acquisition order even though SQLite intentionally omits `FOR UPDATE`.
+
+### Status Lost-Update Prevention
+
+- An upstream status of zero means unspecified/preserve. The official overwrite update map now omits `status` entirely in that case, so a transaction-external stale snapshot cannot re-enable a model that an administrator disabled after the read.
+- The controller regression now performs that concurrent disable between the stale read and overwrite and proves status remains zero together with the renamed identity, active soft-delete state, and pricing ownership.
+
+### Adversarial RED / GREEN Evidence
+
+- `TestModelUpdateRejectsBlankNameWithoutMovingResolutionPricing` — RED returned `video resolution price model key must not be blank` after reaching document mutation rather than the namespace guard; GREEN returns `model name is required` and preserves model/document state for empty and whitespace-only names.
+- `TestModelNameMutationLocksExistingRowsInStableIDOrder` — revised RED expected four primary-key point reads but observed none from the bulk subquery implementation; GREEN observes explicit `low, high, low, high` calls.
+- `TestApplyOfficialModelOverwritePreservesConcurrentIdentityAndPricingRename` — RED re-enabled the concurrently disabled row (`status=1`); GREEN leaves status zero when upstream status is unspecified.
+- `TestPricingOptionMaterializationDefaultsUsePairedBillingSnapshot` now covers the actual transaction materialization boundary with a deterministic between-row publication hook and passes.
+
+### Adversarial Attention Points
+
+- Live MySQL/PostgreSQL integration remains unavailable. Explicit primary-key point-lock call order removes dependence on query-plan lock order, but actual engine behavior and serialization/deadlock-victim errors are not exercised in this Windows workspace.
+- Official sync still treats upstream status zero as preserve and nonzero as an explicit synchronized value; future fields with preserve semantics must likewise be omitted rather than populated from transaction-external fallback state.
+
+### Final Verification and Review
+
+- `go test ./model -run 'Test(ExecuteModelPricingCommand|UpdateOptionCAS|UpdateOptionsBulkCAS|PricingPublication|ModelNameMutationLocksExistingRowsInStableIDOrder|ModelUpdateRejectsBlankNameWithoutMovingResolutionPricing|PricingOptionMaterializationDefaultsUsePairedBillingSnapshot|InsertModelWithActiveNameGuard)' -count=1 -timeout=90s` — PASS.
+- `go test ./model ./controller ./setting/billing_setting ./relay/helper -count=1 -timeout=120s` — PASS.
+- `go vet ./model ./controller ./setting/billing_setting ./relay/helper` — PASS.
+- `git diff --check` — PASS.
+- Final independent adversarial re-review — APPROVED with no findings; only the already documented lack of live MySQL/PostgreSQL integration remains.
