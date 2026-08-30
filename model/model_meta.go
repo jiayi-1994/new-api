@@ -62,46 +62,73 @@ func modelNamespaceTransaction(db *gorm.DB, transaction func(*gorm.DB) error) er
 	return db.Transaction(transaction, &sql.TxOptions{Isolation: sql.LevelSerializable})
 }
 
-// lockModelNameMutation resolves existing target IDs, then issues one primary-
-// key locking read per source/target row in ascending ID order. Reversed
-// renames therefore request the actual database row locks in the same order.
-// A final indexed target read preserves the absent-name predicate in the
-// serializable transaction before any insert or rename.
-func lockModelNameMutation(tx *gorm.DB, sourceID int, expectedSourceName, targetName *string) (*Model, error) {
+type modelNameMutationPlan struct {
+	sourceID             int
+	expectedSourceName   string
+	checkExpectedSource  bool
+	targetName           string
+	hasTarget            bool
+	resolvedCandidateIDs []int
+}
+
+// resolveModelNameMutation runs before the serializable transaction. Keeping
+// this ordinary target-name read outside the transaction prevents MySQL from
+// promoting it to a shared next-key lock before the stable exclusive point
+// locks are acquired.
+func resolveModelNameMutation(db *gorm.DB, sourceID int, expectedSourceName, targetName *string) (modelNameMutationPlan, error) {
 	if expectedSourceName != nil && strings.TrimSpace(*expectedSourceName) == "" {
-		return nil, fmt.Errorf("model name is required")
+		return modelNameMutationPlan{}, fmt.Errorf("model name is required")
 	}
 	if targetName != nil && strings.TrimSpace(*targetName) == "" {
-		return nil, fmt.Errorf("model name is required")
+		return modelNameMutationPlan{}, fmt.Errorf("model name is required")
 	}
 	if sourceID == 0 && targetName == nil {
-		return nil, fmt.Errorf("model name is required")
+		return modelNameMutationPlan{}, fmt.Errorf("model name is required")
 	}
 
-	candidateIDs := make([]int, 0, 3)
+	plan := modelNameMutationPlan{
+		sourceID:             sourceID,
+		checkExpectedSource:  expectedSourceName != nil,
+		hasTarget:            targetName != nil,
+		resolvedCandidateIDs: make([]int, 0, 3),
+	}
+	if expectedSourceName != nil {
+		plan.expectedSourceName = *expectedSourceName
+	}
+	if targetName != nil {
+		plan.targetName = *targetName
+	}
 	if sourceID != 0 {
-		candidateIDs = append(candidateIDs, sourceID)
+		plan.resolvedCandidateIDs = append(plan.resolvedCandidateIDs, sourceID)
 	}
 	if targetName != nil {
 		var targetIDs []int
-		if err := tx.Model(&Model{}).
+		if err := db.Model(&Model{}).
 			Where("model_name = ?", *targetName).
 			Order("id ASC").
 			Pluck("id", &targetIDs).Error; err != nil {
-			return nil, err
+			return modelNameMutationPlan{}, err
 		}
-		candidateIDs = append(candidateIDs, targetIDs...)
+		plan.resolvedCandidateIDs = append(plan.resolvedCandidateIDs, targetIDs...)
 	}
-	sort.Ints(candidateIDs)
-	uniqueIDs := candidateIDs[:0]
-	for _, id := range candidateIDs {
+	sort.Ints(plan.resolvedCandidateIDs)
+	uniqueIDs := plan.resolvedCandidateIDs[:0]
+	for _, id := range plan.resolvedCandidateIDs {
 		if len(uniqueIDs) == 0 || uniqueIDs[len(uniqueIDs)-1] != id {
 			uniqueIDs = append(uniqueIDs, id)
 		}
 	}
+	plan.resolvedCandidateIDs = uniqueIDs
+	return plan, nil
+}
 
-	lockedRows := make([]Model, 0, len(uniqueIDs))
-	for _, id := range uniqueIDs {
+// lockModelNameMutation is the transaction's first model-table operation. It
+// point-locks the externally resolved IDs in explicit ascending order, then
+// revalidates source/target state and finally reads the target predicate so an
+// absent or changed candidate participates in serializable conflict detection.
+func lockModelNameMutation(tx *gorm.DB, plan modelNameMutationPlan) (*Model, error) {
+	lockedRows := make([]Model, 0, len(plan.resolvedCandidateIDs))
+	for _, id := range plan.resolvedCandidateIDs {
 		var row Model
 		result := lockForUpdate(tx).Where("id = ?", id).Take(&row)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -117,41 +144,60 @@ func lockModelNameMutation(tx *gorm.DB, sourceID int, expectedSourceName, target
 	var targetConflict *ModelNameConflictError
 	for index := range lockedRows {
 		row := &lockedRows[index]
-		if row.Id == sourceID {
+		if row.Id == plan.sourceID {
 			source = row
 		}
-		if targetConflict == nil && targetName != nil && row.ModelName == *targetName && row.Id != sourceID {
-			targetConflict = &ModelNameConflictError{Name: *targetName, ExistingID: row.Id}
+		if targetConflict == nil && plan.hasTarget && row.ModelName == plan.targetName && row.Id != plan.sourceID {
+			targetConflict = &ModelNameConflictError{Name: plan.targetName, ExistingID: row.Id}
 		}
 	}
-	if sourceID != 0 {
+	if plan.sourceID != 0 {
 		if source == nil {
 			return nil, gorm.ErrRecordNotFound
 		}
-		if expectedSourceName != nil && source.ModelName != *expectedSourceName {
-			return nil, fmt.Errorf("model mutation row %q does not match expected source %q", source.ModelName, *expectedSourceName)
+		if plan.checkExpectedSource && source.ModelName != plan.expectedSourceName {
+			return nil, fmt.Errorf("model mutation row %q does not match expected source %q", source.ModelName, plan.expectedSourceName)
 		}
 	}
 	if targetConflict != nil {
 		return nil, targetConflict
 	}
-	if targetName == nil {
+	if !plan.hasTarget {
 		return source, nil
 	}
 
 	var currentTargetIDs []int
 	if err := tx.Model(&Model{}).
-		Where("model_name = ?", *targetName).
+		Where("model_name = ?", plan.targetName).
 		Order("id ASC").
 		Pluck("id", &currentTargetIDs).Error; err != nil {
 		return nil, err
 	}
 	for _, id := range currentTargetIDs {
-		if id != sourceID {
-			return nil, &ModelNameConflictError{Name: *targetName, ExistingID: id}
+		if id != plan.sourceID {
+			return nil, &ModelNameConflictError{Name: plan.targetName, ExistingID: id}
 		}
 	}
 	return source, nil
+}
+
+func modelNameMutationTransaction(
+	db *gorm.DB,
+	sourceID int,
+	expectedSourceName, targetName *string,
+	mutation func(*gorm.DB, *Model) error,
+) error {
+	plan, err := resolveModelNameMutation(db, sourceID, expectedSourceName, targetName)
+	if err != nil {
+		return err
+	}
+	return modelNamespaceTransaction(db, func(tx *gorm.DB) error {
+		current, err := lockModelNameMutation(tx, plan)
+		if err != nil {
+			return err
+		}
+		return mutation(tx, current)
+	})
 }
 
 func createModelRecord(tx *gorm.DB, model *Model) error {
@@ -169,10 +215,7 @@ func createModelRecord(tx *gorm.DB, model *Model) error {
 }
 
 func insertModelWithActiveNameGuard(db *gorm.DB, model *Model) error {
-	return modelNamespaceTransaction(db, func(tx *gorm.DB) error {
-		if _, err := lockModelNameMutation(tx, 0, nil, &model.ModelName); err != nil {
-			return err
-		}
+	return modelNameMutationTransaction(db, 0, nil, &model.ModelName, func(tx *gorm.DB, _ *Model) error {
 		return createModelRecord(tx, model)
 	})
 }
@@ -196,11 +239,7 @@ func (mi *Model) Update() error {
 
 	mi.UpdatedTime = common.GetTimestamp()
 	var publishedValue string
-	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
-		current, err := lockModelNameMutation(tx, mi.Id, nil, &mi.ModelName)
-		if err != nil {
-			return err
-		}
+	err := modelNameMutationTransaction(DB, mi.Id, nil, &mi.ModelName, func(tx *gorm.DB, current *Model) error {
 		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
 		if err != nil {
 			return err
@@ -231,11 +270,7 @@ func (mi *Model) Delete() error {
 	if mi.Id == 0 {
 		return fmt.Errorf("delete model requires id")
 	}
-	return modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
-		current, err := lockModelNameMutation(tx, mi.Id, nil, nil)
-		if err != nil {
-			return err
-		}
+	return modelNameMutationTransaction(DB, mi.Id, nil, nil, func(tx *gorm.DB, current *Model) error {
 		return tx.Delete(current).Error
 	})
 }
@@ -245,11 +280,7 @@ func DeleteModelMetaByID(id int) error {
 	defer videoResolutionPriceOptionMu.Unlock()
 
 	var publishedValue string
-	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
-		current, err := lockModelNameMutation(tx, id, nil, nil)
-		if err != nil {
-			return err
-		}
+	err := modelNameMutationTransaction(DB, id, nil, nil, func(tx *gorm.DB, current *Model) error {
 		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
 		if err != nil {
 			return err

@@ -782,29 +782,22 @@ func applyModelRowMutation(tx *gorm.DB, mutation *ModelRowMutation, current *Mod
 }
 
 func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingCommandResult, error) {
-	var lockedModel *Model
-	modelMutationApplied := false
-	prelock := func(tx *gorm.DB) error {
-		if command.ModelMutation == nil {
-			return validateModelMutationCoupling(command, nil)
-		}
+	var namePlan *modelNameMutationPlan
+	if command.ModelMutation != nil {
 		mutation := command.ModelMutation
+		var (
+			resolved modelNameMutationPlan
+			err      error
+		)
 		switch mutation.Kind {
 		case "create":
-			if err := validateModelMutationCoupling(command, nil); err != nil {
-				return err
+			if err = validateModelMutationCoupling(command, nil); err == nil {
+				resolved, err = resolveModelNameMutation(DB, 0, nil, &mutation.Model.ModelName)
 			}
-			if _, err := lockModelNameMutation(tx, 0, nil, &mutation.Model.ModelName); err != nil {
-				return err
-			}
-			if err := applyModelRowMutation(tx, mutation, nil); err != nil {
-				return err
-			}
-			modelMutationApplied = true
 		case "update", "delete":
 			id := modelMutationID(mutation)
 			if id == 0 {
-				return fmt.Errorf("%s model mutation requires id", mutation.Kind)
+				return ModelPricingCommandResult{}, fmt.Errorf("%s model mutation requires id", mutation.Kind)
 			}
 			expectedSourceName := &command.TargetName
 			if command.Kind == PricingCommandRename {
@@ -814,14 +807,39 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 			if mutation.Kind == "update" {
 				targetName = &command.TargetName
 			}
-			var err error
-			lockedModel, err = lockModelNameMutation(tx, id, expectedSourceName, targetName)
-			if err != nil {
+			resolved, err = resolveModelNameMutation(DB, id, expectedSourceName, targetName)
+		default:
+			err = fmt.Errorf("unsupported model mutation %q", mutation.Kind)
+		}
+		if err != nil {
+			return ModelPricingCommandResult{}, err
+		}
+		namePlan = &resolved
+	}
+
+	var lockedModel *Model
+	modelMutationApplied := false
+	prelock := func(tx *gorm.DB) error {
+		if command.ModelMutation == nil {
+			return validateModelMutationCoupling(command, nil)
+		}
+		mutation := command.ModelMutation
+		var err error
+		lockedModel, err = lockModelNameMutation(tx, *namePlan)
+		if err != nil {
+			return err
+		}
+		switch mutation.Kind {
+		case "create":
+			if err := validateModelMutationCoupling(command, nil); err != nil {
 				return err
 			}
+			if err := applyModelRowMutation(tx, mutation, nil); err != nil {
+				return err
+			}
+			modelMutationApplied = true
+		case "update", "delete":
 			return validateModelMutationCoupling(command, lockedModel)
-		default:
-			return fmt.Errorf("unsupported model mutation %q", mutation.Kind)
 		}
 		return nil
 	}

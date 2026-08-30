@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -647,16 +648,32 @@ func TestModelNameMutationLocksExistingRowsInStableIDOrder(t *testing.T) {
 	require.Less(t, low.Id, high.Id)
 
 	callbackName := "model-name-stable-lock-order-" + t.Name()
+	type queryPhase struct {
+		insideTransaction bool
+		kind              string
+		rowID             int
+	}
+	queryPhases := make([]queryPhase, 0, 6)
 	lockedIDs := make([]int, 0, 4)
 	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		row, ok := tx.Statement.Dest.(*Model)
-		if !ok {
+		if tx.Statement.Table != "models" {
 			return
 		}
-		if row.Id != low.Id && row.Id != high.Id {
-			return
+		_, insideTransaction := tx.Statement.ConnPool.(*sql.Tx)
+		switch destination := tx.Statement.Dest.(type) {
+		case *[]int:
+			queryPhases = append(queryPhases, queryPhase{insideTransaction: insideTransaction, kind: "candidate-discovery"})
+		case *Model:
+			if destination.Id != low.Id && destination.Id != high.Id {
+				return
+			}
+			queryPhases = append(queryPhases, queryPhase{insideTransaction: insideTransaction, kind: "point-lock", rowID: destination.Id})
+			if insideTransaction {
+				lockedIDs = append(lockedIDs, destination.Id)
+			}
+		default:
+			queryPhases = append(queryPhases, queryPhase{insideTransaction: insideTransaction, kind: "other-model-read"})
 		}
-		lockedIDs = append(lockedIDs, row.Id)
 	}))
 	t.Cleanup(func() { require.NoError(t, DB.Callback().Query().Remove(callbackName)) })
 
@@ -664,18 +681,38 @@ func TestModelNameMutationLocksExistingRowsInStableIDOrder(t *testing.T) {
 		sourceID   int
 		sourceName string
 		targetName string
+		command    bool
 	}{
 		{sourceID: high.Id, sourceName: high.ModelName, targetName: low.ModelName},
-		{sourceID: low.Id, sourceName: low.ModelName, targetName: high.ModelName},
+		{sourceID: low.Id, sourceName: low.ModelName, targetName: high.ModelName, command: true},
 	} {
-		err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
-			_, lockErr := lockModelNameMutation(tx, mutation.sourceID, &mutation.sourceName, &mutation.targetName)
-			return lockErr
-		})
+		updated := Model{Id: mutation.sourceID, ModelName: mutation.targetName, Status: 1, SyncOfficial: 1}
+		var err error
+		if mutation.command {
+			_, err = ExecuteModelPricingCommand(ModelPricingCommand{
+				Kind:          PricingCommandRename,
+				SourceName:    mutation.sourceName,
+				TargetName:    mutation.targetName,
+				ModelMutation: &ModelRowMutation{Kind: "update", ID: mutation.sourceID, Model: &updated},
+			})
+		} else {
+			err = updated.Update()
+		}
 		var conflict *ModelNameConflictError
 		require.ErrorAs(t, err, &conflict)
 	}
 
+	discoveries := 0
+	for _, phase := range queryPhases {
+		if phase.kind == "candidate-discovery" {
+			discoveries++
+			assert.False(t, phase.insideTransaction, "candidate discovery must precede the serializable transaction")
+		}
+		if phase.insideTransaction {
+			assert.Equal(t, "point-lock", phase.kind, "the transaction may not read the model table before stable point locks")
+		}
+	}
+	assert.Equal(t, 2, discoveries, "each transaction attempt must resolve target candidates afresh")
 	assert.Equal(t, []int{low.Id, high.Id, low.Id, high.Id}, lockedIDs,
 		"opposite renames must issue primary-key locking reads in the same explicit order")
 }

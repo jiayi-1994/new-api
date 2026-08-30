@@ -130,7 +130,7 @@ DONE — transactional pricing document store, whole-document CAS writers, model
 ### Stable Model Namespace Locking
 
 - Replaced source-then-target locking with the shared `lockModelNameMutation` helper used by create, legacy update/delete, `DeleteModelMetaByID`, and command create/update/delete.
-- Inside each serializable transaction, the helper resolves the existing source/target candidate IDs, sorts and deduplicates them in Go, then issues one primary-key `lockForUpdate` point read per ID in ascending order. Opposite `A→B` and `B→A` attempts therefore make the storage engine request existing row locks in the same explicit call order instead of depending on optimizer/filesort order.
+- Before each serializable transaction attempt, the helper resolves the existing source/target candidate IDs with an ordinary nonlocking read, then sorts and deduplicates them in Go. Inside the transaction it issues one primary-key `lockForUpdate` point read per ID in ascending order. Opposite `A→B` and `B→A` attempts therefore make the storage engine request existing row locks in the same explicit call order without taking MySQL shared next-key locks during candidate discovery.
 - After locking, the helper revalidates source existence, the expected source name, and active target conflict. Source mismatch is deliberately reported before target conflict so a stale or misbound mutation cannot be disguised as an unrelated name collision.
 - A final indexed `model_name` revalidation preserves the target-name predicate/range in the serializable transaction when the target is absent or changed. Create completes this namespace read and inserts the model before any pricing option is materialized or locked; document failure rolls the early insert back with the transaction.
 - No migration or dialect-specific SQL was added. The implementation uses GORM point reads/order/transactions and the shared `lockForUpdate` boundary, which emits `FOR UPDATE` on MySQL/PostgreSQL and omits it for SQLite. PostgreSQL serializable predicate conflicts, MySQL InnoDB serializable range locks, and SQLite write serialization remain the cross-instance absent-target conflict boundary.
@@ -174,7 +174,7 @@ DONE — transactional pricing document store, whole-document CAS writers, model
 
 ### Actual Point-Lock Order
 
-- Removed the optimizer-dependent `IN (subquery) ORDER BY id` lock query. Candidate target IDs are resolved, combined with the known source ID, sorted, and deduplicated; each existing row is then point-locked by primary key in a sequential ascending-ID call.
+- Removed the optimizer-dependent `IN (subquery) ORDER BY id` lock query. Candidate target IDs are resolved outside the serializable transaction, combined with the known source ID, sorted, and deduplicated; each existing row is then point-locked by primary key in a sequential ascending-ID call inside the transaction.
 - The query-callback regression now observes the individual `*Model` point reads rather than the returned order of a bulk slice. Both opposite rename directions emit `low, high`; `low, high`, which protects the application-controlled acquisition order even though SQLite intentionally omits `FOR UPDATE`.
 
 ### Status Lost-Update Prevention
@@ -201,3 +201,27 @@ DONE — transactional pricing document store, whole-document CAS writers, model
 - `go vet ./model ./controller ./setting/billing_setting ./relay/helper` — PASS.
 - `git diff --check` — PASS.
 - Final independent adversarial re-review — APPROVED with no findings; only the already documented lack of live MySQL/PostgreSQL integration remains.
+
+## Final MySQL Pre-lock Remediation (2026-08-30)
+
+### Two-phase Namespace Entry
+
+- External review identified that the prior candidate `Pluck` still ran inside a MySQL serializable transaction. MySQL can promote that ordinary read to a shared next-key lock, so opposite renames could hold shared target locks before attempting the otherwise stable exclusive point-lock sequence.
+- Added `resolveModelNameMutation`, which validates supplied names, copies the expected source/target state, resolves active target IDs using the ordinary database handle outside the serializable transaction, and returns a self-contained sorted/deduplicated plan.
+- `lockModelNameMutation` now accepts only that plan. Its first model-table operations in the transaction are primary-key `lockForUpdate` point reads in ascending ID order. It then revalidates the locked source/current target and finally performs the indexed target predicate read needed for changed/absent candidates to participate in serializable conflict detection.
+- `modelNameMutationTransaction` performs discovery immediately before each legacy transaction invocation. `ExecuteModelPricingCommand` likewise creates a fresh plan on every command invocation before entering its pricing transaction. GORM does not retry these transactions internally; any caller retry invokes the complete entry again and therefore re-runs candidate discovery rather than retaining a plan across attempts.
+- Guarded create, legacy update/delete, `DeleteModelMetaByID`, and command create/update/delete all use the two-phase entry. Transactional order remains model point locks/create before the twelve option locks; blank-name rejection, target conflict rollback, and absent-target exactly-one-commit semantics are unchanged.
+
+### Query-phase RED / GREEN Evidence
+
+- RED: `go test ./model -run 'TestModelNameMutationLocksExistingRowsInStableIDOrder$' -count=1 -timeout=60s` failed twice with `candidate discovery must precede the serializable transaction`; the callback identified the `[]int` target-ID `Pluck` through a `*sql.Tx` connection pool.
+- GREEN: the same deterministic regression executes one legacy rename and one pricing-command rename in opposite directions. It observes two fresh candidate discoveries through the nontransactional connection and only primary-key point reads inside each serializable transaction, in `low, high, low, high` order.
+- The regression inspects transaction boundary and query destination, not returned slice order. Any model-table query before the point locks is recorded as an unexpected transactional read.
+
+### Final MySQL Pre-lock Verification
+
+- `go test ./model -run 'Test(ExecuteModelPricingCommand|UpdateOptionCAS|UpdateOptionsBulkCAS|PricingPublication|ModelNameMutationLocksExistingRowsInStableIDOrder|ModelUpdateRejectsBlankNameWithoutMovingResolutionPricing|PricingOptionMaterializationDefaultsUsePairedBillingSnapshot|InsertModelWithActiveNameGuard)' -count=1 -timeout=90s` — PASS.
+- `go test ./model ./controller ./setting/billing_setting ./relay/helper -count=1 -timeout=120s` — PASS.
+- `go vet ./model ./controller ./setting/billing_setting ./relay/helper` — PASS.
+- No live MySQL/PostgreSQL service was available. The evidence is deterministic GORM transaction-boundary/query-phase inspection, SQLite behavioral regressions, and static cross-dialect reasoning; it is not an integration-test claim.
+- Independent adversarial re-review — APPROVED with no findings or testing gaps; the lack of live MySQL/PostgreSQL services is retained solely as a verification limitation.
