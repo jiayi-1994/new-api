@@ -34,10 +34,7 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import {
-  isPerSecondBilledModel,
-  isTokenBasedModel,
-} from '../lib/model-helpers'
+import { isPerSecondBilledModel, isTokenBasedModel } from '../lib/model-helpers'
 import {
   formatPrice,
   formatRequestPrice,
