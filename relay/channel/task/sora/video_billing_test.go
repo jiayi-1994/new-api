@@ -1,7 +1,9 @@
 package sora
 
 import (
+	"bytes"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,27 +135,147 @@ func TestSoraBuildRequestBodyUsesResolvedBillingPayload(t *testing.T) {
 	assert.Equal(t, "720x1280", decoded["size"])
 	assert.Equal(t, "4", decoded["seconds"])
 	assert.NotContains(t, decoded, "duration")
-	assert.NotContains(t, decoded, "resolution")
+	assert.Equal(t, selection.EffectiveResolution, decoded["resolution"])
 }
 
-func TestSoraRejectsUnsupportedPrewrappedDashScopeBillingParameters(t *testing.T) {
+func TestMegabyaiResolveAndBuildRequestBodyPreserveExplicitResolution(t *testing.T) {
+	for _, resolution := range []string{"480p", "720p", "864p", "1080p", "2160p"} {
+		t.Run(resolution, func(t *testing.T) {
+			c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{
+				Model:      "videos-mini",
+				Prompt:     "animate",
+				Resolution: resolution,
+				Duration:   6,
+			})
+			adaptor := &TaskAdaptor{baseURL: "https://megabyai.cc"}
+
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			assert.Equal(t, resolution, selection.EffectiveResolution)
+			assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+
+			body, err := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, err)
+			payload, err := io.ReadAll(body)
+			require.NoError(t, err)
+			var decoded map[string]any
+			require.NoError(t, common.Unmarshal(payload, &decoded))
+
+			assert.Equal(t, "videos-mini", decoded["model"])
+			assert.Equal(t, resolution, decoded["resolution"])
+			assert.Equal(t, float64(6), decoded["duration"])
+		})
+	}
+}
+
+func TestSoraOpenAIResolveAndBuildRequestBodyPreserveExplicitResolution(t *testing.T) {
+	for _, resolution := range []string{"480p", "720p", "1080p", "2160p"} {
+		t.Run(resolution, func(t *testing.T) {
+			c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{
+				Model:      "videos-mini",
+				Prompt:     "animate",
+				Resolution: resolution,
+				Duration:   6,
+			})
+			adaptor := &TaskAdaptor{baseURL: "https://videos.example.com"}
+
+			selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+			require.Nil(t, taskErr)
+			body, err := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, err)
+			payload, err := io.ReadAll(body)
+			require.NoError(t, err)
+			var decoded map[string]any
+			require.NoError(t, common.Unmarshal(payload, &decoded))
+
+			assert.Equal(t, resolution, selection.EffectiveResolution)
+			assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+			assert.Equal(t, selection.EffectiveResolution, decoded["resolution"])
+			assert.NotContains(t, decoded, "size")
+		})
+	}
+}
+
+func TestSoraMultipartBuildRequestBodyPreservesResolvedBillingSelection(t *testing.T) {
+	for _, channel := range []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "openai", baseURL: "https://videos.example.com"},
+		{name: "megabyai", baseURL: "https://megabyai.cc"},
+	} {
+		for _, resolution := range []string{"1080p", "2160p"} {
+			t.Run(channel.name+"/"+resolution, func(t *testing.T) {
+				var requestBody bytes.Buffer
+				writer := multipart.NewWriter(&requestBody)
+				require.NoError(t, writer.WriteField("model", "videos-mini"))
+				require.NoError(t, writer.WriteField("prompt", "animate"))
+				require.NoError(t, writer.WriteField("resolution", resolution))
+				require.NoError(t, writer.WriteField("duration", "6"))
+				require.NoError(t, writer.Close())
+
+				request := httptest.NewRequest(http.MethodPost, "/v1/videos", &requestBody)
+				request.Header.Set("Content-Type", writer.FormDataContentType())
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = request
+				c.Set("task_request", relaycommon.TaskSubmitReq{
+					Model:      "videos-mini",
+					Prompt:     "animate",
+					Resolution: resolution,
+					Duration:   6,
+				})
+				info := &relaycommon.RelayInfo{
+					OriginModelName: "videos-mini",
+					TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+					ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "videos-mini"},
+				}
+				adaptor := &TaskAdaptor{baseURL: channel.baseURL}
+
+				selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+				require.Nil(t, taskErr)
+				body, err := adaptor.BuildRequestBody(c, info)
+				require.NoError(t, err)
+				upstreamRequest := httptest.NewRequest(http.MethodPost, "/v1/videos", body)
+				upstreamRequest.Header.Set("Content-Type", c.GetHeader("Content-Type"))
+				require.NoError(t, upstreamRequest.ParseMultipartForm(32<<20))
+
+				assert.Equal(t, resolution, selection.EffectiveResolution)
+				assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+				assert.Equal(t, selection.EffectiveResolution, upstreamRequest.FormValue("resolution"))
+				assert.Equal(t, "6", upstreamRequest.FormValue("seconds"))
+				assert.Empty(t, upstreamRequest.FormValue("size"))
+			})
+		}
+	}
+}
+
+func TestSoraAcceptsCanonicalPrewrappedDashScopeBillingParameters(t *testing.T) {
 	c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Model: "client-model", Prompt: "animate"})
 	c.Request = httptest.NewRequest(
 		http.MethodPost,
 		"/v1/videos",
-		strings.NewReader(`{"model":"client-model","prompt":"animate","input":{"prompt":"wrapped"},"parameters":{"resolution":"1080P","duration":3600}}`),
+		strings.NewReader(`{"model":"client-model","prompt":"animate","input":{"prompt":"wrapped"},"parameters":{"resolution":"1080P","duration":6}}`),
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 	info.UpstreamModelName = "sora-2-pro"
 	info.ChannelSetting.VideoPayloadFormat = "dashscope"
-	selection, taskErr := (&TaskAdaptor{}).ResolveVideoBilling(c, info)
+	adaptor := &TaskAdaptor{}
 
-	assert.Zero(t, selection)
-	require.NotNil(t, taskErr)
-	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
-	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
-	assert.Contains(t, taskErr.Message, "1080p")
-	assert.NotContains(t, taskErr.Message, "unknown")
+	selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+	require.Nil(t, taskErr)
+	body, err := adaptor.BuildRequestBody(c, info)
+	require.NoError(t, err)
+	payload, err := io.ReadAll(body)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, common.Unmarshal(payload, &decoded))
+	parameters, ok := decoded["parameters"].(map[string]any)
+	require.True(t, ok)
+
+	assert.Equal(t, "1080p", selection.EffectiveResolution)
+	assert.Equal(t, 6, selection.EffectiveDurationSeconds)
+	assert.Equal(t, "1080P", parameters["resolution"])
+	assert.Equal(t, float64(6), parameters["duration"])
 }
 
 func TestSoraDashScopeNestedParametersSelect1024pAndEightSeconds(t *testing.T) {
@@ -188,7 +310,7 @@ func TestSoraDashScopeNestedParametersSelect1024pAndEightSeconds(t *testing.T) {
 	assert.Equal(t, float64(42), parameters["seed"])
 	assert.Equal(t, "wrapped", input["prompt"])
 	assert.Equal(t, "blur", input["negative_prompt"])
-	assert.Equal(t, "1024x1792", decoded["size"])
+	assert.NotContains(t, decoded, "size")
 	assert.Equal(t, "8", decoded["seconds"])
 }
 
@@ -338,6 +460,38 @@ func TestSoraRemixVideoBillingRestoresSavedSelection(t *testing.T) {
 	require.Nil(t, taskErr)
 	assert.Equal(t, "1024p", selection.EffectiveResolution)
 	assert.Equal(t, 12, selection.EffectiveDurationSeconds)
+}
+
+func TestSoraRemixVideoBillingRestoresCanonicalSavedResolution(t *testing.T) {
+	for _, channel := range []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "openai", baseURL: "https://videos.example.com"},
+		{name: "megabyai", baseURL: "https://megabyai.cc"},
+	} {
+		for _, resolution := range []string{"1080p", "2160p"} {
+			t.Run(channel.name+"/"+resolution, func(t *testing.T) {
+				c, info := soraVideoBillingContext(t, relaycommon.TaskSubmitReq{Prompt: "remix"})
+				info.Action = constant.TaskActionRemix
+				c.Set("origin_task", &model.Task{
+					PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+						PricingKind:              "video_resolution",
+						EffectiveResolution:      resolution,
+						EffectiveDurationSeconds: 12,
+					}},
+					Data: []byte(`{"size":"720x1280","seconds":"4"}`),
+				})
+				adaptor := &TaskAdaptor{baseURL: channel.baseURL}
+
+				selection, taskErr := adaptor.ResolveVideoBilling(c, info)
+
+				require.Nil(t, taskErr)
+				assert.Equal(t, resolution, selection.EffectiveResolution)
+				assert.Equal(t, 12, selection.EffectiveDurationSeconds)
+			})
+		}
+	}
 }
 
 func TestSoraRemixVideoBillingRejectsInvalidSavedSelectionWithoutLegacyFallback(t *testing.T) {

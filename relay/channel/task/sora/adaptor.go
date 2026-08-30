@@ -189,18 +189,12 @@ func resolveSoraResolution(upstreamModelName, size string) (string, bool) {
 	}
 }
 
-// resolveSoraTier follows the same contract as resolveSoraResolution: a
-// recognizable canonical resolution is returned even when ok=false.
-func resolveSoraTier(upstreamModelName, rawResolution string) (string, bool) {
+// resolveSoraTier validates and canonicalizes an explicit resolution. The
+// shared billing plan owns tier availability and rejects unconfigured keys.
+func resolveSoraTier(rawResolution string) (string, bool) {
 	resolution, err := common.NormalizeVideoResolutionKey(rawResolution)
 	if err != nil {
 		return "", false
-	}
-	if resolution != "720p" && resolution != "1024p" {
-		return resolution, false
-	}
-	if resolution == "1024p" && upstreamModelName == "sora-2" {
-		return resolution, false
 	}
 	return resolution, true
 }
@@ -276,6 +270,7 @@ func normalizeSoraVideoRequest(
 ) (normalizedSoraVideoRequest, error) {
 	size := strings.ToLower(strings.TrimSpace(req.Size))
 	resolution := ""
+	hasExplicitResolution := strings.TrimSpace(req.Resolution) != ""
 	if size != "" {
 		sizeResolution, ok := resolveSoraResolution(upstreamModelName, size)
 		if !ok {
@@ -287,7 +282,7 @@ func normalizeSoraVideoRequest(
 		resolution = sizeResolution
 	}
 	if strings.TrimSpace(req.Resolution) != "" {
-		topResolution, ok := resolveSoraTier(upstreamModelName, req.Resolution)
+		topResolution, ok := resolveSoraTier(req.Resolution)
 		if !ok {
 			if topResolution != "" {
 				return normalizedSoraVideoRequest{}, &soraUnsupportedResolutionError{resolution: topResolution}
@@ -299,11 +294,12 @@ func normalizeSoraVideoRequest(
 		}
 	}
 	if nestedResolution, exists := parameters["resolution"]; exists {
+		hasExplicitResolution = true
 		nestedResolutionString, ok := nestedResolution.(string)
 		if !ok {
 			return normalizedSoraVideoRequest{}, fmt.Errorf("Sora resolution must be a string")
 		}
-		canonical, ok := resolveSoraTier(upstreamModelName, nestedResolutionString)
+		canonical, ok := resolveSoraTier(nestedResolutionString)
 		if !ok {
 			if canonical != "" {
 				return normalizedSoraVideoRequest{}, &soraUnsupportedResolutionError{resolution: canonical}
@@ -317,7 +313,7 @@ func normalizeSoraVideoRequest(
 	if resolution == "" {
 		resolution = "720p"
 	}
-	if size == "" {
+	if size == "" && !hasExplicitResolution {
 		if resolution == "1024p" {
 			size = "1024x1792"
 		} else {
@@ -413,7 +409,7 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 			IndependentRatios:        billing.IndependentRatios,
 		}
 		resolved, err := relaycommon.NewResolvedVideoBilling(selection, 1)
-		if err == nil && (resolved.Selection.EffectiveResolution == "720p" || resolved.Selection.EffectiveResolution == "1024p") {
+		if err == nil {
 			return resolved.Selection, nil
 		}
 		snapshotResolution := ""
@@ -704,6 +700,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "read_body_bytes_failed")
 	}
 	contentType := c.GetHeader("Content-Type")
+	isMegabyai := strings.Contains(a.baseURL, megabyaiHost)
 	var normalized normalizedSoraVideoRequest
 	if value, ok := c.Get(normalizedSoraVideoRequestKey); ok {
 		normalized, _ = value.(normalizedSoraVideoRequest)
@@ -729,13 +726,16 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 					delete(parameters, "duration")
 					bodyMap["parameters"] = parameters
 				}
-			} else if normalized.Request.Size != "" {
-				bodyMap["size"] = normalized.Request.Size
+			} else if normalized.Selection.EffectiveResolution != "" {
+				if normalized.Request.Size != "" {
+					bodyMap["size"] = normalized.Request.Size
+				} else {
+					delete(bodyMap, "size")
+				}
 				bodyMap["seconds"] = normalized.Request.Seconds
 				delete(bodyMap, "duration")
-				delete(bodyMap, "resolution")
+				bodyMap["resolution"] = normalized.Selection.EffectiveResolution
 				if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
-					bodyMap["resolution"] = normalized.Selection.EffectiveResolution
 					parameters := make(map[string]any, len(normalized.Parameters))
 					for key, value := range normalized.Parameters {
 						parameters[key] = value
@@ -745,7 +745,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			}
 			// 先归一化再改方言：megabyai 会把 size/seconds 折成 ratio+resolution+duration，
 			// 读到的必须是 ResolveVideoBilling 算账用的那份值，否则计费与载荷会分叉。
-			if strings.Contains(a.baseURL, megabyaiHost) {
+			if isMegabyai {
 				bodyMap = buildMegabyaiVideoPayload(bodyMap)
 			} else if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
 				wrapDashScopeVideoPayload(bodyMap)
@@ -765,16 +765,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
 		writer.WriteField("model", info.UpstreamModelName)
-		if info.Action != constant.TaskActionRemix && normalized.Request.Size != "" {
-			writer.WriteField("size", normalized.Request.Size)
-			writer.WriteField("seconds", normalized.Request.Seconds)
-			if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
-				writer.WriteField("resolution", normalized.Selection.EffectiveResolution)
+		hasNormalizedVideoSelection := normalized.Selection.EffectiveResolution != ""
+		if info.Action != constant.TaskActionRemix && hasNormalizedVideoSelection {
+			if normalized.Request.Size != "" {
+				writer.WriteField("size", normalized.Request.Size)
 			}
+			writer.WriteField("seconds", normalized.Request.Seconds)
+			writer.WriteField("resolution", normalized.Selection.EffectiveResolution)
 		}
 		for key, values := range formData.Value {
 			isVideoParameter := key == "size" || key == "seconds" || key == "duration" || key == "resolution"
-			if key == "model" || (isVideoParameter && (info.Action == constant.TaskActionRemix || normalized.Request.Size != "")) {
+			if key == "model" || (isVideoParameter && (info.Action == constant.TaskActionRemix || hasNormalizedVideoSelection)) {
 				continue
 			}
 			for _, v := range values {
