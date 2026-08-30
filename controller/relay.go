@@ -498,8 +498,27 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	// Remix skips distributor channel selection, but ResolveOriginTask fills the
+	// locked channel through the embedded ChannelMeta fields.
+	if strings.Contains(c.Request.URL.Path, "/v1/videos/") && strings.HasSuffix(c.Request.URL.Path, "/remix") && relayInfo.ChannelMeta == nil {
+		relayInfo.ChannelMeta = &relaycommon.ChannelMeta{}
+	}
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskError(c, taskErr)
+		return
+	}
+	billingPlan := relay.PrepareTaskBillingPlan(c, relayInfo.OriginModelName, relayInfo.RequestId)
+	if relayInfo.TaskRelayInfo == nil {
+		relayInfo.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	}
+	relayInfo.TaskRelayInfo.BillingPlan = billingPlan
+	if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil &&
+		!relay.TaskChannelTypeSupportsBilling(billingPlan.Kind(), lockedCh.Type) {
+		respondTaskError(c, service.TaskErrorWrapperLocal(
+			fmt.Errorf("video resolution billing is not supported by locked channel %d", lockedCh.Id),
+			"video_resolution_not_supported",
+			http.StatusBadRequest,
+		))
 		return
 	}
 
@@ -512,11 +531,12 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx:                 c,
+		TokenGroup:          relayInfo.TokenGroup,
+		ModelName:           relayInfo.OriginModelName,
+		RequestPath:         c.Request.URL.Path,
+		AllowedChannelTypes: relay.CompatibleTaskChannelTypes(billingPlan.Kind()),
+		Retry:               common.GetPointer(0),
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {

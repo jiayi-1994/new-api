@@ -15,6 +15,8 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -39,6 +41,10 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		var billingPlan *relaycommon.TaskBillingPlan
+		if shouldSelectChannel && c.GetInt("relay_mode") == relayconstant.RelayModeVideoSubmit {
+			billingPlan = relay.PrepareTaskBillingPlan(c, modelRequest.Model, "")
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -52,6 +58,10 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if billingPlan != nil && !relay.TaskChannelTypeSupportsBilling(billingPlan.Kind(), channel.Type) {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "video resolution billing is not supported by the selected channel", types.ErrorCode("video_resolution_not_supported"))
 				return
 			}
 		} else {
@@ -84,6 +94,10 @@ func Distribute() func(c *gin.Context) {
 				}
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				var allowedChannelTypes []int
+				if billingPlan != nil {
+					allowedChannelTypes = relay.CompatibleTaskChannelTypes(billingPlan.Kind())
+				}
 				// check path is /pg/chat/completions
 				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
 					playgroundRequest := &dto.PlayGroundRequest{}
@@ -106,7 +120,8 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
+						(billingPlan == nil || relay.TaskChannelTypeSupportsBilling(billingPlan.Kind(), preferred.Type)) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -134,11 +149,12 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:         c,
-						ModelName:   modelRequest.Model,
-						TokenGroup:  usingGroup,
-						RequestPath: c.Request.URL.Path,
-						Retry:       common.GetPointer(0),
+						Ctx:                 c,
+						ModelName:           modelRequest.Model,
+						TokenGroup:          usingGroup,
+						RequestPath:         c.Request.URL.Path,
+						AllowedChannelTypes: allowedChannelTypes,
+						Retry:               common.GetPointer(0),
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -155,6 +171,10 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
+						if billingPlan != nil && billingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution {
+							abortWithOpenAiMessage(c, http.StatusBadRequest, "no channel supports video resolution billing", types.ErrorCode("video_resolution_not_supported"))
+							return
+						}
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}

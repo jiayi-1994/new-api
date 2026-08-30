@@ -3,6 +3,7 @@ package relay
 import (
 	"strconv"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
@@ -50,8 +51,83 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/xunfei"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
+
+const taskBillingPlanContextKey = "task_billing_plan"
+
+// PrepareTaskBillingPlan freezes task billing before any channel is selected.
+// Repeated calls reuse the request-scoped plan so retries and task relay share
+// the same pricing kind, source model, request identity, and price table.
+func PrepareTaskBillingPlan(c *gin.Context, modelName, requestID string) *relaycommon.TaskBillingPlan {
+	if value, ok := c.Get(taskBillingPlanContextKey); ok {
+		if plan, ok := value.(*relaycommon.TaskBillingPlan); ok && plan != nil {
+			return plan
+		}
+	}
+	if requestID == "" {
+		requestID = c.GetString(common.RequestIdKey)
+	}
+	if requestID == "" {
+		requestID = common.NewRequestId()
+		c.Set(common.RequestIdKey, requestID)
+	}
+
+	plan := relaycommon.NewLegacyTaskBillingPlan(modelName, requestID)
+	isSuno := constant.TaskPlatform(c.GetString("platform")) == constant.TaskPlatformSuno || constant.IsSunoModel(modelName)
+	if !isSuno {
+		if prices, ok := ratio_setting.GetVideoResolutionPrices(modelName); ok && len(prices) > 0 {
+			plan, _ = relaycommon.NewVideoResolutionTaskBillingPlan(modelName, requestID, prices)
+		}
+	}
+	c.Set(taskBillingPlanContextKey, plan)
+	return plan
+}
+
+var taskChannelTypes = []int{
+	constant.ChannelTypeAli,
+	constant.ChannelTypeKling,
+	constant.ChannelTypeJimeng,
+	constant.ChannelTypeVertexAi,
+	constant.ChannelTypeVidu,
+	constant.ChannelTypeDoubaoVideo,
+	constant.ChannelTypeVolcEngine,
+	constant.ChannelTypeSora,
+	constant.ChannelTypeOpenAI,
+	constant.ChannelTypeGemini,
+	constant.ChannelTypeMiniMax,
+}
+
+// CompatibleTaskChannelTypes returns task channel types that can execute the
+// frozen billing plan. A nil result for legacy preserves existing selection.
+func CompatibleTaskChannelTypes(kind relaycommon.TaskBillingKind) []int {
+	if kind != relaycommon.TaskBillingKindVideoResolution {
+		return nil
+	}
+
+	allowed := make([]int, 0, len(taskChannelTypes))
+	for _, channelType := range taskChannelTypes {
+		adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channelType)))
+		if _, ok := adaptor.(channel.VideoBillingResolver); ok {
+			allowed = append(allowed, channelType)
+		}
+	}
+	return allowed
+}
+
+func TaskChannelTypeSupportsBilling(kind relaycommon.TaskBillingKind, channelType int) bool {
+	if kind != relaycommon.TaskBillingKindVideoResolution {
+		return true
+	}
+	for _, compatibleType := range CompatibleTaskChannelTypes(kind) {
+		if compatibleType == channelType {
+			return true
+		}
+	}
+	return false
+}
 
 func GetAdaptor(apiType int) channel.Adaptor {
 	switch apiType {

@@ -112,9 +112,15 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelForTypes(group, model, retry, requestPath, nil)
+}
+
+// GetRandomSatisfiedChannelForTypes selects a channel after restricting the
+// candidate set to allowed channel types. A nil list preserves legacy behavior.
+func GetRandomSatisfiedChannelForTypes(group string, model string, retry int, requestPath string, allowedChannelTypes []int) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelForTypes(group, model, retry, requestPath, allowedChannelTypes)
 	}
 
 	channelSyncLock.RLock()
@@ -129,6 +135,10 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
 	}
 
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	channels = filterChannelsByAllowedTypes(channels, allowedChannelTypes)
 	if len(channels) == 0 {
 		return nil, nil
 	}
@@ -206,6 +216,31 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+// filterChannelsByAllowedTypes restricts a cache candidate list without
+// mutating the cached slice. A nil list deliberately leaves legacy selection
+// untouched. Caller must hold channelSyncLock (read lock).
+func filterChannelsByAllowedTypes(channels []int, allowedChannelTypes []int) []int {
+	if allowedChannelTypes == nil || len(channels) == 0 {
+		return channels
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, channelID := range channels {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			// Preserve the existing downstream consistency error.
+			filtered = append(filtered, channelID)
+			continue
+		}
+		for _, channelType := range allowedChannelTypes {
+			if channel.Type == channelType {
+				filtered = append(filtered, channelID)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // filterChannelsByRequestPathAndModel restricts candidates by request path and
