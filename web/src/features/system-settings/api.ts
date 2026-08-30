@@ -22,6 +22,8 @@ import type {
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
+  PricingCommandRequest,
+  PricingCommandResponse,
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
@@ -37,7 +39,22 @@ export async function getSystemOptions() {
 }
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
-  const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/option/',
+    request,
+    request.expected_value === undefined
+      ? undefined
+      : { skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function updatePricingCommand(request: PricingCommandRequest) {
+  const res = await api.put<PricingCommandResponse>(
+    '/api/option/pricing',
+    request,
+    { skipErrorHandler: true }
+  )
   return res.data
 }
 

@@ -156,8 +156,8 @@ export const ModelPricingSheet = forwardRef<
 })
 
 function resolveInitialPricingMode(data: ModelRatioData): PricingMode {
-  if (data.billingMode === 'tiered_expr') return 'tiered_expr'
   if (data.resolutionPrices) return 'video_resolution'
+  if (data.billingMode === 'tiered_expr') return 'tiered_expr'
   return data.price ? 'per-request' : 'per-token'
 }
 
@@ -424,7 +424,7 @@ export const ModelPricingEditorPanel = forwardRef<
         editData.audioCompletionRatio,
       ].some(hasValue)
 
-    if (hasConflict) {
+    if (hasConflict && pricingMode !== 'video_resolution') {
       nextWarnings.push(
         t(
           'This model has both fixed-price and token-price settings. Saving the current mode will rewrite the conflicting fields.'
@@ -519,16 +519,11 @@ export const ModelPricingEditorPanel = forwardRef<
         data.requestRuleExpr = requestRuleExpr
       }
 
-      // 分辨率定价与固定价/倍率互斥，且恒为按秒，不写 TaskBillingMode
+      // 分辨率表存在时是活跃价格源；旧配置原样保留，移除表即可恢复。
       if (pricingMode === 'video_resolution') {
-        data.price = ''
-        data.ratio = ''
-        data.cacheRatio = ''
-        data.createCacheRatio = ''
-        data.completionRatio = ''
-        data.imageRatio = ''
-        data.audioRatio = ''
-        data.audioCompletionRatio = ''
+        data.billingExpr = billingExpr
+        data.requestRuleExpr = requestRuleExpr
+        data.taskBillingMode = taskBillingMode
         data.resolutionPrices = resolutionValidation.prices ?? {}
       }
 

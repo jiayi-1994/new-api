@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
@@ -24,7 +25,7 @@ import { updateSystemOption } from '../api'
 import type { UpdateOptionRequest } from '../types'
 
 // Configuration keys that require status refresh
-const STATUS_RELATED_KEYS = [
+const STATUS_RELATED_KEYS = new Set([
   'HeaderNavModules',
   'SidebarModulesAdmin',
   'Notice',
@@ -36,7 +37,7 @@ const STATUS_RELATED_KEYS = [
   'general_setting.quota_display_type',
   'general_setting.custom_currency_symbol',
   'general_setting.custom_currency_exchange_rate',
-]
+])
 
 export function useUpdateOption() {
   const queryClient = useQueryClient()
@@ -49,7 +50,7 @@ export function useUpdateOption() {
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
 
         // If updating frontend-display-related config, also refresh status
-        if (STATUS_RELATED_KEYS.includes(variables.key)) {
+        if (STATUS_RELATED_KEYS.has(variables.key)) {
           queryClient.invalidateQueries({ queryKey: ['status'] })
           try {
             window.localStorage.removeItem('status')
@@ -63,8 +64,22 @@ export function useUpdateOption() {
         toast.error(data.message || i18next.t('Failed to update setting'))
       }
     },
-    onError: (error: Error) => {
-      toast.error(error.message || i18next.t('Failed to update setting'))
+    onError: async (error: unknown) => {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        await queryClient.refetchQueries({ queryKey: ['system-options'] })
+        toast.error(
+          i18next.t(
+            'Pricing changed on the server. Review the refreshed values before saving again.'
+          )
+        )
+        return
+      }
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : i18next.t('Failed to update setting')
+      )
     },
   })
 }

@@ -17,12 +17,180 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { after, beforeEach, describe, test } from 'node:test'
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Window } from 'happy-dom'
+import { createInstance } from 'i18next'
+import { I18nextProvider, initReactI18next } from 'react-i18next'
 
 import {
   buildVideoResolutionOptionUpdate,
   validateVideoResolutionPriceRows,
 } from '@/features/system-settings/models/video-resolution-pricing'
+
+// @ts-expect-error Bun exposes module mocks at runtime without installed types.
+const { mock, spyOn } = await import('bun:test')
+
+const domWindow = new Window()
+for (const key of [
+  'window',
+  'document',
+  'navigator',
+  'HTMLElement',
+  'HTMLInputElement',
+  'HTMLButtonElement',
+  'SVGElement',
+  'Node',
+  'Element',
+  'Event',
+  'CustomEvent',
+  'MutationObserver',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'getComputedStyle',
+] as const) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: domWindow[key],
+  })
+}
+
+const reactTestGlobals = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean
+}
+reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+
+const { act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { api } = await import('@/lib/api')
+const { ModelMutateDrawer } = await import('../model-mutate-drawer')
+
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
+
+const modelFixture = {
+  id: 1,
+  model_name: 'video',
+  description: '',
+  icon: '',
+  tags: '',
+  vendor_id: undefined,
+  endpoints: '',
+  status: 1,
+  sync_official: 1,
+  created_time: 1,
+  updated_time: 1,
+  name_rule: 0,
+}
+
+const pricingOptions = [
+  { key: 'ModelPrice', value: '{"video":0.3}' },
+  { key: 'ModelRatio', value: '{"video":1.5}' },
+  { key: 'CacheRatio', value: '{}' },
+  { key: 'CreateCacheRatio', value: '{"video":1.25}' },
+  { key: 'CompletionRatio', value: '{}' },
+  { key: 'ImageRatio', value: '{}' },
+  { key: 'AudioRatio', value: '{}' },
+  { key: 'AudioCompletionRatio', value: '{}' },
+  { key: 'billing_setting.billing_mode', value: '{}' },
+  { key: 'billing_setting.billing_expr', value: '{}' },
+  { key: 'TaskBillingMode', value: '{"video":"per_call"}' },
+  { key: 'VideoResolutionPrice', value: '{"video":{"720p":0.1}}' },
+]
+
+const putCalls: Array<{ url: string; body: unknown }> = []
+spyOn(api, 'get').mockImplementation((async (url: string) => {
+  if (url === '/api/option/') {
+    return { data: { success: true, message: '', data: pricingOptions } }
+  }
+  if (url === '/api/models/1') {
+    return { data: { success: true, data: modelFixture } }
+  }
+  if (url === '/api/vendors/') {
+    return { data: { success: true, data: { items: [] } } }
+  }
+  throw new Error(`unexpected GET ${url}`)
+}) as typeof api.get)
+spyOn(api, 'put').mockImplementation((async (url: string, body: unknown) => {
+  putCalls.push({ url, body })
+  return { data: { success: true, data: modelFixture } }
+}) as typeof api.put)
+
+function changeInputValue(input: HTMLInputElement, value: string) {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    domWindow.HTMLInputElement.prototype,
+    'value'
+  )?.set
+  assert.ok(valueSetter)
+  valueSetter.call(input, value)
+  input.dispatchEvent(
+    new domWindow.Event('input', { bubbles: true }) as unknown as Event
+  )
+}
+
+async function renderDrawer() {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  queryClient.setQueryData(['system-options'], {
+    success: true,
+    message: '',
+    data: pricingOptions,
+  })
+  queryClient.setQueryData(['models', 'detail', 1], {
+    success: true,
+    data: modelFixture,
+  })
+  queryClient.setQueryData(['vendors', 'list', undefined], {
+    success: true,
+    data: { items: [] },
+  })
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <ModelMutateDrawer
+            open
+            onOpenChange={() => undefined}
+            currentRow={modelFixture}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+  })
+  assert.ok(document.querySelector('#video-resolution-price-1'))
+  return {
+    cleanup: async () => {
+      await act(async () => root.unmount())
+      queryClient.clear()
+      container.remove()
+    },
+  }
+}
+
+const resolutionPriceInput = () =>
+  document.querySelector<HTMLInputElement>('#video-resolution-price-1')
+
+const submitButton = () =>
+  [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+    button.textContent?.includes('Update Model')
+  )
+
+beforeEach(() => {
+  putCalls.length = 0
+})
+
+after(() => {
+  mock.restore()
+  domWindow.close()
+})
 
 // 抽屉保存分辨率价格时的契约：只发一条 VideoResolutionPrice 更新，且与后端
 // Model.Update 的事务搬迁结果收敛到同一个文档。
@@ -83,5 +251,114 @@ describe('model drawer video resolution persistence', () => {
 
     assert.equal(invalid.prices, null)
     assert.notDeepEqual(invalid.prices, {})
+  })
+
+  test('submits metadata and changed resolution pricing in one model request', async () => {
+    const view = await renderDrawer()
+    assert.equal(
+      document.querySelector<HTMLInputElement>('input[name="ratio"]'),
+      null
+    )
+    const input = resolutionPriceInput()
+    assert.ok(input)
+    await act(async () => {
+      changeInputValue(input, '0.2')
+    })
+    const button = submitButton()
+    assert.ok(button)
+    await act(async () => {
+      button.click()
+    })
+
+    assert.equal(putCalls.length, 1)
+    assert.equal(putCalls[0].url, '/api/models/')
+    assert.deepEqual((putCalls[0].body as { pricing?: unknown }).pricing, {
+      mode: 'video_resolution',
+      resolution_prices: { '720p': 0.2 },
+    })
+    assert.equal(
+      putCalls.some((call) => call.url === '/api/option/'),
+      false
+    )
+    await view.cleanup()
+  })
+
+  test('omits pricing for an untouched same-name metadata save', async () => {
+    const view = await renderDrawer()
+    const iconInput =
+      document.querySelector<HTMLInputElement>('input[name="icon"]')
+    assert.ok(iconInput)
+    await act(async () => {
+      changeInputValue(iconInput, 'video-icon')
+    })
+    const button = submitButton()
+    assert.ok(button)
+    await act(async () => {
+      button.click()
+    })
+
+    assert.equal(putCalls.length, 1)
+    assert.equal(Object.hasOwn(putCalls[0].body as object, 'pricing'), false)
+    await view.cleanup()
+  })
+
+  test('omits pricing during an untouched rename so the backend moves all documents', async () => {
+    const view = await renderDrawer()
+    const nameInput = document.querySelector<HTMLInputElement>(
+      'input[name="model_name"]'
+    )
+    assert.ok(nameInput)
+    await act(async () => {
+      changeInputValue(nameInput, 'video-renamed')
+    })
+    const button = submitButton()
+    assert.ok(button)
+    await act(async () => {
+      button.click()
+    })
+
+    assert.equal(putCalls.length, 1)
+    assert.equal(Object.hasOwn(putCalls[0].body as object, 'pricing'), false)
+    assert.equal(
+      (putCalls[0].body as { model_name?: string }).model_name,
+      'video-renamed'
+    )
+    await view.cleanup()
+  })
+
+  test('does not submit when a resolution row is invalid', async () => {
+    const view = await renderDrawer()
+    const input = resolutionPriceInput()
+    assert.ok(input)
+    await act(async () => {
+      changeInputValue(input, '0')
+    })
+    const button = submitButton()
+    assert.ok(button)
+    await act(async () => {
+      button.click()
+    })
+
+    assert.equal(putCalls.length, 0)
+    await view.cleanup()
+  })
+
+  test('does not submit when the resolution table is empty', async () => {
+    const view = await renderDrawer()
+    const removeButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove resolution: 720p"]'
+    )
+    assert.ok(removeButton)
+    await act(async () => {
+      removeButton.click()
+    })
+    const button = submitButton()
+    assert.ok(button)
+    await act(async () => {
+      button.click()
+    })
+
+    assert.equal(putCalls.length, 0)
+    await view.cleanup()
   })
 })

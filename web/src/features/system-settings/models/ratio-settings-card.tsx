@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -27,11 +28,19 @@ import * as z from 'zod'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { resetModelRatios } from '../api'
+import {
+  resetModelRatios,
+  updatePricingCommand,
+  updateSystemOption,
+} from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { GroupRatioForm } from './group-ratio-form'
+import {
+  buildPricingDocumentReplacement,
+  type PricingDocumentKey,
+} from './model-pricing-persistence'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -153,6 +162,60 @@ type RatioSettingsCardProps = {
   visibleTabs?: RatioTabId[]
 }
 
+function modelPricingDocuments(
+  values: ModelFormValues
+): Record<PricingDocumentKey, string> {
+  return {
+    ModelPrice: values.ModelPrice,
+    ModelRatio: values.ModelRatio,
+    CacheRatio: values.CacheRatio,
+    CreateCacheRatio: values.CreateCacheRatio,
+    CompletionRatio: values.CompletionRatio,
+    ImageRatio: values.ImageRatio,
+    AudioRatio: values.AudioRatio,
+    AudioCompletionRatio: values.AudioCompletionRatio,
+    'billing_setting.billing_mode': values.BillingMode,
+    'billing_setting.billing_expr': values.BillingExpr,
+    TaskBillingMode: values.TaskBillingMode,
+    VideoResolutionPrice: values.VideoResolutionPrice,
+  }
+}
+
+function modelFormValuesFromDocuments(
+  documents: Record<PricingDocumentKey, string>,
+  exposeRatioEnabled: boolean
+): ModelFormValues {
+  return {
+    ModelPrice: documents.ModelPrice,
+    ModelRatio: documents.ModelRatio,
+    CacheRatio: documents.CacheRatio,
+    CreateCacheRatio: documents.CreateCacheRatio,
+    CompletionRatio: documents.CompletionRatio,
+    ImageRatio: documents.ImageRatio,
+    AudioRatio: documents.AudioRatio,
+    AudioCompletionRatio: documents.AudioCompletionRatio,
+    ExposeRatioEnabled: exposeRatioEnabled,
+    BillingMode: documents['billing_setting.billing_mode'],
+    BillingExpr: documents['billing_setting.billing_expr'],
+    TaskBillingMode: documents.TaskBillingMode,
+    VideoResolutionPrice: documents.VideoResolutionPrice,
+  }
+}
+
+function normalizeModelFormValues(values: ModelFormValues): ModelFormValues {
+  const documents = modelPricingDocuments(values)
+  const normalizedDocuments = Object.fromEntries(
+    Object.entries(documents).map(([key, value]) => [
+      key,
+      normalizeJsonString(value),
+    ])
+  ) as Record<PricingDocumentKey, string>
+  return modelFormValuesFromDocuments(
+    normalizedDocuments,
+    values.ExposeRatioEnabled
+  )
+}
+
 export function RatioSettingsCard({
   modelDefaults,
   groupDefaults,
@@ -181,6 +244,8 @@ export function RatioSettingsCard({
     },
   })
 
+  const pricingMutation = useMutation({ mutationFn: updatePricingCommand })
+
   const modelNormalizedDefaults = useRef({
     ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
     ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
@@ -203,6 +268,7 @@ export function RatioSettingsCard({
   const [savedModelValues, setSavedModelValues] = useState(
     modelNormalizedDefaults.current
   )
+  const modelRawDefaults = useRef(modelPricingDocuments(modelDefaults))
 
   const groupNormalizedDefaults = useRef({
     GroupRatio: normalizeJsonString(groupDefaults.GroupRatio),
@@ -259,6 +325,7 @@ export function RatioSettingsCard({
   })
 
   useEffect(() => {
+    modelRawDefaults.current = modelPricingDocuments(modelDefaults)
     modelNormalizedDefaults.current = {
       ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
@@ -329,47 +396,90 @@ export function RatioSettingsCard({
 
   const saveModelRatios = useCallback(
     async (values: ModelFormValues) => {
-      const normalized = {
-        ModelPrice: normalizeJsonString(values.ModelPrice),
-        ModelRatio: normalizeJsonString(values.ModelRatio),
-        CacheRatio: normalizeJsonString(values.CacheRatio),
-        CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
-        CompletionRatio: normalizeJsonString(values.CompletionRatio),
-        ImageRatio: normalizeJsonString(values.ImageRatio),
-        AudioRatio: normalizeJsonString(values.AudioRatio),
-        AudioCompletionRatio: normalizeJsonString(values.AudioCompletionRatio),
-        ExposeRatioEnabled: values.ExposeRatioEnabled,
-        BillingMode: normalizeJsonString(values.BillingMode),
-        BillingExpr: normalizeJsonString(values.BillingExpr),
-        TaskBillingMode: normalizeJsonString(values.TaskBillingMode),
-        VideoResolutionPrice: normalizeJsonString(values.VideoResolutionPrice),
-      }
-
-      const apiKeyMap: Record<string, string> = {
-        BillingMode: 'billing_setting.billing_mode',
-        BillingExpr: 'billing_setting.billing_expr',
-      }
-
-      const updates = (
-        Object.keys(normalized) as Array<keyof ModelFormValues>
-      ).filter(
-        (key) => normalized[key] !== modelNormalizedDefaults.current[key]
+      const normalized = normalizeModelFormValues(values)
+      const replacement = buildPricingDocumentReplacement(
+        modelPricingDocuments(modelNormalizedDefaults.current),
+        modelPricingDocuments(values),
+        modelRawDefaults.current
       )
+      const hasPricingChanges = Object.keys(replacement.values).length > 0
+      const exposeRatioChanged =
+        normalized.ExposeRatioEnabled !==
+        modelNormalizedDefaults.current.ExposeRatioEnabled
 
-      if (updates.length === 0) {
+      if (!hasPricingChanges && !exposeRatioChanged) {
         toast.info(t('No model price changes to save'))
         return
       }
 
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key as string] || (key as string)
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
-      }
+      try {
+        const [pricingResponse] = await Promise.all([
+          hasPricingChanges
+            ? pricingMutation.mutateAsync({
+                kind: 'replace_documents',
+                target_name: '',
+                values: replacement.values,
+                expected_documents: replacement.expected_documents,
+              })
+            : null,
+          exposeRatioChanged
+            ? updateSystemOption({
+                key: 'ExposeRatioEnabled',
+                value: normalized.ExposeRatioEnabled,
+              })
+            : null,
+        ])
 
-      modelNormalizedDefaults.current = normalized
-      setSavedModelValues(normalized)
+        if (pricingResponse) {
+          const committedDocuments = pricingResponse.data as Record<
+            PricingDocumentKey,
+            string
+          >
+          modelRawDefaults.current = committedDocuments
+          const committedNormalized = normalizeModelFormValues(
+            modelFormValuesFromDocuments(
+              committedDocuments,
+              normalized.ExposeRatioEnabled
+            )
+          )
+          modelNormalizedDefaults.current = committedNormalized
+          setSavedModelValues(committedNormalized)
+          if (pricingResponse.publication_pending) {
+            toast.warning(
+              t(
+                'Pricing was saved, but live settings are still converging. Do not retry.'
+              )
+            )
+          } else {
+            toast.success(t('Setting updated successfully'))
+          }
+        } else {
+          modelNormalizedDefaults.current = normalized
+          setSavedModelValues(normalized)
+          toast.success(t('Setting updated successfully'))
+        }
+        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      } catch (error: unknown) {
+        if (axios.isAxiosError(error) && error.response?.status === 409) {
+          await queryClient.invalidateQueries({
+            queryKey: ['system-options'],
+          })
+          await queryClient.refetchQueries({ queryKey: ['system-options'] })
+          toast.error(
+            t(
+              'Pricing changed on the server. Review the refreshed values before saving again.'
+            )
+          )
+          return
+        }
+        toast.error(
+          axios.isAxiosError(error)
+            ? error.message
+            : t('Failed to update setting')
+        )
+      }
     },
-    [t, updateOption]
+    [pricingMutation, queryClient, t]
   )
 
   const saveGroupRatios = useCallback(
@@ -440,7 +550,7 @@ export function RatioSettingsCard({
           savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
-          isSaving={updateOption.isPending}
+          isSaving={updateOption.isPending || pricingMutation.isPending}
           isResetting={resetMutation.isPending}
           variant={tab === 'unset-models' ? 'unset' : 'default'}
         />

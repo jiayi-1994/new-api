@@ -54,6 +54,7 @@ const { VideoResolutionPriceEditor } =
   await import('../video-resolution-price-editor')
 const { validateVideoResolutionPriceRows } =
   await import('../video-resolution-pricing')
+const { ModelPricingEditorPanel } = await import('../model-pricing-sheet')
 
 type Row = { id: number; resolution: string; price: string }
 
@@ -140,6 +141,41 @@ async function renderEditor(initialRows: Row[]) {
   }
 }
 
+async function renderPricingPanel(
+  editData: Parameters<typeof ModelPricingEditorPanel>[0]['editData']
+) {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  let handle: { commitDraft: () => Promise<unknown> } | null = null
+  await act(async () => {
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <ModelPricingEditorPanel
+          ref={(value) => {
+            handle = value
+          }}
+          editData={editData}
+        />
+      </I18nextProvider>
+    )
+  })
+  return {
+    container,
+    commitDraft: async () => {
+      let result: unknown = null
+      await act(async () => {
+        result = await handle?.commitDraft()
+      })
+      return result
+    },
+    cleanup: async () => {
+      await act(async () => root.unmount())
+      container.remove()
+    },
+  }
+}
+
 const resolutionInput = (container: HTMLElement, id: number) =>
   container.querySelector<HTMLInputElement>(`#video-resolution-${id}`)
 
@@ -216,6 +252,73 @@ describe('video resolution price editor', () => {
       [2]
     )
 
+    await view.cleanup()
+  })
+
+  test('commit retains inactive legacy fields while resolution mode is active', async () => {
+    const view = await renderPricingPanel({
+      name: 'video',
+      billingMode: 'video_resolution',
+      price: '0.3',
+      ratio: '1.5',
+      cacheRatio: '0.4',
+      createCacheRatio: '1.25',
+      completionRatio: '2',
+      imageRatio: '3',
+      audioRatio: '4',
+      audioCompletionRatio: '5',
+      billingExpr: 'tier("base", p)',
+      requestRuleExpr: 'if(r.size > 1, 2, 1)',
+      taskBillingMode: 'per_call',
+      resolutionPrices: { '720p': 0.1 },
+    })
+
+    assert.deepEqual(await view.commitDraft(), {
+      name: 'video',
+      billingMode: 'video_resolution',
+      price: '0.3',
+      ratio: '1.5',
+      cacheRatio: '0.4',
+      createCacheRatio: '1.25',
+      completionRatio: '2',
+      imageRatio: '3',
+      audioRatio: '4',
+      audioCompletionRatio: '5',
+      billingExpr: 'tier("base", p)',
+      requestRuleExpr: 'if(r.size > 1, 2, 1)',
+      taskBillingMode: 'per_call',
+      resolutionPrices: { '720p': 0.1 },
+    })
+
+    await view.cleanup()
+  })
+
+  test('commit returns null for an invalid resolution row', async () => {
+    const view = await renderPricingPanel({
+      name: 'video',
+      billingMode: 'video_resolution',
+      resolutionPrices: { '720p': 0.1 },
+    })
+    const priceInput = view.container.querySelector<HTMLInputElement>(
+      '#video-resolution-price-1'
+    )
+    assert.ok(priceInput)
+    await act(async () => {
+      changeInputValue(priceInput, '0')
+    })
+
+    assert.equal(await view.commitDraft(), null)
+    await view.cleanup()
+  })
+
+  test('commit returns null for an empty resolution table', async () => {
+    const view = await renderPricingPanel({
+      name: 'video',
+      billingMode: 'video_resolution',
+      resolutionPrices: {},
+    })
+
+    assert.equal(await view.commitDraft(), null)
     await view.cleanup()
   })
 })

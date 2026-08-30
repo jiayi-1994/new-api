@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import { CheckSquare, RefreshCcw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -27,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import {
   fetchUpstreamRatios,
   getUpstreamChannels,
-  updateSystemOption,
+  updatePricingCommand,
 } from '../api'
 import type {
   DifferencesMap,
@@ -50,6 +51,10 @@ import {
   OPENROUTER_ENDPOINT,
 } from './constants'
 import {
+  buildPricingDocumentReplacement,
+  type PricingDocumentKey,
+} from './model-pricing-persistence'
+import {
   NUMERIC_SYNC_FIELDS,
   RATIO_SYNC_FIELDS,
   applyResolutionRemovalPlan,
@@ -61,6 +66,7 @@ import {
   type ResolutionsMap,
 } from './upstream-ratio-sync-helpers'
 import { UpstreamRatioSyncTable } from './upstream-ratio-sync-table'
+import { normalizeJsonString } from './utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -193,13 +199,17 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   })
 
   const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
-    mutationFn: async (updates: Array<{ key: string; value: string }>) => {
-      for (const update of updates) {
-        await updateSystemOption(update)
+    mutationFn: updatePricingCommand,
+    onSuccess: (data) => {
+      if (data.publication_pending) {
+        toast.warning(
+          t(
+            'Pricing was saved, but live settings are still converging. Do not retry.'
+          )
+        )
+      } else {
+        toast.success(t('Prices synced successfully'))
       }
-    },
-    onSuccess: () => {
-      toast.success(t('Prices synced successfully'))
       queryClient.invalidateQueries({ queryKey: ['system-options'] })
 
       setDifferences((prevDiffs) => {
@@ -219,8 +229,22 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
       setResolutions({})
     },
-    onError: (error: Error) => {
-      toast.error(error.message || t('Failed to sync prices'))
+    onError: async (error: unknown) => {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        await queryClient.refetchQueries({ queryKey: ['system-options'] })
+        toast.error(
+          t(
+            'Pricing changed on the server. Review the refreshed values before saving again.'
+          )
+        )
+        return
+      }
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : t('Failed to sync prices')
+      )
     },
   })
 
@@ -378,19 +402,40 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         })
       })
 
-      const updates = Object.entries(finalRatios).map(([key, value]) => ({
-        key,
-        value: JSON.stringify(value, null, 2),
-      }))
+      const currentDocuments = Object.fromEntries(
+        Object.entries(modelRatios).map(([key, value]) => [
+          key,
+          normalizeJsonString(value),
+        ])
+      ) as Partial<Record<PricingDocumentKey, string>>
+      const nextDocuments = Object.fromEntries(
+        Object.entries(finalRatios).map(([key, value]) => [
+          key,
+          JSON.stringify(value, null, 2),
+        ])
+      ) as Partial<Record<PricingDocumentKey, string>>
+      const replacement = buildPricingDocumentReplacement(
+        currentDocuments,
+        nextDocuments,
+        modelRatios
+      )
 
       return new Promise<boolean>((resolve) => {
-        syncMutate(updates, {
-          onSuccess: () => resolve(true),
-          onError: () => resolve(false),
-        })
+        syncMutate(
+          {
+            kind: 'replace_documents',
+            target_name: '',
+            values: replacement.values,
+            expected_documents: replacement.expected_documents,
+          },
+          {
+            onSuccess: () => resolve(true),
+            onError: () => resolve(false),
+          }
+        )
       })
     },
-    [resolutions, syncMutate]
+    [modelRatios, resolutions, syncMutate]
   )
 
   const findSourceChannel = (

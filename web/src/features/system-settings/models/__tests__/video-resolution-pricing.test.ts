@@ -23,6 +23,7 @@ import {
   buildModelSnapshots,
   getPriceDetail,
   getPriceSummary,
+  isBasePricingUnset,
   isTaskPerCallBilling,
 } from '../model-pricing-snapshots'
 import {
@@ -182,15 +183,24 @@ describe('model pricing snapshots', () => {
     )
   })
 
-  test('expression pricing still wins over resolution pricing', () => {
+  test('resolution pricing wins over a retained expression', () => {
     const snapshots = snapshotInput({
       billingMode: '{"sora-2":"tiered_expr"}',
       billingExpr: '{"sora-2":"tier(\\"base\\", p * 0 + c * 0)"}',
       videoResolutionPrice: '{"sora-2":{"720p":0.1}}',
     })
 
-    assert.equal(snapshots[0].billingMode, 'tiered_expr')
+    assert.equal(snapshots[0].billingMode, 'video_resolution')
+    assert.equal(snapshots[0].billingExpr, 'tier("base", p * 0 + c * 0)')
     assert.deepEqual(snapshots[0].resolutionPrices, { '720p': 0.1 })
+  })
+
+  test('resolution-only model is configured rather than unset', () => {
+    const snapshots = snapshotInput({
+      videoResolutionPrice: '{"sora-2":{"720p":0.1}}',
+    })
+
+    assert.equal(isBasePricingUnset(snapshots[0]), false)
   })
 
   test('ordinary fixed-price models keep per-request mode', () => {

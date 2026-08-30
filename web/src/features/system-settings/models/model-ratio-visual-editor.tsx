@@ -47,11 +47,16 @@ import {
   useDataTable,
 } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
-import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 import { useMediaQuery } from '@/hooks'
 
 import { safeJsonParse } from '../utils/json-parser'
 import type { PricingMode } from './model-pricing-core'
+import {
+  applyModelPricingMutation,
+  buildModelPricingSelection,
+  parsePricingDocuments,
+  serializePricingDocuments,
+} from './model-pricing-persistence'
 import {
   ModelPricingEditorPanel,
   type ModelPricingEditorPanelHandle,
@@ -65,12 +70,6 @@ import {
   type ModelRow,
 } from './model-pricing-snapshots'
 import { buildModelRatioColumns } from './model-ratio-table-columns'
-import {
-  parseVideoResolutionPriceOption,
-  sanitizeVideoResolutionPriceMap,
-  serializeVideoResolutionPriceOption,
-  VIDEO_RESOLUTION_PRICE_OPTION_KEY,
-} from './video-resolution-pricing'
 
 type ModelRatioVisualEditorProps = {
   savedModelPrice: string
@@ -371,90 +370,28 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
   const handleDelete = useCallback(
     (name: string) => {
-      const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
-        fallback: {},
-        silent: true,
-      })
-      const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const cacheMap = safeJsonParse<Record<string, number>>(cacheRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const createCacheMap = safeJsonParse<Record<string, number>>(
-        createCacheRatio,
-        { fallback: {}, silent: true }
+      const documents = applyModelPricingMutation(
+        parsePricingDocuments({
+          ModelPrice: modelPrice,
+          ModelRatio: modelRatio,
+          CacheRatio: cacheRatio,
+          CreateCacheRatio: createCacheRatio,
+          CompletionRatio: completionRatio,
+          ImageRatio: imageRatio,
+          AudioRatio: audioRatio,
+          AudioCompletionRatio: audioCompletionRatio,
+          'billing_setting.billing_mode': billingMode,
+          'billing_setting.billing_expr': billingExpr,
+          TaskBillingMode: taskBillingMode,
+          VideoResolutionPrice: videoResolutionPrice,
+        }),
+        { kind: 'delete', name }
       )
-      const completionMap = safeJsonParse<Record<string, number>>(
-        completionRatio,
-        { fallback: {}, silent: true }
-      )
-      const imageMap = safeJsonParse<Record<string, number>>(imageRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const audioCompletionMap = safeJsonParse<Record<string, number>>(
-        audioCompletionRatio,
-        { fallback: {}, silent: true }
-      )
-      const billingModeMap = safeJsonParse<Record<string, string>>(
-        billingMode,
-        { fallback: {}, silent: true }
-      )
-      const billingExprMap = safeJsonParse<Record<string, string>>(
-        billingExpr,
-        { fallback: {}, silent: true }
-      )
-      const taskBillingModeMap = safeJsonParse<Record<string, string>>(
-        taskBillingMode,
-        { fallback: {}, silent: true }
-      )
-      const resolutionPriceOption =
-        parseVideoResolutionPriceOption(videoResolutionPrice)
-
-      delete priceMap[name]
-      delete ratioMap[name]
-      delete cacheMap[name]
-      delete createCacheMap[name]
-      delete completionMap[name]
-      delete imageMap[name]
-      delete audioMap[name]
-      delete audioCompletionMap[name]
-      delete billingModeMap[name]
-      delete billingExprMap[name]
-      delete taskBillingModeMap[name]
-      delete resolutionPriceOption[name]
-
-      onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
-      onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
-      onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
-      onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
-      onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
-      onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
-      onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
-      onChange(
-        'AudioCompletionRatio',
-        JSON.stringify(audioCompletionMap, null, 2)
-      )
-      onChange(
-        'billing_setting.billing_mode',
-        JSON.stringify(billingModeMap, null, 2)
-      )
-      onChange(
-        'billing_setting.billing_expr',
-        JSON.stringify(billingExprMap, null, 2)
-      )
-      onChange('TaskBillingMode', JSON.stringify(taskBillingModeMap, null, 2))
-      onChange(
-        VIDEO_RESOLUTION_PRICE_OPTION_KEY,
-        serializeVideoResolutionPriceOption(resolutionPriceOption)
-      )
+      for (const [key, value] of Object.entries(
+        serializePricingDocuments(documents)
+      )) {
+        onChange(key, value)
+      }
 
       if (editData?.name === name) {
         setEditData(null)
@@ -526,146 +463,40 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
   const persistPricingData = useCallback(
     (data: ModelRatioData, targetNames: string[] = [data.name]) => {
-      const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
-        fallback: {},
-        silent: true,
-      })
-      const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const cacheMap = safeJsonParse<Record<string, number>>(cacheRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const createCacheMap = safeJsonParse<Record<string, number>>(
-        createCacheRatio,
-        { fallback: {}, silent: true }
+      let documents = applyModelPricingMutation(
+        parsePricingDocuments({
+          ModelPrice: modelPrice,
+          ModelRatio: modelRatio,
+          CacheRatio: cacheRatio,
+          CreateCacheRatio: createCacheRatio,
+          CompletionRatio: completionRatio,
+          ImageRatio: imageRatio,
+          AudioRatio: audioRatio,
+          AudioCompletionRatio: audioCompletionRatio,
+          'billing_setting.billing_mode': billingMode,
+          'billing_setting.billing_expr': billingExpr,
+          TaskBillingMode: taskBillingMode,
+          VideoResolutionPrice: videoResolutionPrice,
+        }),
+        {
+          kind: 'save',
+          name: data.name,
+          selection: buildModelPricingSelection(data),
+        }
       )
-      const completionMap = safeJsonParse<Record<string, number>>(
-        completionRatio,
-        { fallback: {}, silent: true }
-      )
-      const imageMap = safeJsonParse<Record<string, number>>(imageRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
-        fallback: {},
-        silent: true,
-      })
-      const audioCompletionMap = safeJsonParse<Record<string, number>>(
-        audioCompletionRatio,
-        { fallback: {}, silent: true }
-      )
-      const billingModeMap = safeJsonParse<Record<string, string>>(
-        billingMode,
-        { fallback: {}, silent: true }
-      )
-      const billingExprMap = safeJsonParse<Record<string, string>>(
-        billingExpr,
-        { fallback: {}, silent: true }
-      )
-      const taskBillingModeMap = safeJsonParse<Record<string, string>>(
-        taskBillingMode,
-        { fallback: {}, silent: true }
-      )
-      const resolutionPriceOption =
-        parseVideoResolutionPriceOption(videoResolutionPrice)
-
-      const setIfPresent = (
-        target: Record<string, number>,
-        name: string,
-        value: string | undefined
-      ) => {
-        if (!value || value === '') return
-        const parsed = parseFloat(value)
-        if (Number.isFinite(parsed)) target[name] = parsed
+      for (const targetName of new Set(targetNames)) {
+        if (targetName === data.name) continue
+        documents = applyModelPricingMutation(documents, {
+          kind: 'copy',
+          sourceName: data.name,
+          targetName,
+        })
       }
-
-      targetNames.forEach((name) => {
-        delete priceMap[name]
-        delete ratioMap[name]
-        delete cacheMap[name]
-        delete createCacheMap[name]
-        delete completionMap[name]
-        delete imageMap[name]
-        delete audioMap[name]
-        delete audioCompletionMap[name]
-        delete billingModeMap[name]
-        delete billingExprMap[name]
-        delete taskBillingModeMap[name]
-        delete resolutionPriceOption[name]
-
-        // 任务计费单位只在固定价格模式下有意义；未显式选择时不写入配置
-        if (data.billingMode === 'per-request' && data.taskBillingMode) {
-          taskBillingModeMap[name] = data.taskBillingMode
-        }
-
-        if (data.billingMode === 'video_resolution') {
-          // 分辨率定价恒为按秒，不写 TaskBillingMode，也不保留互斥的固定价/倍率
-          const prices = sanitizeVideoResolutionPriceMap(data.resolutionPrices)
-          if (Object.keys(prices).length > 0) {
-            resolutionPriceOption[name] = prices
-          }
-        } else if (data.billingMode === 'tiered_expr') {
-          const combined = combineBillingExpr(
-            data.billingExpr || '',
-            data.requestRuleExpr || ''
-          )
-          if (combined) {
-            billingModeMap[name] = 'tiered_expr'
-            billingExprMap[name] = combined
-          }
-          // Always serialize ratio/price values for tiered_expr models so they
-          // serve as fallback during multi-instance sync delays. The backend's
-          // ModelPriceHelper checks billing_mode first, so these values are
-          // only consulted when billing_setting hasn't propagated yet.
-          setIfPresent(priceMap, name, data.price)
-          setIfPresent(ratioMap, name, data.ratio)
-          setIfPresent(cacheMap, name, data.cacheRatio)
-          setIfPresent(createCacheMap, name, data.createCacheRatio)
-          setIfPresent(completionMap, name, data.completionRatio)
-          setIfPresent(imageMap, name, data.imageRatio)
-          setIfPresent(audioMap, name, data.audioRatio)
-          setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
-        } else if (data.price && data.price !== '') {
-          setIfPresent(priceMap, name, data.price)
-        } else {
-          setIfPresent(ratioMap, name, data.ratio)
-          setIfPresent(cacheMap, name, data.cacheRatio)
-          setIfPresent(createCacheMap, name, data.createCacheRatio)
-          setIfPresent(completionMap, name, data.completionRatio)
-          setIfPresent(imageMap, name, data.imageRatio)
-          setIfPresent(audioMap, name, data.audioRatio)
-          setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
-        }
-      })
-
-      onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
-      onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
-      onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
-      onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
-      onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
-      onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
-      onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
-      onChange(
-        'AudioCompletionRatio',
-        JSON.stringify(audioCompletionMap, null, 2)
-      )
-      onChange(
-        'billing_setting.billing_mode',
-        JSON.stringify(billingModeMap, null, 2)
-      )
-      onChange(
-        'billing_setting.billing_expr',
-        JSON.stringify(billingExprMap, null, 2)
-      )
-      onChange('TaskBillingMode', JSON.stringify(taskBillingModeMap, null, 2))
-      onChange(
-        VIDEO_RESOLUTION_PRICE_OPTION_KEY,
-        serializeVideoResolutionPriceOption(resolutionPriceOption)
-      )
+      for (const [key, value] of Object.entries(
+        serializePricingDocuments(documents)
+      )) {
+        onChange(key, value)
+      }
     },
     [
       modelPrice,

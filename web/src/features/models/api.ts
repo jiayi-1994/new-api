@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ModelPricingSelection } from '@/features/system-settings/models/model-pricing-persistence'
 import { api } from '@/lib/api'
 
 import type {
@@ -74,8 +75,8 @@ export async function getModel(id: number): Promise<GetModelResponse> {
  * Create new model
  */
 export async function createModel(
-  data: Partial<Model>
-): Promise<{ success: boolean; message?: string; data?: Model }> {
+  data: Partial<Model> & { pricing?: ModelPricingSelection }
+): Promise<ModelMutationResponse> {
   const res = await api.post('/api/models/', data)
   return res.data
 }
@@ -84,10 +85,19 @@ export async function createModel(
  * Update existing model
  */
 export async function updateModel(
-  data: Partial<Model> & { id: number }
-): Promise<{ success: boolean; message?: string; data?: Model }> {
+  data: Partial<Model> & { id: number; pricing?: ModelPricingSelection }
+): Promise<ModelMutationResponse> {
   const res = await api.put('/api/models/', data)
   return res.data
+}
+
+export type ModelMutationResponse = {
+  success: boolean
+  message?: string
+  data?: Model
+  committed?: boolean
+  publication_recovered?: boolean
+  publication_pending?: boolean
 }
 
 /**

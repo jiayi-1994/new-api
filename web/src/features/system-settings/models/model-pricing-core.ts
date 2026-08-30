@@ -72,7 +72,7 @@ export type ModelRatioData = {
   requestRuleExpr?: string
   /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
   taskBillingMode?: string
-  /** 按分辨率的每秒单价；video_resolution 模式下的唯一价格来源 */
+  /** 按分辨率的每秒单价；存在时是活跃价格源，旧配置仍保留用于移除后恢复 */
   resolutionPrices?: VideoResolutionPriceMap
 }
 

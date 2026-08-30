@@ -72,17 +72,18 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { getSystemOptions } from '@/features/system-settings/api'
 import {
   getOptionValue,
   useSystemOptions,
 } from '@/features/system-settings/hooks/use-system-options'
-import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
-import { normalizeJsonString } from '@/features/system-settings/models/utils'
+import {
+  buildModelPricingSelection,
+  type ModelPricingSelection,
+} from '@/features/system-settings/models/model-pricing-persistence'
 import { VideoResolutionPriceEditor } from '@/features/system-settings/models/video-resolution-price-editor'
 import {
-  buildVideoResolutionOptionUpdate,
   parseVideoResolutionPriceOption,
+  sanitizeVideoResolutionPriceMap,
   validateVideoResolutionPriceRows,
   videoResolutionPriceRows,
   type VideoResolutionPriceRow,
@@ -110,6 +111,7 @@ const extendedModelFormSchema = z.object({
   price: z.string().optional(),
   ratio: z.string().optional(),
   cacheRatio: z.string().optional(),
+  createCacheRatio: z.string().optional(),
   completionRatio: z.string().optional(),
   imageRatio: z.string().optional(),
   audioRatio: z.string().optional(),
@@ -126,6 +128,7 @@ type PricingFields = Pick<
   | 'price'
   | 'ratio'
   | 'cacheRatio'
+  | 'createCacheRatio'
   | 'completionRatio'
   | 'imageRatio'
   | 'audioRatio'
@@ -145,6 +148,7 @@ const EMPTY_PRICING_FIELDS: PricingFields = {
   price: '',
   ratio: '',
   cacheRatio: '',
+  createCacheRatio: '',
   completionRatio: '',
   imageRatio: '',
   audioRatio: '',
@@ -184,9 +188,8 @@ function lookupTaskBillingMode(
 }
 
 // Pricing is not stored on the model row: it lives in system options as
-// model-name keyed JSON maps, so it has to be read back out of those maps to
-// populate the form. Both create and edit rely on this, because submit rebuilds
-// the maps from the form and would otherwise drop pricing it never loaded.
+// model-name keyed JSON maps, so the drawer reads those maps to populate its
+// optional pricing selection. Unchanged pricing is omitted from the request.
 function readPricingConfig(
   settings: ModelSettings | null,
   modelName: string
@@ -196,6 +199,10 @@ function readPricingConfig(
   const price = lookupModelRatio(settings.ModelPrice, modelName)
   const ratio = lookupModelRatio(settings.ModelRatio, modelName)
   const cacheRatio = lookupModelRatio(settings.CacheRatio, modelName)
+  const createCacheRatio = lookupModelRatio(
+    settings.CreateCacheRatio,
+    modelName
+  )
   const completionRatio = lookupModelRatio(settings.CompletionRatio, modelName)
   const imageRatio = lookupModelRatio(settings.ImageRatio, modelName)
   const audioRatio = lookupModelRatio(settings.AudioRatio, modelName)
@@ -231,6 +238,7 @@ function readPricingConfig(
       price: '',
       ratio: ratio?.toString() || '',
       cacheRatio: cacheRatio?.toString() || '',
+      createCacheRatio: createCacheRatio?.toString() || '',
       completionRatio: completionRatio?.toString() || '',
       imageRatio: imageRatio?.toString() || '',
       audioRatio: audioRatio?.toString() || '',
@@ -242,11 +250,26 @@ function readPricingConfig(
     // instance) still has to be visible rather than hidden behind the collapse.
     advancedOpen: [
       cacheRatio,
+      createCacheRatio,
       imageRatio,
       audioRatio,
       audioCompletionRatio,
     ].some((value) => value !== undefined && value !== null),
   }
+}
+
+function pricingDraftSignature(
+  mode: PricingMode,
+  fields: PricingFields,
+  taskBillingMode: string,
+  resolutionPrices: Record<string, number>
+): string {
+  return JSON.stringify({
+    mode,
+    fields,
+    taskBillingMode,
+    resolutionPrices: sanitizeVideoResolutionPriceMap(resolutionPrices),
+  })
 }
 
 type ModelMutateDrawerProps = {
@@ -279,11 +302,7 @@ export function ModelMutateDrawer({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
-  const [oldModelName, setOldModelName] = useState<string>('')
-  // Model name whose pricing was read into the form when the drawer opened.
-  // Submit may only rewrite pricing for this name, or for a name the user
-  // explicitly priced; anything else it never saw and must leave alone.
-  const [loadedPricingName, setLoadedPricingName] = useState<string>('')
+  const loadedPricingSignatureRef = useRef('')
   // Keep a ref so the load effect can read the latest modelSettings without
   // depending on it: modelSettings is a fresh object on every system-options
   // refetch, and including it in the deps would reset the form under the user.
@@ -312,8 +331,6 @@ export function ModelMutateDrawer({
 
   // Fetch system options for ratio configuration
   const { data: systemOptionsData } = useSystemOptions()
-
-  const updateOption = useUpdateOption()
 
   // Get model settings from system options
   const modelSettings = useMemo(() => {
@@ -405,6 +422,7 @@ export function ModelMutateDrawer({
       price: '',
       ratio: '',
       cacheRatio: '',
+      createCacheRatio: '',
       completionRatio: '',
       imageRatio: '',
       audioRatio: '',
@@ -448,25 +466,32 @@ export function ModelMutateDrawer({
   useEffect(() => {
     if (open && isEditing && modelData?.data) {
       const model = modelData.data
-      setOldModelName(model.model_name)
-
       const pricing = readPricingConfig(
         modelSettingsRef.current,
         model.model_name
       )
-      setLoadedPricingName(model.model_name)
-      setPricingMode(pricing.mode)
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
-      setTaskBillingMode(
-        lookupTaskBillingMode(modelSettingsRef.current, model.model_name)
+      const savedTaskBillingMode = lookupTaskBillingMode(
+        modelSettingsRef.current,
+        model.model_name
       )
+      setTaskBillingMode(savedTaskBillingMode)
       const savedResolutionPrices = parseVideoResolutionPriceOption(
         modelSettingsRef.current?.VideoResolutionPrice
       )[model.model_name]
       setResolutionRows(videoResolutionPriceRows(savedResolutionPrices))
-      if (savedResolutionPrices) setPricingMode('video_resolution')
+      const loadedMode = savedResolutionPrices
+        ? 'video_resolution'
+        : pricing.mode
+      setPricingMode(loadedMode)
+      loadedPricingSignatureRef.current = pricingDraftSignature(
+        loadedMode,
+        pricing.fields,
+        savedTaskBillingMode,
+        savedResolutionPrices || {}
+      )
       form.reset({
         id: model.id,
         model_name: model.model_name,
@@ -486,21 +511,29 @@ export function ModelMutateDrawer({
       // shown an empty form that hides existing configuration.
       const modelName = currentRow?.model_name || ''
       const pricing = readPricingConfig(modelSettingsRef.current, modelName)
-      setOldModelName('')
-      setLoadedPricingName(modelName)
       setPricingSubMode('ratio')
-      setPricingMode(pricing.mode)
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
-      setTaskBillingMode(
-        lookupTaskBillingMode(modelSettingsRef.current, modelName)
+      const savedTaskBillingMode = lookupTaskBillingMode(
+        modelSettingsRef.current,
+        modelName
       )
+      setTaskBillingMode(savedTaskBillingMode)
       const savedResolutionPrices = parseVideoResolutionPriceOption(
         modelSettingsRef.current?.VideoResolutionPrice
       )[modelName]
       setResolutionRows(videoResolutionPriceRows(savedResolutionPrices))
-      if (savedResolutionPrices) setPricingMode('video_resolution')
+      const loadedMode = savedResolutionPrices
+        ? 'video_resolution'
+        : pricing.mode
+      setPricingMode(loadedMode)
+      loadedPricingSignatureRef.current = pricingDraftSignature(
+        loadedMode,
+        pricing.fields,
+        savedTaskBillingMode,
+        savedResolutionPrices || {}
+      )
       form.reset({
         model_name: modelName,
         description: '',
@@ -518,14 +551,16 @@ export function ModelMutateDrawer({
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {
-      // 分辨率定价是该模式下唯一的价格来源：任何无效行都必须阻止保存，
-      // 否则会被当成「没有配置」而把该模型的整张价格表删掉。
       if (
         pricingMode === 'video_resolution' &&
         (resolutionValidation.prices === null ||
           Object.keys(resolutionValidation.prices).length === 0)
       ) {
         toast.error(t('Fix the resolution prices before saving'))
+        return
+      }
+      if (pricingMode === 'per-request' && !values.price) {
+        toast.error(t('Price is required'))
         return
       }
       setIsSubmitting(true)
@@ -538,11 +573,11 @@ export function ModelMutateDrawer({
           sync_official: values.sync_official ? 1 : 0,
         }
 
-        // Remove ratio fields from model data (they're stored in system settings)
         const {
           price,
           ratio,
           cacheRatio,
+          createCacheRatio,
           completionRatio,
           imageRatio,
           audioRatio,
@@ -550,275 +585,67 @@ export function ModelMutateDrawer({
           ...modelData
         } = submitData
 
+        const pricingFields: PricingFields = {
+          price,
+          ratio,
+          cacheRatio,
+          createCacheRatio,
+          completionRatio,
+          imageRatio,
+          audioRatio,
+          audioCompletionRatio,
+        }
+        const resolutionPrices = resolutionValidation.prices ?? {}
+        const currentPricingSignature = pricingDraftSignature(
+          pricingMode,
+          pricingFields,
+          taskBillingMode,
+          resolutionPrices
+        )
+        let pricing: ModelPricingSelection | undefined
+        if (currentPricingSignature !== loadedPricingSignatureRef.current) {
+          pricing =
+            pricingMode === 'video_resolution'
+              ? {
+                  mode: 'video_resolution',
+                  resolution_prices: resolutionPrices,
+                }
+              : buildModelPricingSelection({
+                  name: values.model_name,
+                  billingMode: pricingMode,
+                  ...pricingFields,
+                  taskBillingMode,
+                })
+        }
+
         const response =
           isEditing && currentModelId
-            ? await updateModel({ ...modelData, id: currentModelId })
-            : await createModel(modelData)
+            ? await updateModel({
+                ...modelData,
+                id: currentModelId,
+                ...(pricing ? { pricing } : {}),
+              })
+            : await createModel({
+                ...modelData,
+                ...(pricing ? { pricing } : {}),
+              })
 
         if (response.success) {
-          // Handle ratio configuration updates in system settings
-          const finalModelName = values.model_name
-          const resolutionPrices =
-            pricingMode === 'video_resolution'
-              ? (resolutionValidation.prices ?? {})
-              : {}
-          const hasRatioConfig =
-            (pricingMode === 'per-request' &&
-              values.price &&
-              values.price !== '') ||
-            (pricingMode === 'video_resolution' &&
-              Object.keys(resolutionPrices).length > 0) ||
-            (pricingMode === 'per-token' &&
-              (values.ratio ||
-                values.cacheRatio ||
-                values.completionRatio ||
-                values.imageRatio ||
-                values.audioRatio ||
-                values.audioCompletionRatio))
-
-          // Always process system settings updates if we have modelSettings
-          // This ensures we can remove stale entries even when clearing all pricing fields
-          if (modelSettings) {
-            // Read existing configurations
-            const priceMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ModelPrice,
-              { fallback: {}, silent: true }
+          if (response.publication_pending) {
+            toast.warning(
+              t(
+                'Pricing was saved, but live settings are still converging. Do not retry.'
+              )
             )
-            const ratioMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ModelRatio,
-              { fallback: {}, silent: true }
+          } else {
+            toast.success(
+              t(
+                isEditing
+                  ? 'Model updated successfully'
+                  : 'Model created successfully'
+              )
             )
-            const cacheMap = safeJsonParse<Record<string, number>>(
-              modelSettings.CacheRatio,
-              { fallback: {}, silent: true }
-            )
-            const completionMap = safeJsonParse<Record<string, number>>(
-              modelSettings.CompletionRatio,
-              { fallback: {}, silent: true }
-            )
-            const imageMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ImageRatio,
-              { fallback: {}, silent: true }
-            )
-            const audioMap = safeJsonParse<Record<string, number>>(
-              modelSettings.AudioRatio,
-              { fallback: {}, silent: true }
-            )
-            const audioCompletionMap = safeJsonParse<Record<string, number>>(
-              modelSettings.AudioCompletionRatio,
-              { fallback: {}, silent: true }
-            )
-            const taskBillingModeMap = safeJsonParse<Record<string, string>>(
-              modelSettings.TaskBillingMode,
-              { fallback: {}, silent: true }
-            )
-
-            // Remove old model name entries if model name changed (always, even if no new config)
-            if (isEditing && oldModelName && oldModelName !== finalModelName) {
-              delete priceMap[oldModelName]
-              delete ratioMap[oldModelName]
-              delete cacheMap[oldModelName]
-              delete completionMap[oldModelName]
-              delete imageMap[oldModelName]
-              delete audioMap[oldModelName]
-              delete audioCompletionMap[oldModelName]
-              delete taskBillingModeMap[oldModelName]
-            }
-
-            // Rebuild this model name's entries from the form, but only when
-            // the form speaks for that name: it loaded the name's pricing when
-            // the drawer opened, so clearing every field means "remove
-            // pricing", or the user typed pricing in, which then wins outright
-            // (this is also what replaces the old entries across a mode
-            // switch). A name the form never loaded may still have pricing
-            // configured elsewhere, and an untouched pricing section must not
-            // wipe it -- that covers creating a model over an existing name,
-            // and renaming onto one.
-            if (hasRatioConfig || finalModelName === loadedPricingName) {
-              delete priceMap[finalModelName]
-              delete ratioMap[finalModelName]
-              delete cacheMap[finalModelName]
-              delete completionMap[finalModelName]
-              delete imageMap[finalModelName]
-              delete audioMap[finalModelName]
-              delete audioCompletionMap[finalModelName]
-              delete taskBillingModeMap[finalModelName]
-            }
-
-            // Only add new entries if user provided new configuration
-            if (hasRatioConfig) {
-              if (
-                pricingMode === 'per-request' &&
-                values.price &&
-                values.price !== ''
-              ) {
-                priceMap[finalModelName] = Number.parseFloat(values.price)
-                // 显式选择的任务计费单位跟随固定价格一起写入
-                if (taskBillingMode) {
-                  taskBillingModeMap[finalModelName] = taskBillingMode
-                }
-              } else if (pricingMode === 'per-token') {
-                if (values.ratio && values.ratio !== '') {
-                  ratioMap[finalModelName] = Number.parseFloat(values.ratio)
-                }
-                if (values.cacheRatio && values.cacheRatio !== '') {
-                  cacheMap[finalModelName] = Number.parseFloat(
-                    values.cacheRatio
-                  )
-                }
-                if (values.completionRatio && values.completionRatio !== '') {
-                  completionMap[finalModelName] = Number.parseFloat(
-                    values.completionRatio
-                  )
-                }
-                if (values.imageRatio && values.imageRatio !== '') {
-                  imageMap[finalModelName] = Number.parseFloat(
-                    values.imageRatio
-                  )
-                }
-                if (values.audioRatio && values.audioRatio !== '') {
-                  audioMap[finalModelName] = Number.parseFloat(
-                    values.audioRatio
-                  )
-                }
-                if (
-                  values.audioCompletionRatio &&
-                  values.audioCompletionRatio !== ''
-                ) {
-                  audioCompletionMap[finalModelName] = Number.parseFloat(
-                    values.audioCompletionRatio
-                  )
-                }
-              }
-            }
-
-            // Update system options if there are changes
-            const updates: Array<{ key: string; value: string }> = []
-
-            const newModelPrice = normalizeJsonString(JSON.stringify(priceMap))
-            if (
-              newModelPrice !== normalizeJsonString(modelSettings.ModelPrice)
-            ) {
-              updates.push({ key: 'ModelPrice', value: newModelPrice })
-            }
-
-            const newModelRatio = normalizeJsonString(JSON.stringify(ratioMap))
-            if (
-              newModelRatio !== normalizeJsonString(modelSettings.ModelRatio)
-            ) {
-              updates.push({ key: 'ModelRatio', value: newModelRatio })
-            }
-
-            const newCacheRatio = normalizeJsonString(JSON.stringify(cacheMap))
-            if (
-              newCacheRatio !== normalizeJsonString(modelSettings.CacheRatio)
-            ) {
-              updates.push({ key: 'CacheRatio', value: newCacheRatio })
-            }
-
-            const newCompletionRatio = normalizeJsonString(
-              JSON.stringify(completionMap)
-            )
-            if (
-              newCompletionRatio !==
-              normalizeJsonString(modelSettings.CompletionRatio)
-            ) {
-              updates.push({
-                key: 'CompletionRatio',
-                value: newCompletionRatio,
-              })
-            }
-
-            const newImageRatio = normalizeJsonString(JSON.stringify(imageMap))
-            if (
-              newImageRatio !== normalizeJsonString(modelSettings.ImageRatio)
-            ) {
-              updates.push({ key: 'ImageRatio', value: newImageRatio })
-            }
-
-            const newAudioRatio = normalizeJsonString(JSON.stringify(audioMap))
-            if (
-              newAudioRatio !== normalizeJsonString(modelSettings.AudioRatio)
-            ) {
-              updates.push({ key: 'AudioRatio', value: newAudioRatio })
-            }
-
-            const newAudioCompletionRatio = normalizeJsonString(
-              JSON.stringify(audioCompletionMap)
-            )
-            if (
-              newAudioCompletionRatio !==
-              normalizeJsonString(modelSettings.AudioCompletionRatio)
-            ) {
-              updates.push({
-                key: 'AudioCompletionRatio',
-                value: newAudioCompletionRatio,
-              })
-            }
-
-            const newTaskBillingMode = normalizeJsonString(
-              JSON.stringify(taskBillingModeMap)
-            )
-            if (
-              newTaskBillingMode !==
-              normalizeJsonString(modelSettings.TaskBillingMode)
-            ) {
-              updates.push({
-                key: 'TaskBillingMode',
-                value: newTaskBillingMode,
-              })
-            }
-
-            // 分辨率价格是独立选项：只在完整文档确有变化时提交一次更新，绝不附带
-            // TaskBillingMode。改名时表单说了算的是旧名字，必须一并覆盖，否则后端
-            // 事务已把旧键搬到新名字下，清空操作会漏掉、旧价格会在新名字上复活。
-            const ownsResolutionPricing =
-              hasRatioConfig ||
-              finalModelName === loadedPricingName ||
-              (isEditing &&
-                oldModelName !== '' &&
-                oldModelName === loadedPricingName)
-            if (ownsResolutionPricing) {
-              // 以刚落库后的文档为基准重算：Model.Update 已在事务里搬过键，
-              // 用打开抽屉时的旧快照做全量替换会把后端的事务结果覆盖掉。
-              const freshOptions = await queryClient.fetchQuery({
-                queryKey: ['system-options'],
-                queryFn: getSystemOptions,
-                staleTime: 0,
-              })
-              const currentResolutionPrice = getOptionValue(freshOptions.data, {
-                VideoResolutionPrice: '{}',
-              }).VideoResolutionPrice
-              const resolutionUpdate = buildVideoResolutionOptionUpdate({
-                oldName: isEditing ? oldModelName : '',
-                newName: finalModelName,
-                videoResolutionPrice: parseVideoResolutionPriceOption(
-                  currentResolutionPrice
-                ),
-                prices: resolutionPrices,
-              })
-              if (
-                normalizeJsonString(resolutionUpdate.value) !==
-                normalizeJsonString(currentResolutionPrice)
-              ) {
-                updates.push({
-                  key: resolutionUpdate.key,
-                  value: resolutionUpdate.value,
-                })
-              }
-            }
-
-            // Apply all updates (including deletions when clearing fields)
-            for (const update of updates) {
-              await updateOption.mutateAsync(update)
-            }
           }
-
-          toast.success(
-            isEditing
-              ? 'Model updated successfully'
-              : 'Model created successfully'
-          )
           queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
           queryClient.invalidateQueries({ queryKey: ['system-options'] })
           onOpenChange(false)
@@ -839,10 +666,6 @@ export function ModelMutateDrawer({
       pricingMode,
       taskBillingMode,
       resolutionValidation,
-      oldModelName,
-      loadedPricingName,
-      modelSettings,
-      updateOption,
       t,
     ]
   )
@@ -1156,7 +979,7 @@ export function ModelMutateDrawer({
                 />
               ) : null}
 
-              {pricingMode === 'per-request' ? (
+              {pricingMode === 'per-request' && (
                 <>
                   <FormField
                     control={form.control}
@@ -1231,7 +1054,9 @@ export function ModelMutateDrawer({
                     </p>
                   </div>
                 </>
-              ) : (
+              )}
+
+              {pricingMode === 'per-token' && (
                 <>
                   <div className='space-y-4'>
                     <Label>{t('Input mode')}</Label>
@@ -1424,6 +1249,35 @@ export function ModelMutateDrawer({
                             </FormControl>
                             <FormDescription>
                               {t('Discount ratio for cache hits.')}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='createCacheRatio'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Create cache ratio')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='text'
+                                placeholder='1.0'
+                                {...field}
+                                onChange={(event) => {
+                                  const value = event.target.value
+                                  if (validateNumber(value)) {
+                                    field.onChange(value)
+                                  }
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Ratio applied when creating cache entries for supported models.'
+                              )}
                             </FormDescription>
                             <FormMessage />
                           </FormItem>

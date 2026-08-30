@@ -82,6 +82,7 @@ export const hasPricingValue = (value?: string) =>
 export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
   !snapshot ||
   (snapshot.billingMode !== 'tiered_expr' &&
+    snapshot.billingMode !== 'video_resolution' &&
     !hasPricingValue(snapshot.price) &&
     !hasPricingValue(snapshot.ratio))
 
@@ -275,7 +276,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(resolutionPriceMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''
@@ -288,13 +289,14 @@ export const buildModelSnapshots = ({
     const resolutionPrices = resolutionPriceMap[name]
 
     const modeForModel = billingModeMap[name]
-    if (modeForModel === 'tiered_expr') {
-      const fullExpr = billingExprMap[name] || ''
-      const { billingExpr: pureExpr, requestRuleExpr } =
-        splitBillingExprAndRequestRules(fullExpr)
+    const fullExpr = billingExprMap[name] || ''
+    const { billingExpr: pureExpr, requestRuleExpr } =
+      splitBillingExprAndRequestRules(fullExpr)
+
+    if (resolutionPrices) {
       return {
         name,
-        billingMode: 'tiered_expr',
+        billingMode: 'video_resolution',
         billingExpr: pureExpr,
         requestRuleExpr,
         price,
@@ -311,9 +313,12 @@ export const buildModelSnapshots = ({
       }
     }
 
-    if (resolutionPrices) {
+    if (modeForModel === 'tiered_expr') {
       return {
         name,
+        billingMode: 'tiered_expr',
+        billingExpr: pureExpr,
+        requestRuleExpr,
         price,
         ratio,
         cacheRatio: cache,
@@ -323,8 +328,6 @@ export const buildModelSnapshots = ({
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
         taskBillingMode: taskMode,
-        resolutionPrices,
-        billingMode: 'video_resolution',
         hasConflict: false,
       }
     }

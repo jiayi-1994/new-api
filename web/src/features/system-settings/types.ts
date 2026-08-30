@@ -32,11 +32,40 @@ export type SystemOptionsResponse = {
 export type UpdateOptionRequest = {
   key: string
   value: string | boolean | number
+  expected_value?: string
 }
 
 export type UpdateOptionResponse = {
   success: boolean
   message: string
+}
+
+export type PricingCommandRequest = {
+  kind: 'save' | 'copy' | 'delete' | 'replace_documents'
+  source_name?: string
+  target_name: string
+  pricing?: import('./models/model-pricing-persistence').ModelPricingSelection
+  values?: Partial<
+    Record<
+      import('./models/model-pricing-persistence').PricingDocumentKey,
+      string
+    >
+  >
+  expected_documents?: Partial<
+    Record<
+      import('./models/model-pricing-persistence').PricingDocumentKey,
+      string
+    >
+  >
+}
+
+export type PricingCommandResponse = {
+  success: boolean
+  message: string
+  data: Record<string, string>
+  committed: boolean
+  publication_recovered: boolean
+  publication_pending: boolean
 }
 
 export type ConfirmPaymentComplianceResponse = {
