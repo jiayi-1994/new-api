@@ -2,12 +2,14 @@ package controller
 
 import (
 	"encoding/json"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -87,10 +89,31 @@ func GetModelMeta(c *gin.Context) {
 }
 
 // CreateModelMeta 新建模型
+type ModelMutationRequest struct {
+	model.Model
+	Pricing *model.ModelPricingSelection `json:"pricing,omitempty"`
+}
+
+func requireRootPricingMutation(c *gin.Context) bool {
+	if c.GetInt("role") >= common.RoleRootUser {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"success": false,
+		"code":    "AUTH_INSUFFICIENT_PRIVILEGE",
+		"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+	})
+	return false
+}
+
 func CreateModelMeta(c *gin.Context) {
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	var request ModelMutationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	m := &request.Model
+	if request.Pricing != nil && !requireRootPricingMutation(c) {
 		return
 	}
 	if m.ModelName == "" {
@@ -106,21 +129,49 @@ func CreateModelMeta(c *gin.Context) {
 		return
 	}
 
-	if err := m.Insert(); err != nil {
-		common.ApiError(c, err)
+	var result model.ModelPricingCommandResult
+	if request.Pricing == nil {
+		if err := m.Insert(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else {
+		var err error
+		result, err = model.ExecuteModelPricingCommand(model.ModelPricingCommand{
+			Kind:       model.PricingCommandSave,
+			TargetName: m.ModelName,
+			Selection:  request.Pricing,
+			ModelMutation: &model.ModelRowMutation{
+				Kind:  "create",
+				Model: m,
+			},
+		})
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	if !result.PublicationPending {
+		model.RefreshPricing()
+	}
+	if request.Pricing == nil {
+		common.ApiSuccess(c, m)
 		return
 	}
-	model.RefreshPricing()
-	common.ApiSuccess(c, &m)
+	writePricingCommandSuccess(c, result, m)
 }
 
 // UpdateModelMeta 更新模型
 func UpdateModelMeta(c *gin.Context) {
 	statusOnly := c.Query("status_only") == "true"
 
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	var request ModelMutationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	m := &request.Model
+	if request.Pricing != nil && !requireRootPricingMutation(c) {
 		return
 	}
 	if m.Id == 0 {
@@ -128,6 +179,25 @@ func UpdateModelMeta(c *gin.Context) {
 		return
 	}
 
+	var current model.Model
+	if err := model.DB.Select("id", "model_name").First(&current, m.Id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	rename := !statusOnly && current.ModelName != m.ModelName
+	if rename && !requireRootPricingMutation(c) {
+		return
+	}
+	if statusOnly && request.Pricing != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "status-only update cannot include pricing",
+		})
+		return
+	}
+
+	var result model.ModelPricingCommandResult
+	usedPricingCommand := false
 	if statusOnly {
 		// 只更新状态，防止误清空其他字段
 		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
@@ -144,29 +214,67 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 
-		if err := m.Update(); err != nil {
-			common.ApiError(c, err)
-			return
+		if request.Pricing == nil && !rename {
+			if err := m.UpdateMetadata(current.ModelName); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		} else {
+			kind := model.PricingCommandSave
+			sourceName := ""
+			if rename {
+				kind = model.PricingCommandRename
+				sourceName = current.ModelName
+			}
+			var err error
+			result, err = model.ExecuteModelPricingCommand(model.ModelPricingCommand{
+				Kind:       kind,
+				SourceName: sourceName,
+				TargetName: m.ModelName,
+				Selection:  request.Pricing,
+				ModelMutation: &model.ModelRowMutation{
+					Kind:  "update",
+					ID:    m.Id,
+					Model: m,
+				},
+			})
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			usedPricingCommand = true
 		}
 	}
-	model.RefreshPricing()
-	common.ApiSuccess(c, &m)
+	if !result.PublicationPending {
+		model.RefreshPricing()
+	}
+	if !usedPricingCommand {
+		common.ApiSuccess(c, m)
+		return
+	}
+	writePricingCommandSuccess(c, result, m)
 }
 
 // DeleteModelMeta 删除模型
 func DeleteModelMeta(c *gin.Context) {
+	if !requireRootPricingMutation(c) {
+		return
+	}
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DeleteModelMetaByID(id); err != nil {
+	result, err := model.DeleteModelMetaByIDWithPricingResult(id)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	model.RefreshPricing()
-	common.ApiSuccess(c, nil)
+	if !result.PublicationPending {
+		model.RefreshPricing()
+	}
+	writePricingCommandSuccess(c, result, nil)
 }
 
 // enrichModels 批量填充附加信息：端点、渠道、分组、计费类型，避免 N+1 查询

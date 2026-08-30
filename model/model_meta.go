@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"gorm.io/gorm"
 )
@@ -234,105 +233,79 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 }
 
 func (mi *Model) Update() error {
-	videoResolutionPriceOptionMu.Lock()
-	defer videoResolutionPriceOptionMu.Unlock()
+	if mi.Id == 0 {
+		return fmt.Errorf("update model requires id")
+	}
+	var current Model
+	if err := DB.Select("id", "model_name").First(&current, mi.Id).Error; err != nil {
+		return err
+	}
+	if current.ModelName == mi.ModelName {
+		return mi.UpdateMetadata(current.ModelName)
+	}
+	_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandRename,
+		SourceName: current.ModelName,
+		TargetName: mi.ModelName,
+		ModelMutation: &ModelRowMutation{
+			Kind:  "update",
+			ID:    mi.Id,
+			Model: mi,
+		},
+	})
+	return err
+}
 
+// UpdateMetadata updates a model only while its active name still matches the
+// name authorized by the caller. It never performs a rename or touches pricing.
+func (mi *Model) UpdateMetadata(expectedName string) error {
+	if mi.Id == 0 {
+		return fmt.Errorf("update model requires id")
+	}
+	if mi.ModelName != expectedName {
+		return fmt.Errorf("metadata update cannot rename model %q to %q", expectedName, mi.ModelName)
+	}
 	mi.UpdatedTime = common.GetTimestamp()
-	var publishedValue string
-	err := modelNameMutationTransaction(DB, mi.Id, nil, &mi.ModelName, func(tx *gorm.DB, current *Model) error {
-		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
-		if err != nil {
-			return err
-		}
-		if current.ModelName != mi.ModelName {
-			if prices, ok := priceDocument[current.ModelName]; ok {
-				delete(priceDocument, current.ModelName)
-				priceDocument[mi.ModelName] = prices
-			}
-		}
-		publishedValue, err = saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
-		if err != nil {
-			return err
-		}
-
-		// 使用 Select 强制更新所有字段，包括零值
+	return modelNameMutationTransaction(DB, mi.Id, &expectedName, &expectedName, func(tx *gorm.DB, _ *Model) error {
 		return tx.Model(&Model{}).Where("id = ?", mi.Id).
 			Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 			Updates(mi).Error
 	})
-	if err != nil {
-		return err
-	}
-	return publishVideoResolutionPriceOption(publishedValue)
 }
 
 func (mi *Model) Delete() error {
 	if mi.Id == 0 {
 		return fmt.Errorf("delete model requires id")
 	}
-	return modelNameMutationTransaction(DB, mi.Id, nil, nil, func(tx *gorm.DB, current *Model) error {
-		return tx.Delete(current).Error
-	})
+	_, err := DeleteModelMetaByIDWithPricingResult(mi.Id)
+	return err
 }
 
 func DeleteModelMetaByID(id int) error {
-	videoResolutionPriceOptionMu.Lock()
-	defer videoResolutionPriceOptionMu.Unlock()
+	_, err := DeleteModelMetaByIDWithPricingResult(id)
+	return err
+}
 
-	var publishedValue string
-	err := modelNameMutationTransaction(DB, id, nil, nil, func(tx *gorm.DB, current *Model) error {
-		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
-		if err != nil {
-			return err
-		}
-		delete(priceDocument, current.ModelName)
-		publishedValue, err = saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
-		if err != nil {
-			return err
-		}
-		return tx.Delete(current).Error
+func DeleteModelMetaByIDWithPricingResult(id int) (ModelPricingCommandResult, error) {
+	if id == 0 {
+		return ModelPricingCommandResult{}, fmt.Errorf("delete model requires id")
+	}
+	var current Model
+	if err := DB.Select("id", "model_name").First(&current, id).Error; err != nil {
+		return ModelPricingCommandResult{}, err
+	}
+	return ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandDelete,
+		TargetName: current.ModelName,
+		ModelMutation: &ModelRowMutation{
+			Kind: "delete",
+			ID:   id,
+		},
 	})
-	if err != nil {
-		return err
-	}
-	return publishVideoResolutionPriceOption(publishedValue)
 }
 
-func loadVideoResolutionPriceOptionForLifecycle(tx *gorm.DB) (Option, map[string]map[string]float64, error) {
-	option := Option{Key: ratio_setting.VideoResolutionPriceOptionKey}
-	result := lockForUpdate(tx).Where(commonKeyCol+" = ?", option.Key).Find(&option)
-	if result.Error != nil {
-		return Option{}, nil, result.Error
-	}
-	if result.RowsAffected == 0 {
-		option.Value = "{}"
-		if err := tx.Create(&option).Error; err != nil {
-			return Option{}, nil, err
-		}
-	}
-	if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(option.Value); err != nil {
-		return Option{}, nil, fmt.Errorf("invalid stored video resolution price: %w", err)
-	}
-	priceDocument := make(map[string]map[string]float64)
-	if err := common.Unmarshal([]byte(option.Value), &priceDocument); err != nil {
-		return Option{}, nil, err
-	}
-	return option, priceDocument, nil
-}
-
-func saveVideoResolutionPriceOptionForLifecycle(tx *gorm.DB, option Option, priceDocument map[string]map[string]float64) (string, error) {
-	value, err := common.Marshal(priceDocument)
-	if err != nil {
-		return "", err
-	}
-	if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(string(value)); err != nil {
-		return "", err
-	}
-	option.Value = string(value)
-	if err := tx.Save(&option).Error; err != nil {
-		return "", err
-	}
-	return option.Value, nil
+func IsProtectedPricingOption(key string) bool {
+	return isProtectedPricingOption(key)
 }
 
 func GetVendorModelCounts() (map[int64]int64, error) {

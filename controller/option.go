@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -118,8 +119,109 @@ func GetOptions(c *gin.Context) {
 }
 
 type OptionUpdateRequest struct {
-	Key   string `json:"key"`
-	Value any    `json:"value"`
+	Key           string  `json:"key"`
+	Value         any     `json:"value"`
+	ExpectedValue *string `json:"expected_value,omitempty"`
+}
+
+type PricingCommandRequest struct {
+	Kind              model.PricingCommandKind     `json:"kind"`
+	SourceName        string                       `json:"source_name,omitempty"`
+	TargetName        string                       `json:"target_name"`
+	Pricing           *model.ModelPricingSelection `json:"pricing,omitempty"`
+	Values            map[string]string            `json:"values,omitempty"`
+	ExpectedDocuments map[string]string            `json:"expected_documents,omitempty"`
+}
+
+func writePricingCommandSuccess(c *gin.Context, result model.ModelPricingCommandResult, data any) {
+	message := ""
+	if result.PublicationRecovered {
+		message = "pricing changes committed; publication recovered"
+	}
+	if result.PublicationPending {
+		message = "pricing changes committed; publication pending; do not retry"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":               true,
+		"message":               message,
+		"data":                  data,
+		"committed":             result.Committed,
+		"publication_recovered": result.PublicationRecovered,
+		"publication_pending":   result.PublicationPending,
+	})
+}
+
+func UpdatePricingOption(c *gin.Context) {
+	if !requireRootPricingMutation(c) {
+		return
+	}
+	var request PricingCommandRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的参数"})
+		return
+	}
+	if request.Kind != model.PricingCommandSave &&
+		request.Kind != model.PricingCommandCopy &&
+		request.Kind != model.PricingCommandDelete &&
+		request.Kind != model.PricingCommandReplaceDocuments {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "unsupported pricing command",
+		})
+		return
+	}
+	if request.Kind == model.PricingCommandReplaceDocuments {
+		if len(request.Values) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "values are required for replace_documents",
+			})
+			return
+		}
+		for key := range request.Values {
+			if _, ok := request.ExpectedDocuments[key]; !ok {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"success": false,
+					"message": fmt.Sprintf("expected_documents must include exact raw value for %s", key),
+				})
+				return
+			}
+		}
+	}
+	result, err := model.ExecuteModelPricingCommand(model.ModelPricingCommand{
+		Kind:              request.Kind,
+		SourceName:        request.SourceName,
+		TargetName:        request.TargetName,
+		Selection:         request.Pricing,
+		Values:            request.Values,
+		ExpectedDocuments: request.ExpectedDocuments,
+	})
+	if err != nil {
+		var conflict *model.OptionConflictError
+		if errors.As(err, &conflict) {
+			writeOptionConflict(c, conflict)
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "option.pricing", map[string]interface{}{
+		"kind":        request.Kind,
+		"source_name": request.SourceName,
+		"target_name": request.TargetName,
+	})
+	writePricingCommandSuccess(c, result, result.Values)
+}
+
+func writeOptionConflict(c *gin.Context, conflict *model.OptionConflictError) {
+	c.JSON(http.StatusConflict, gin.H{
+		"success": false,
+		"message": "pricing option changed; reload and retry",
+		"data": gin.H{
+			"key":           conflict.Key,
+			"current_value": conflict.CurrentValue,
+		},
+	})
 }
 
 func optionUpdateValueString(value any) string {
@@ -146,6 +248,30 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	option.Value = optionUpdateValueString(option.Value)
+	if model.IsProtectedPricingOption(option.Key) {
+		if option.ExpectedValue == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "expected_value is required for protected pricing options",
+			})
+			return
+		}
+		err = model.UpdateOptionCAS(option.Key, option.Value.(string), *option.ExpectedValue)
+		if err != nil {
+			var conflict *model.OptionConflictError
+			if errors.As(err, &conflict) {
+				writeOptionConflict(c, conflict)
+				return
+			}
+			common.ApiError(c, err)
+			return
+		}
+		recordManageAudit(c, "option.update", map[string]interface{}{
+			"key": option.Key,
+		})
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
+	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
