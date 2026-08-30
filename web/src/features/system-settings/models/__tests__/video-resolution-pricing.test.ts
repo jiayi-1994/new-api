@@ -27,7 +27,6 @@ import {
   isTaskPerCallBilling,
 } from '../model-pricing-snapshots'
 import {
-  buildVideoResolutionOptionUpdate,
   parseVideoResolutionPriceOption,
   serializeVideoResolutionPriceOption,
   validateVideoResolutionPriceRows,
@@ -114,38 +113,6 @@ describe('video resolution price rows', () => {
       '1080p',
       '4k',
     ])
-  })
-})
-
-describe('video resolution option updates', () => {
-  test('rename moves resolution prices without coupling TaskBillingMode', () => {
-    const update = buildVideoResolutionOptionUpdate({
-      oldName: 'video-old',
-      newName: 'video-new',
-      videoResolutionPrice: { 'video-old': { '720p': 0.1 } },
-    })
-
-    assert.equal(update.key, 'VideoResolutionPrice')
-    assert.deepEqual(JSON.parse(update.value), {
-      'video-new': { '720p': 0.1 },
-    })
-    assert.equal('TaskBillingMode' in update, false)
-  })
-
-  test('empty prices remove the model entry instead of writing an empty map', () => {
-    const update = buildVideoResolutionOptionUpdate({
-      oldName: 'video-a',
-      newName: 'video-a',
-      videoResolutionPrice: {
-        'video-a': { '720p': 0.1 },
-        'video-b': { '1080p': 0.2 },
-      },
-      prices: {},
-    })
-
-    assert.deepEqual(JSON.parse(update.value), {
-      'video-b': { '1080p': 0.2 },
-    })
   })
 })
 

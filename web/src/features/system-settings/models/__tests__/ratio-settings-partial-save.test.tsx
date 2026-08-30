@@ -349,6 +349,21 @@ describe('ratio settings partial saves', () => {
     const view = await renderSettings()
     try {
       await view.save()
+
+      // CAS 接线：保存必须携带编辑前的原始文档字节作为 expected_documents，
+      // 否则后端的 exact-raw CAS 失去比较基准、并发写会被静默覆盖。
+      const pricingPut = putCalls.find(
+        (call) => call.url === '/api/option/pricing'
+      )
+      assert.ok(pricingPut)
+      const pricingBody = pricingPut.body as {
+        expected_documents?: Record<string, string>
+      }
+      assert.equal(
+        pricingBody.expected_documents?.ModelPrice,
+        rawDocuments.ModelPrice
+      )
+
       await view.remountFromCache()
 
       const priceTextarea = document.querySelector<HTMLTextAreaElement>(

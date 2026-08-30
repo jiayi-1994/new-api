@@ -518,8 +518,10 @@ func RelayTask(c *gin.Context) {
 	relayInfo.TaskRelayInfo.BillingPlan = billingPlan
 	if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil &&
 		!relay.TaskChannelTypeSupportsBilling(billingPlan.Kind(), lockedCh.Type) {
+		// 面向用户的错误不携带渠道标识；渠道 ID 只进日志
+		logger.LogWarn(c, fmt.Sprintf("video resolution billing is not supported by locked channel %d", lockedCh.Id))
 		respondTaskError(c, service.TaskErrorWrapperLocal(
-			fmt.Errorf("video resolution billing is not supported by locked channel %d", lockedCh.Id),
+			errors.New("video resolution billing is not supported by the channel of the origin task"),
 			"video_resolution_not_supported",
 			http.StatusBadRequest,
 		))
