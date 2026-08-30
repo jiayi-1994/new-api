@@ -51,3 +51,8 @@ var SunoModel2Action = map[string]string{
 	"suno_music":  SunoActionMusic,
 	"suno_lyrics": SunoActionLyrics,
 }
+
+func IsSunoModel(modelName string) bool {
+	_, ok := SunoModel2Action[modelName]
+	return ok
+}

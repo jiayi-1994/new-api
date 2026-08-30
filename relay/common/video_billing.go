@@ -89,7 +89,7 @@ func CalculateVideoResolutionQuotaAtUnit(
 	if err := validateVideoDuration(durationSeconds); err != nil {
 		return 0, nil, err
 	}
-	if err := validatePositiveFinite("group ratio", groupRatio); err != nil {
+	if err := validateNonNegativeFinite("group ratio", groupRatio); err != nil {
 		return 0, nil, err
 	}
 	if err := validatePositiveFinite("quota per unit", quotaPerUnit); err != nil {
@@ -123,6 +123,13 @@ func validateVideoDuration(durationSeconds int) error {
 func validatePositiveFinite(name string, value float64) error {
 	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return fmt.Errorf("%s must be positive and finite", name)
+	}
+	return nil
+}
+
+func validateNonNegativeFinite(name string, value float64) error {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("%s must be non-negative and finite", name)
 	}
 	return nil
 }

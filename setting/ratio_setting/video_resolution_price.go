@@ -40,6 +40,9 @@ func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64,
 		if err := common.Unmarshal(rawResolutions, &rawPrices); err != nil {
 			return nil, fmt.Errorf("parse video resolution prices for model %q: %w", model, err)
 		}
+		if len(rawPrices) == 0 {
+			return nil, fmt.Errorf("video resolution prices for model %q must not be empty", model)
+		}
 
 		normalizedPrices := make(map[string]float64, len(rawPrices))
 		for resolution, rawPrice := range rawPrices {

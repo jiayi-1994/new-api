@@ -18,6 +18,15 @@ func TestInvalidResolutionPriceDoesNotReplaceLiveConfig(t *testing.T) {
 	assert.Equal(t, 0.1, price)
 }
 
+func TestVideoResolutionPriceRejectsEmptyPerModelTable(t *testing.T) {
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"kept":{"720p":0.1}}`))
+	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })
+
+	err := UpdateVideoResolutionPriceByJSONString(`{"invalid":{}}`)
+	require.Error(t, err)
+	assert.Equal(t, map[string]map[string]float64{"kept": {"720p": 0.1}}, GetVideoResolutionPriceMap())
+}
+
 func TestVideoResolutionPriceRejectsIdenticalRawJSONKeys(t *testing.T) {
 	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.1}}`))
 	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })

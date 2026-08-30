@@ -829,6 +829,7 @@ type TaskRelayInfo struct {
 	ConsumeQuota bool
 
 	ResolvedVideoBilling *ResolvedVideoBilling
+	BillingPlan          *TaskBillingPlan
 
 	// LockedChannel holds the full channel object when the request is bound to
 	// a specific channel (e.g., remix on origin task's channel). Stored as any

@@ -43,6 +43,13 @@ func TestCalculateVideoResolutionQuotaAtUnitUsesExplicitSnapshot(t *testing.T) {
 	assert.Nil(t, clamp)
 }
 
+func TestCalculateVideoResolutionQuotaAllowsZeroGroupRatio(t *testing.T) {
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 5, 0, nil, 500)
+	require.NoError(t, err)
+	assert.Zero(t, quota)
+	assert.Nil(t, clamp)
+}
+
 func TestCalculateVideoResolutionQuotaRejectsUnsafeInputs(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -59,7 +66,6 @@ func TestCalculateVideoResolutionQuotaRejectsUnsafeInputs(t *testing.T) {
 		{name: "zero duration", price: 0.1, duration: 0, groupRatio: 1},
 		{name: "negative duration", price: 0.1, duration: -1, groupRatio: 1},
 		{name: "duration above maximum", price: 0.1, duration: MaxTaskDurationSeconds + 1, groupRatio: 1},
-		{name: "zero group ratio", price: 0.1, duration: 1, groupRatio: 0},
 		{name: "negative group ratio", price: 0.1, duration: 1, groupRatio: -1},
 		{name: "nan group ratio", price: 0.1, duration: 1, groupRatio: math.NaN()},
 		{name: "positive infinite group ratio", price: 0.1, duration: 1, groupRatio: math.Inf(1)},
