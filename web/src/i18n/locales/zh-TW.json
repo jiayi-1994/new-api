@@ -5261,10 +5261,10 @@
     "Only super administrators can rename models or change model pricing.": "只有超級管理員可以重新命名模型或變更模型定價。",
     "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "定價已儲存，但倍率公開設定更新失敗。請僅重試倍率公開設定。",
     "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "倍率公開設定已儲存，但伺服器上的定價已變更。請檢查重新整理後的定價，再重新儲存。",
-    "Ratio exposure was saved, but pricing could not be updated.": "倍率公開設定已儲存，但定價更新失敗。"
+    "Ratio exposure was saved, but pricing could not be updated.": "倍率公開設定已儲存，但定價更新失敗。",
+    "Delete result is unknown. Do not retry; refresh and review the model list.": "刪除結果未知。請勿重試；請重新整理並核對模型清單。",
+    "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "{{count}} 個模型的刪除結果未知。請勿重試；請重新整理並核對模型清單。"
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
-  "Delete result is unknown. Do not retry; refresh and review the model list.": "刪除結果未知。請勿重試；請重新整理並核對模型清單。",
-  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "{{count}} 個模型的刪除結果未知。請勿重試；請重新整理並核對模型清單。"
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
 }

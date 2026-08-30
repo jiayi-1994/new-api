@@ -280,6 +280,8 @@ export async function handleBatchDeleteModels(
     }
 
     successCount++
+    // 顺序删除下每条命令都重新发布完整文档集：后一次成功发布权威地取代
+    // 之前的 pending 状态，因此这里刻意取最后一次响应（有测试钉住）。
     publicationPending = Boolean(response.publication_pending)
     if (queryClient && response.pricing_documents) {
       const adopted = await tryAdoptCommittedPricingDocuments(

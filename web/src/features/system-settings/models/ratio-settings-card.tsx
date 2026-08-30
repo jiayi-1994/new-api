@@ -470,8 +470,12 @@ export function RatioSettingsCard({
           } catch (error: unknown) {
             pricingConflict =
               axios.isAxiosError(error) && error.response?.status === 409
+            // 400 验证错误的可操作原因在响应体 message 里；axios 自身的
+            // error.message 只是笼统的状态码描述
             pricingFailureMessage = axios.isAxiosError(error)
-              ? error.message
+              ? ((error.response?.data as { message?: string } | undefined)
+                  ?.message ??
+                error.message)
               : t('Failed to update setting')
           }
         }

@@ -5261,10 +5261,10 @@
     "Only super administrators can rename models or change model pricing.": "Chỉ quản trị viên cấp cao mới có thể đổi tên mô hình hoặc thay đổi giá mô hình.",
     "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "Giá đã được lưu nhưng không thể cập nhật cài đặt hiển thị hệ số. Chỉ thử lại cài đặt hiển thị hệ số.",
     "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "Cài đặt hiển thị hệ số đã được lưu nhưng giá trên máy chủ đã thay đổi. Hãy kiểm tra giá vừa làm mới trước khi lưu lại.",
-    "Ratio exposure was saved, but pricing could not be updated.": "Cài đặt hiển thị hệ số đã được lưu nhưng không thể cập nhật giá."
+    "Ratio exposure was saved, but pricing could not be updated.": "Cài đặt hiển thị hệ số đã được lưu nhưng không thể cập nhật giá.",
+    "Delete result is unknown. Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình.",
+    "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa của {{count}} mô hình. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình."
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
-  "Delete result is unknown. Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình.",
-  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa của {{count}} mô hình. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình."
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
 }

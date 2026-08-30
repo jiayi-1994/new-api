@@ -255,6 +255,16 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         )
         return
       }
+      // 400 验证错误的可操作原因在响应体 message 里
+      if (axios.isAxiosError(error)) {
+        const responseMessage = (
+          error.response?.data as { message?: string } | undefined
+        )?.message
+        if (responseMessage) {
+          toast.error(responseMessage)
+          return
+        }
+      }
       toast.error(
         error instanceof Error && error.message
           ? error.message

@@ -5261,10 +5261,10 @@
     "Only super administrators can rename models or change model pricing.": "Only super administrators can rename models or change model pricing.",
     "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.",
     "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.",
-    "Ratio exposure was saved, but pricing could not be updated.": "Ratio exposure was saved, but pricing could not be updated."
+    "Ratio exposure was saved, but pricing could not be updated.": "Ratio exposure was saved, but pricing could not be updated.",
+    "Delete result is unknown. Do not retry; refresh and review the model list.": "Delete result is unknown. Do not retry; refresh and review the model list.",
+    "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list."
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
-  "Delete result is unknown. Do not retry; refresh and review the model list.": "Delete result is unknown. Do not retry; refresh and review the model list.",
-  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list."
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
 }
