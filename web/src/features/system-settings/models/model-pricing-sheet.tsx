@@ -35,6 +35,7 @@ import { Button } from '@/components/ui/button'
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
@@ -78,6 +79,7 @@ import {
   createInitialLaneState,
   createModelPricingSchema,
   hasValue,
+  isCompleteFinitePricingNumber,
   laneConfigs,
   numericDraftRegex,
   ratioFieldByLane,
@@ -456,6 +458,48 @@ export const ModelPricingEditorPanel = forwardRef<
   }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t])
 
   const validatePricingValues = useCallback(() => {
+    form.clearErrors([
+      'price',
+      'ratio',
+      'cacheRatio',
+      'createCacheRatio',
+      'completionRatio',
+      'imageRatio',
+      'audioRatio',
+      'audioCompletionRatio',
+    ])
+
+    if (
+      pricingMode === 'per-request' &&
+      !isCompleteFinitePricingNumber(form.getValues('price'))
+    ) {
+      form.setError('price', {
+        message: t('Please enter a valid number'),
+      })
+      return false
+    }
+
+    if (
+      pricingMode === 'per-token' &&
+      !isCompleteFinitePricingNumber(promptPrice)
+    ) {
+      form.setError('ratio', {
+        message: t('Please enter a valid number'),
+      })
+      return false
+    }
+
+    if (pricingMode === 'per-token') {
+      for (const { key } of laneConfigs) {
+        if (!laneEnabled[key]) continue
+        if (isCompleteFinitePricingNumber(lanePrices[key])) continue
+        form.setError(ratioFieldByLane[key], {
+          message: t('Please enter a valid number'),
+        })
+        return false
+      }
+    }
+
     if (
       pricingMode === 'per-token' &&
       toNumberOrNull(promptPrice) === null &&
@@ -652,6 +696,7 @@ export const ModelPricingEditorPanel = forwardRef<
                         <FieldDescription>
                           {t('USD price per 1M input tokens.')}
                         </FieldDescription>
+                        <FieldError errors={[form.formState.errors.ratio]} />
                       </Field>
 
                       <div className='grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(400px,1fr))]'>

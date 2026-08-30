@@ -84,6 +84,15 @@ export type PreviewRow = {
 }
 
 export const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
+const completePricingNumberRegex = /^(?:\d+|\d+\.\d+|\.\d+)$/
+
+export function isCompleteFinitePricingNumber(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value !== 'string') return false
+  return (
+    completePricingNumberRegex.test(value) && Number.isFinite(Number(value))
+  )
+}
 
 export const EMPTY_LANE_PRICES: Record<LaneKey, string> = {
   completion: '',

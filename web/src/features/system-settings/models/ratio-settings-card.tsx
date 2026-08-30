@@ -249,6 +249,7 @@ export function RatioSettingsCard({
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [modelSavePending, setModelSavePending] = useState(false)
+  const [modelEditorRevision, setModelEditorRevision] = useState(0)
   const modelSavePendingRef = useRef(false)
 
   const resetMutation = useMutation({
@@ -450,6 +451,7 @@ export function RatioSettingsCard({
               modelForm.reset(
                 formatModelFormValuesForEditing(committedFormValues)
               )
+              setModelEditorRevision((revision) => revision + 1)
               pricingCommitted = true
               pricingPending = pricingResponse.publication_pending
               pricingPublicationPendingRef.current = pricingPending
@@ -644,6 +646,7 @@ export function RatioSettingsCard({
             pricingMutation.isPending
           }
           isResetting={resetMutation.isPending}
+          editorRevision={modelEditorRevision}
           variant={tab === 'unset-models' ? 'unset' : 'default'}
         />
       )

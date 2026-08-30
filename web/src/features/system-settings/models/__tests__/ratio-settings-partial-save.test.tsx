@@ -33,6 +33,7 @@ for (const key of [
   'document',
   'navigator',
   'HTMLElement',
+  'HTMLInputElement',
   'HTMLTextAreaElement',
   'HTMLButtonElement',
   'SVGElement',
@@ -95,6 +96,7 @@ const committedDocuments = {
 const concurrentlyUpdatedDocuments = {
   ...committedDocuments,
   ModelRatio: '{ "concurrent": 2 }',
+  TaskBillingMode: '{ "video": "per_call" }',
 }
 
 function modelDefaultsFromDocuments(
@@ -142,13 +144,26 @@ function changeTextareaValue(input: HTMLTextAreaElement, value: string) {
   )
 }
 
+function changeInputValue(input: HTMLInputElement, value: string) {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    domWindow.HTMLInputElement.prototype,
+    'value'
+  )?.set
+  assert.ok(valueSetter)
+  valueSetter.call(input, value)
+  input.dispatchEvent(
+    new domWindow.Event('input', { bubbles: true }) as unknown as Event
+  )
+}
+
 const findButton = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
     button.textContent?.includes(label)
   )
 
 async function renderSettings(
-  refetchedModelDefaults?: () => ReturnType<typeof modelDefaultsFromDocuments>
+  refetchedModelDefaults?: () => ReturnType<typeof modelDefaultsFromDocuments>,
+  editMode: 'json' | 'visual' = 'json'
 ) {
   const container = document.createElement('div')
   document.body.append(container)
@@ -194,19 +209,39 @@ async function renderSettings(
     renderCard()
   })
 
-  const switchToJson = findButton('Switch to JSON')
-  assert.ok(switchToJson)
-  await act(async () => {
-    switchToJson.click()
-  })
-  const priceTextarea = document.querySelector<HTMLTextAreaElement>(
-    'textarea[name="ModelPrice"]'
-  )
+  if (editMode === 'json') {
+    const switchToJson = findButton('Switch to JSON')
+    assert.ok(switchToJson)
+    await act(async () => {
+      switchToJson.click()
+    })
+    const priceTextarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[name="ModelPrice"]'
+    )
+    assert.ok(priceTextarea)
+    await act(async () => {
+      changeTextareaValue(priceTextarea, '{"video":0.4}')
+    })
+  } else {
+    const videoRow = [
+      ...document.querySelectorAll<HTMLTableRowElement>('tr'),
+    ].find((row) => row.textContent?.includes('video'))
+    assert.ok(videoRow)
+    await act(async () => {
+      videoRow.click()
+    })
+    const priceInput = document.querySelector<HTMLInputElement>(
+      'input[name="price"]'
+    )
+    assert.ok(priceInput)
+    await act(async () => {
+      changeInputValue(priceInput, '0.4')
+    })
+  }
+
   const exposeSwitch = document.querySelector<HTMLElement>('[role="switch"]')
-  assert.ok(priceTextarea)
   assert.ok(exposeSwitch)
   await act(async () => {
-    changeTextareaValue(priceTextarea, '{"video":0.4}')
     exposeSwitch.click()
   })
 
@@ -222,6 +257,15 @@ async function renderSettings(
       assert.ok(saveButton)
       await act(async () => {
         saveButton.click()
+      })
+    },
+    reopenVideoEditor: async () => {
+      const videoRow = [
+        ...document.querySelectorAll<HTMLTableRowElement>('tr'),
+      ].find((row) => row.textContent?.includes('video'))
+      assert.ok(videoRow)
+      await act(async () => {
+        videoRow.click()
       })
     },
     saveTwiceSynchronously: async () => {
@@ -439,6 +483,51 @@ describe('ratio settings partial saves', () => {
         })
         await pricingResponse
       })
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('visual editor retries only exposure after committed pricing', async () => {
+    let exposureAttempts = 0
+    putResponder = async (url) => {
+      if (url === '/api/option/pricing') {
+        return {
+          data: {
+            success: true,
+            committed: true,
+            publication_recovered: true,
+            publication_pending: false,
+            data: concurrentlyUpdatedDocuments,
+          },
+        }
+      }
+      exposureAttempts += 1
+      return {
+        data:
+          exposureAttempts === 1
+            ? { success: false, message: 'exposure rejected' }
+            : { success: true, message: '' },
+      }
+    }
+    const view = await renderSettings(
+      () =>
+        modelDefaultsFromDocuments(
+          concurrentlyUpdatedDocuments,
+          exposureAttempts >= 2
+        ),
+      'visual'
+    )
+    try {
+      await view.save()
+      await view.reopenVideoEditor()
+      await view.save()
+
+      assert.equal(
+        putCalls.filter((call) => call.url === '/api/option/pricing').length,
+        1
+      )
+      assert.equal(exposureAttempts, 2)
     } finally {
       await view.cleanup()
     }

@@ -258,4 +258,39 @@ describe('model pricing persistence', () => {
       expected_documents: { ModelPrice: '{ "video": 0.2 }' },
     })
   })
+
+  for (const invalidPrice of ['.', '', '1.']) {
+    test(`rejects incomplete fixed price ${JSON.stringify(invalidPrice)} before deleting existing documents`, () => {
+      const original = documentsFixture()
+      const selection = buildModelPricingSelection({
+        name: 'video',
+        billingMode: 'per-request',
+        price: invalidPrice,
+      })
+
+      assert.throws(() =>
+        applyModelPricingMutation(original, {
+          kind: 'save',
+          name: 'source',
+          selection,
+        })
+      )
+      assert.equal(original.ModelPrice.source, 0.3)
+      assert.equal(original.ModelRatio.source, 1.5)
+    })
+  }
+
+  test('rejects a semantically incomplete ratio selection before deleting existing documents', () => {
+    const original = documentsFixture()
+
+    assert.throws(() =>
+      applyModelPricingMutation(original, {
+        kind: 'save',
+        name: 'source',
+        selection: { mode: 'per_token' },
+      })
+    )
+    assert.equal(original.ModelPrice.source, 0.3)
+    assert.equal(original.ModelRatio.source, 1.5)
+  })
 })

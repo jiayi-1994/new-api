@@ -321,4 +321,42 @@ describe('video resolution price editor', () => {
     assert.equal(await view.commitDraft(), null)
     await view.cleanup()
   })
+
+  for (const invalidPrice of ['.', '', '1.']) {
+    test(`commit rejects incomplete fixed price ${JSON.stringify(invalidPrice)}`, async () => {
+      const view = await renderPricingPanel({
+        name: 'video',
+        billingMode: 'per-request',
+        price: '0.3',
+      })
+      const priceInput = view.container.querySelector<HTMLInputElement>(
+        'input[name="price"]'
+      )
+      assert.ok(priceInput)
+      await act(async () => {
+        changeInputValue(priceInput, invalidPrice)
+      })
+
+      assert.equal(await view.commitDraft(), null)
+      await view.cleanup()
+    })
+  }
+
+  test('commit rejects an incomplete per-token input price', async () => {
+    const view = await renderPricingPanel({
+      name: 'video',
+      billingMode: 'per-token',
+      ratio: '1.5',
+    })
+    const promptInput = view.container.querySelector<HTMLInputElement>(
+      'input[inputmode="decimal"]'
+    )
+    assert.ok(promptInput)
+    await act(async () => {
+      changeInputValue(promptInput, '.')
+    })
+
+    assert.equal(await view.commitDraft(), null)
+    await view.cleanup()
+  })
 })

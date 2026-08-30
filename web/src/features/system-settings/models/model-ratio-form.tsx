@@ -70,6 +70,7 @@ type ModelRatioFormProps = {
   onReset: () => void
   isSaving: boolean
   isResetting: boolean
+  editorRevision: number
   variant?: 'default' | 'unset'
 }
 
@@ -187,6 +188,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
   onReset,
   isSaving,
   isResetting,
+  editorRevision,
   variant = 'default',
 }: ModelRatioFormProps) {
   const { t } = useTranslation()
@@ -280,6 +282,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
         {editMode === 'visual' ? (
           <div className='space-y-6'>
             <ModelRatioVisualEditor
+              key={editorRevision}
               ref={visualEditorRef}
               savedModelPrice={savedValues.ModelPrice}
               savedModelRatio={savedValues.ModelRatio}

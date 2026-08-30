@@ -67,12 +67,20 @@ const { createRoot } = await import('react-dom/client')
 const { api } = await import('@/lib/api')
 const { ROLE } = await import('@/lib/roles')
 const { useAuthStore } = await import('@/stores/auth-store')
-const { ModelMutateDrawer } = await import('../model-mutate-drawer')
+const drawerModule = await import('../model-mutate-drawer')
+const { ModelMutateDrawer } = drawerModule
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
   lng: 'en',
-  resources: { en: { translation: {} } },
+  resources: {
+    en: { translation: {} },
+    zh: {
+      translation: {
+        'Please enter a valid number': '请输入有效的数值',
+      },
+    },
+  },
 })
 
 const modelFixture = {
@@ -204,12 +212,13 @@ const submitButton = () =>
     button.textContent?.includes('Update Model')
   )
 
-beforeEach(() => {
+beforeEach(async () => {
   putCalls.length = 0
   putResponder = async () => ({
     data: { success: true, data: modelFixture },
   })
   setRole(ROLE.SUPER_ADMIN)
+  await i18n.changeLanguage('en')
 })
 
 after(() => {
@@ -420,6 +429,74 @@ describe('model drawer video resolution persistence', () => {
       }
     })
   }
+
+  test('localizes numeric validation errors in the active language', async () => {
+    await i18n.changeLanguage('zh')
+    const view = await renderDrawer()
+    try {
+      const perTokenRadio = document.querySelector<HTMLElement>('#per-token')
+      assert.ok(perTokenRadio)
+      await act(async () => {
+        perTokenRadio.click()
+      })
+      const ratioInput = document.querySelector<HTMLInputElement>(
+        'input[name="ratio"]'
+      )
+      assert.ok(ratioInput)
+      await act(async () => {
+        changeInputValue(ratioInput, '1x')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 0)
+      assert.match(document.body.textContent || '', /请输入有效的数值/)
+      assert.doesNotMatch(
+        document.body.textContent || '',
+        /Please enter a valid number/
+      )
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('builds numeric validation with the active translator', () => {
+    const createSchema = (
+      drawerModule as typeof drawerModule & {
+        createExtendedModelFormSchema?: (
+          translate: (key: string) => string
+        ) => {
+          safeParse: (value: unknown) => {
+            success: boolean
+            error?: { issues: Array<{ message: string }> }
+          }
+        }
+      }
+    ).createExtendedModelFormSchema
+    assert.equal(typeof createSchema, 'function')
+    assert.ok(createSchema)
+
+    const result = createSchema((key) =>
+      key === 'Please enter a valid number' ? '请输入有效的数值' : key
+    ).safeParse({
+      model_name: 'video',
+      description: '',
+      icon: '',
+      tags: [],
+      endpoints: '',
+      name_rule: 0,
+      status: true,
+      sync_official: true,
+      ratio: '1x',
+    })
+    assert.equal(result.success, false)
+    assert.ok(
+      result.error?.issues.some((issue) => issue.message === '请输入有效的数值')
+    )
+  })
 
   test('ordinary admins can save metadata but cannot rename or mutate pricing', async () => {
     setRole(ROLE.ADMIN)

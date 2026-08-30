@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { CheckSquare, RefreshCcw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -33,6 +33,7 @@ import {
 import type {
   DifferencesMap,
   RatioType,
+  SystemOptionsResponse,
   UpstreamChannel,
   UpstreamConfig,
 } from '../types'
@@ -52,6 +53,7 @@ import {
 } from './constants'
 import {
   buildPricingDocumentReplacement,
+  PRICING_DOCUMENT_KEYS,
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 import {
@@ -139,6 +141,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const [resolutions, setResolutions] = useState<ResolutionsMap>({})
   const [conflictItems, setConflictItems] = useState<ConflictItem[]>([])
   const [confirmLoading, setConfirmLoading] = useState(false)
+  const syncInFlightRef = useRef(false)
 
   const { data: channelsData } = useQuery({
     queryKey: ['upstream-channels'],
@@ -198,9 +201,35 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
     },
   })
 
-  const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
-    mutationFn: updatePricingCommand,
-    onSuccess: (data) => {
+  const { mutateAsync: syncMutate, isPending: isSyncPending } = useMutation({
+    mutationFn: async (command: Parameters<typeof updatePricingCommand>[0]) => {
+      const response = await updatePricingCommand(command)
+      if (!response.committed) {
+        throw new Error(response.message || t('Failed to sync prices'))
+      }
+      return response
+    },
+    onSuccess: async (data) => {
+      await queryClient.cancelQueries({ queryKey: ['system-options'] })
+      queryClient.setQueryData<SystemOptionsResponse>(
+        ['system-options'],
+        (current) => ({
+          success: true,
+          message: current?.message ?? '',
+          data: [
+            ...(current?.data.filter(
+              (option) =>
+                !PRICING_DOCUMENT_KEYS.includes(
+                  option.key as PricingDocumentKey
+                )
+            ) ?? []),
+            ...PRICING_DOCUMENT_KEYS.map((key) => ({
+              key,
+              value: data.data[key],
+            })),
+          ],
+        })
+      )
       if (data.publication_pending) {
         toast.warning(
           t(
@@ -209,8 +238,8 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         )
       } else {
         toast.success(t('Prices synced successfully'))
+        queryClient.invalidateQueries({ queryKey: ['system-options'] })
       }
-      queryClient.invalidateQueries({ queryKey: ['system-options'] })
 
       setDifferences((prevDiffs) => {
         const newDiffs = { ...prevDiffs }
@@ -357,83 +386,85 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
   const performSync = useCallback(
     async (currentRatios: ParsedRatios): Promise<boolean> => {
-      const finalRatios: Record<string, Record<string, number | string>> = {
-        ModelRatio: { ...currentRatios.ModelRatio },
-        CompletionRatio: { ...currentRatios.CompletionRatio },
-        CacheRatio: { ...currentRatios.CacheRatio },
-        CreateCacheRatio: { ...currentRatios.CreateCacheRatio },
-        ImageRatio: { ...currentRatios.ImageRatio },
-        AudioRatio: { ...currentRatios.AudioRatio },
-        AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
-        ModelPrice: { ...currentRatios.ModelPrice },
-        'billing_setting.billing_mode': {
-          ...currentRatios['billing_setting.billing_mode'],
-        },
-        'billing_setting.billing_expr': {
-          ...currentRatios['billing_setting.billing_expr'],
-        },
-      }
+      if (syncInFlightRef.current) return false
+      syncInFlightRef.current = true
 
-      Object.entries(resolutions).forEach(([model, ratios]) => {
-        const selectedTypes = Object.keys(ratios)
-        const hasPrice = selectedTypes.includes('model_price')
-        const hasRatio = selectedTypes.some((rt) =>
-          RATIO_SYNC_FIELDS.includes(rt as RatioType)
-        )
-
-        if (hasPrice) {
-          delete finalRatios.ModelRatio[model]
-          delete finalRatios.CompletionRatio[model]
-          delete finalRatios.CacheRatio[model]
-          delete finalRatios.CreateCacheRatio[model]
-          delete finalRatios.ImageRatio[model]
-          delete finalRatios.AudioRatio[model]
-          delete finalRatios.AudioCompletionRatio[model]
-        }
-        if (hasRatio) {
-          delete finalRatios.ModelPrice[model]
-        }
-
-        Object.entries(ratios).forEach(([ratioType, value]) => {
-          const optionKey = optionKeyBySyncField(ratioType)
-          finalRatios[optionKey][model] = NUMERIC_SYNC_FIELDS.has(ratioType)
-            ? Number(value)
-            : value
-        })
-      })
-
-      const currentDocuments = Object.fromEntries(
-        Object.entries(modelRatios).map(([key, value]) => [
-          key,
-          normalizeJsonString(value),
-        ])
-      ) as Partial<Record<PricingDocumentKey, string>>
-      const nextDocuments = Object.fromEntries(
-        Object.entries(finalRatios).map(([key, value]) => [
-          key,
-          JSON.stringify(value, null, 2),
-        ])
-      ) as Partial<Record<PricingDocumentKey, string>>
-      const replacement = buildPricingDocumentReplacement(
-        currentDocuments,
-        nextDocuments,
-        modelRatios
-      )
-
-      return new Promise<boolean>((resolve) => {
-        syncMutate(
-          {
-            kind: 'replace_documents',
-            target_name: '',
-            values: replacement.values,
-            expected_documents: replacement.expected_documents,
+      try {
+        const finalRatios: Record<string, Record<string, number | string>> = {
+          ModelRatio: { ...currentRatios.ModelRatio },
+          CompletionRatio: { ...currentRatios.CompletionRatio },
+          CacheRatio: { ...currentRatios.CacheRatio },
+          CreateCacheRatio: { ...currentRatios.CreateCacheRatio },
+          ImageRatio: { ...currentRatios.ImageRatio },
+          AudioRatio: { ...currentRatios.AudioRatio },
+          AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
+          ModelPrice: { ...currentRatios.ModelPrice },
+          'billing_setting.billing_mode': {
+            ...currentRatios['billing_setting.billing_mode'],
           },
-          {
-            onSuccess: () => resolve(true),
-            onError: () => resolve(false),
+          'billing_setting.billing_expr': {
+            ...currentRatios['billing_setting.billing_expr'],
+          },
+        }
+
+        Object.entries(resolutions).forEach(([model, ratios]) => {
+          const selectedTypes = Object.keys(ratios)
+          const hasPrice = selectedTypes.includes('model_price')
+          const hasRatio = selectedTypes.some((rt) =>
+            RATIO_SYNC_FIELDS.includes(rt as RatioType)
+          )
+
+          if (hasPrice) {
+            delete finalRatios.ModelRatio[model]
+            delete finalRatios.CompletionRatio[model]
+            delete finalRatios.CacheRatio[model]
+            delete finalRatios.CreateCacheRatio[model]
+            delete finalRatios.ImageRatio[model]
+            delete finalRatios.AudioRatio[model]
+            delete finalRatios.AudioCompletionRatio[model]
           }
+          if (hasRatio) {
+            delete finalRatios.ModelPrice[model]
+          }
+
+          Object.entries(ratios).forEach(([ratioType, value]) => {
+            const optionKey = optionKeyBySyncField(ratioType)
+            finalRatios[optionKey][model] = NUMERIC_SYNC_FIELDS.has(ratioType)
+              ? Number(value)
+              : value
+          })
+        })
+
+        const currentDocuments = Object.fromEntries(
+          Object.entries(modelRatios).map(([key, value]) => [
+            key,
+            normalizeJsonString(value),
+          ])
+        ) as Partial<Record<PricingDocumentKey, string>>
+        const nextDocuments = Object.fromEntries(
+          Object.entries(finalRatios).map(([key, value]) => [
+            key,
+            JSON.stringify(value, null, 2),
+          ])
+        ) as Partial<Record<PricingDocumentKey, string>>
+        const replacement = buildPricingDocumentReplacement(
+          currentDocuments,
+          nextDocuments,
+          modelRatios
         )
-      })
+
+        await syncMutate({
+          kind: 'replace_documents',
+          target_name: '',
+          values: replacement.values,
+          expected_documents: replacement.expected_documents,
+        })
+        return true
+      } catch {
+        return false
+      } finally {
+        syncInFlightRef.current = false
+      }
     },
     [modelRatios, resolutions, syncMutate]
   )

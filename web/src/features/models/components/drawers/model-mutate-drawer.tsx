@@ -103,34 +103,38 @@ function isFiniteNumberString(value: string | undefined): boolean {
   return value.trim() !== '' && Number.isFinite(Number(value))
 }
 
-const optionalFiniteNumberString = z
-  .string()
-  .optional()
-  .refine(isFiniteNumberString, 'Please enter a valid number')
-
 // Extended schema for ratio configuration (internal form state only)
-const extendedModelFormSchema = z.object({
-  id: z.number().optional(),
-  model_name: z.string().min(1, 'Model name is required'),
-  description: z.string(),
-  icon: z.string(),
-  tags: z.array(z.string()),
-  vendor_id: z.number().optional(),
-  endpoints: z.string(),
-  name_rule: z.number(),
-  status: z.boolean(),
-  sync_official: z.boolean(),
-  price: optionalFiniteNumberString,
-  ratio: optionalFiniteNumberString,
-  cacheRatio: optionalFiniteNumberString,
-  createCacheRatio: optionalFiniteNumberString,
-  completionRatio: optionalFiniteNumberString,
-  imageRatio: optionalFiniteNumberString,
-  audioRatio: optionalFiniteNumberString,
-  audioCompletionRatio: optionalFiniteNumberString,
-})
+export function createExtendedModelFormSchema(t: (key: string) => string) {
+  const optionalFiniteNumberString = z
+    .string()
+    .optional()
+    .refine(isFiniteNumberString, t('Please enter a valid number'))
 
-type ExtendedModelFormValues = z.infer<typeof extendedModelFormSchema>
+  return z.object({
+    id: z.number().optional(),
+    model_name: z.string().min(1, t('Model name is required')),
+    description: z.string(),
+    icon: z.string(),
+    tags: z.array(z.string()),
+    vendor_id: z.number().optional(),
+    endpoints: z.string(),
+    name_rule: z.number(),
+    status: z.boolean(),
+    sync_official: z.boolean(),
+    price: optionalFiniteNumberString,
+    ratio: optionalFiniteNumberString,
+    cacheRatio: optionalFiniteNumberString,
+    createCacheRatio: optionalFiniteNumberString,
+    completionRatio: optionalFiniteNumberString,
+    imageRatio: optionalFiniteNumberString,
+    audioRatio: optionalFiniteNumberString,
+    audioCompletionRatio: optionalFiniteNumberString,
+  })
+}
+
+type ExtendedModelFormValues = z.infer<
+  ReturnType<typeof createExtendedModelFormSchema>
+>
 
 type PricingMode = 'per-token' | 'per-request' | 'video_resolution'
 type PricingSubMode = 'ratio' | 'price'
@@ -322,6 +326,10 @@ export function ModelMutateDrawer({
   // depending on it: modelSettings is a fresh object on every system-options
   // refetch, and including it in the deps would reset the form under the user.
   const modelSettingsRef = useRef<ModelSettings | null>(null)
+  const extendedModelFormSchema = useMemo(
+    () => createExtendedModelFormSchema(t),
+    [t]
+  )
 
   // Fetch vendors for dropdown
   const { data: vendorsData } = useQuery({

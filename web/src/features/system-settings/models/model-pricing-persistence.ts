@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 
 import { safeJsonParse } from '../utils/json-parser'
-import type { ModelRatioData } from './model-pricing-core'
+import {
+  isCompleteFinitePricingNumber,
+  type ModelRatioData,
+} from './model-pricing-core'
 import { normalizeJsonString } from './utils'
 import {
   parseVideoResolutionPriceOption,
@@ -130,9 +133,7 @@ const stringDocumentKeys = [
 ] as const
 
 function numberOrUndefined(value?: string): number | undefined {
-  if (value === undefined || value === '') return undefined
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
+  return isCompleteFinitePricingNumber(value) ? Number(value) : undefined
 }
 
 export function buildModelPricingSelection(
@@ -295,6 +296,32 @@ function deletePricingName(documents: PricingDocuments, name: string) {
   delete documents.VideoResolutionPrice[name]
 }
 
+function assertCompletePricingSelection(selection: ModelPricingSelection) {
+  const numericValues = [
+    selection.price,
+    selection.ratio,
+    selection.cache_ratio,
+    selection.create_cache_ratio,
+    selection.completion_ratio,
+    selection.image_ratio,
+    selection.audio_ratio,
+    selection.audio_completion_ratio,
+  ]
+  if (
+    numericValues.some(
+      (value) => value !== undefined && !isCompleteFinitePricingNumber(value)
+    )
+  ) {
+    throw new Error('pricing selection contains an invalid number')
+  }
+  if (selection.mode === 'per_request' && selection.price === undefined) {
+    throw new Error('per-request pricing requires a complete fixed price')
+  }
+  if (selection.mode === 'per_token' && selection.ratio === undefined) {
+    throw new Error('per-token pricing requires a complete model ratio')
+  }
+}
+
 function applySelection(
   documents: PricingDocuments,
   name: string,
@@ -364,6 +391,9 @@ export function applyModelPricingMutation(
   documents: PricingDocuments,
   mutation: ModelPricingMutation
 ): PricingDocuments {
+  if ('selection' in mutation && mutation.selection) {
+    assertCompletePricingSelection(mutation.selection)
+  }
   const next = clonePricingDocuments(documents)
 
   if (mutation.kind === 'delete') {
