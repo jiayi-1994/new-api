@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -203,11 +204,18 @@ var publishVideoResolutionPriceOption = func(value string) error {
 
 func loadOptionsFromDatabase() {
 	modelPricingOptionMu.Lock()
-	pricingValues, pricingErr := loadCommittedPricingDocuments()
+	pricingValues, degradedPricingKeys, pricingErr := loadPublishablePricingDocuments()
 	if pricingErr != nil {
 		common.SysLog("failed to load pricing documents from database: " + pricingErr.Error())
-	} else if err := publishPricingDocumentsLowLevel(pricingValues); err != nil {
-		common.SysLog("failed to publish pricing documents: " + err.Error())
+	} else {
+		for _, key := range degradedPricingKeys {
+			common.SysError(fmt.Sprintf(
+				"stored pricing document %q failed validation; keeping the previously published document until it is repaired via the raw pricing editor",
+				key))
+		}
+		if err := publishPricingDocumentsLowLevel(pricingValues); err != nil {
+			common.SysLog("failed to publish pricing documents: " + err.Error())
+		}
 	}
 	modelPricingOptionMu.Unlock()
 

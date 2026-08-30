@@ -44,6 +44,10 @@ type PricingDocuments struct {
 	Strings         map[string]map[string]string
 	ResolutionPrice map[string]map[string]float64
 	Raw             map[string]string
+	// InvalidRawDocuments 是文档级隔离区（仅锁定/加载路径产生）：老构建落库的
+	// 整份坏文档保留原始字节、不进语义映射。写入侧的终值严格校验负责阻止它们
+	// 未经修复地随语义命令重写；replace_documents 覆盖它们即完成修复。
+	InvalidRawDocuments map[string]string
 }
 
 type PricingCommandKind string
@@ -226,98 +230,166 @@ func parseLockedPricingDocuments(values map[string]string) (*PricingDocuments, e
 	return parsePricingDocumentsWithMode(values, false)
 }
 
-func parsePricingDocumentsWithMode(values map[string]string, strictNumeric bool) (*PricingDocuments, error) {
+func parsePricingDocumentsWithMode(values map[string]string, strict bool) (*PricingDocuments, error) {
 	documents := &PricingDocuments{
-		Numeric:         make(map[string]map[string]float64, len(modelPricingNumericOptionKeys)),
-		InvalidNumeric:  make(map[string]map[string]json.RawMessage, len(modelPricingNumericOptionKeys)),
-		Strings:         make(map[string]map[string]string, len(modelPricingStringOptionKeys)),
-		ResolutionPrice: make(map[string]map[string]float64),
-		Raw:             make(map[string]string, len(modelPricingOptionKeys)),
+		Numeric:             make(map[string]map[string]float64, len(modelPricingNumericOptionKeys)),
+		InvalidNumeric:      make(map[string]map[string]json.RawMessage, len(modelPricingNumericOptionKeys)),
+		Strings:             make(map[string]map[string]string, len(modelPricingStringOptionKeys)),
+		ResolutionPrice:     make(map[string]map[string]float64),
+		Raw:                 make(map[string]string, len(modelPricingOptionKeys)),
+		InvalidRawDocuments: make(map[string]string),
+	}
+	// 严格模式（写入侧）任何失败都致命；宽松模式（锁定/加载侧）把整份坏文档
+	// 隔离起来，避免一份老构建落库的脏文档阻塞其余十一份的发布与修复。
+	quarantine := func(key string, err error) error {
+		if strict {
+			return err
+		}
+		documents.InvalidRawDocuments[key] = values[key]
+		return nil
 	}
 	for _, key := range modelPricingOptionKeys {
 		value, ok := values[key]
 		if !ok {
 			return nil, fmt.Errorf("missing pricing option %q", key)
 		}
-		if err := requireJSONObject(key, value); err != nil {
-			return nil, err
-		}
 		documents.Raw[key] = value
+		if err := requireJSONObject(key, value); err != nil {
+			if err := quarantine(key, err); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, key := range modelPricingNumericOptionKeys {
+		documents.Numeric[key] = make(map[string]float64)
+		documents.InvalidNumeric[key] = make(map[string]json.RawMessage)
+		if _, bad := documents.InvalidRawDocuments[key]; bad {
+			continue
+		}
 		var rawDocument map[string]json.RawMessage
 		if err := common.Unmarshal([]byte(values[key]), &rawDocument); err != nil {
-			return nil, fmt.Errorf("parse pricing option %q: %w", key, err)
+			if err := quarantine(key, fmt.Errorf("parse pricing option %q: %w", key, err)); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		document := make(map[string]float64, len(rawDocument))
 		invalidDocument := make(map[string]json.RawMessage)
+		var documentErr error
 		for model, rawValue := range rawDocument {
 			if strings.TrimSpace(model) == "" {
-				return nil, fmt.Errorf("pricing option %q contains a blank model key", key)
+				documentErr = fmt.Errorf("pricing option %q contains a blank model key", key)
+				break
 			}
 			if common.GetJsonType(rawValue) != "number" {
-				if strictNumeric {
-					return nil, fmt.Errorf("pricing option %q contains a non-number value for model %q", key, model)
+				if strict {
+					documentErr = fmt.Errorf("pricing option %q contains a non-number value for model %q", key, model)
+					break
 				}
 				invalidDocument[model] = rawValue
 				continue
 			}
 			var value float64
 			if err := common.Unmarshal(rawValue, &value); err != nil {
-				if strictNumeric {
-					return nil, fmt.Errorf("parse pricing option %q value for model %q: %w", key, model, err)
+				if strict {
+					documentErr = fmt.Errorf("parse pricing option %q value for model %q: %w", key, model, err)
+					break
 				}
 				invalidDocument[model] = rawValue
 				continue
 			}
 			if math.IsNaN(value) || math.IsInf(value, 0) {
-				if strictNumeric {
-					return nil, fmt.Errorf("pricing option %q contains a non-finite value for model %q", key, model)
+				if strict {
+					documentErr = fmt.Errorf("pricing option %q contains a non-finite value for model %q", key, model)
+					break
 				}
 				invalidDocument[model] = rawValue
 				continue
 			}
 			if value < 0 {
-				if strictNumeric {
-					return nil, fmt.Errorf("pricing option %q contains a negative value for model %q", key, model)
+				if strict {
+					documentErr = fmt.Errorf("pricing option %q contains a negative value for model %q", key, model)
+					break
 				}
 				invalidDocument[model] = rawValue
 				continue
 			}
 			document[model] = value
 		}
+		if documentErr != nil {
+			if err := quarantine(key, documentErr); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		documents.Numeric[key] = document
 		documents.InvalidNumeric[key] = invalidDocument
 	}
 	for _, key := range modelPricingStringOptionKeys {
+		documents.Strings[key] = make(map[string]string)
+		if _, bad := documents.InvalidRawDocuments[key]; bad {
+			continue
+		}
 		var document map[string]string
 		if err := common.Unmarshal([]byte(values[key]), &document); err != nil {
-			return nil, fmt.Errorf("parse pricing option %q: %w", key, err)
+			if err := quarantine(key, fmt.Errorf("parse pricing option %q: %w", key, err)); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if document == nil {
 			document = make(map[string]string)
 		}
+		var blankErr error
 		for model := range document {
 			if strings.TrimSpace(model) == "" {
-				return nil, fmt.Errorf("pricing option %q contains a blank model key", key)
+				blankErr = fmt.Errorf("pricing option %q contains a blank model key", key)
+				break
 			}
+		}
+		if blankErr != nil {
+			if err := quarantine(key, blankErr); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		documents.Strings[key] = document
 	}
-	if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(values[ratio_setting.VideoResolutionPriceOptionKey]); err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)
-	}
-	if err := common.Unmarshal([]byte(values[ratio_setting.VideoResolutionPriceOptionKey]), &documents.ResolutionPrice); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)
+	if _, bad := documents.InvalidRawDocuments[ratio_setting.VideoResolutionPriceOptionKey]; !bad {
+		if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(values[ratio_setting.VideoResolutionPriceOptionKey]); err != nil {
+			if err := quarantine(ratio_setting.VideoResolutionPriceOptionKey,
+				fmt.Errorf("invalid %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)); err != nil {
+				return nil, err
+			}
+		} else if err := common.Unmarshal([]byte(values[ratio_setting.VideoResolutionPriceOptionKey]), &documents.ResolutionPrice); err != nil {
+			if err := quarantine(ratio_setting.VideoResolutionPriceOptionKey,
+				fmt.Errorf("parse %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if documents.ResolutionPrice == nil {
 		documents.ResolutionPrice = make(map[string]map[string]float64)
 	}
-	if err := billing_setting.ValidatePricingDocuments(
-		values["billing_setting.billing_mode"],
-		values["billing_setting.billing_expr"],
-	); err != nil {
-		return nil, err
+	// billing mode 与 expression 成对约束：任一侧坏则两者一起隔离，
+	// 防止发布出没有表达式的 tiered 模式。
+	const billingModeKey = "billing_setting.billing_mode"
+	const billingExprKey = "billing_setting.billing_expr"
+	_, badMode := documents.InvalidRawDocuments[billingModeKey]
+	_, badExpr := documents.InvalidRawDocuments[billingExprKey]
+	if !badMode && !badExpr {
+		if err := billing_setting.ValidatePricingDocuments(values[billingModeKey], values[billingExprKey]); err != nil {
+			if strict {
+				return nil, err
+			}
+			badMode = true
+		}
+	}
+	if badMode || badExpr {
+		documents.InvalidRawDocuments[billingModeKey] = values[billingModeKey]
+		documents.InvalidRawDocuments[billingExprKey] = values[billingExprKey]
+		documents.Strings[billingModeKey] = make(map[string]string)
+		documents.Strings[billingExprKey] = make(map[string]string)
 	}
 	return documents, nil
 }
@@ -325,6 +397,10 @@ func parsePricingDocumentsWithMode(values map[string]string, strictNumeric bool)
 func pricingDocumentValues(documents *PricingDocuments) (map[string]string, error) {
 	values := make(map[string]string, len(modelPricingOptionKeys))
 	for _, key := range modelPricingNumericOptionKeys {
+		if rawValue, bad := documents.InvalidRawDocuments[key]; bad {
+			values[key] = rawValue
+			continue
+		}
 		rawDocument := make(map[string]json.RawMessage, len(documents.Numeric[key])+len(documents.InvalidNumeric[key]))
 		for model, rawValue := range documents.InvalidNumeric[key] {
 			rawDocument[model] = rawValue
@@ -343,17 +419,27 @@ func pricingDocumentValues(documents *PricingDocuments) (map[string]string, erro
 		values[key] = string(value)
 	}
 	for _, key := range modelPricingStringOptionKeys {
+		if rawValue, bad := documents.InvalidRawDocuments[key]; bad {
+			values[key] = rawValue
+			continue
+		}
 		value, err := common.Marshal(documents.Strings[key])
 		if err != nil {
 			return nil, fmt.Errorf("serialize pricing option %q: %w", key, err)
 		}
 		values[key] = string(value)
 	}
-	resolutionValue, err := common.Marshal(documents.ResolutionPrice)
-	if err != nil {
-		return nil, fmt.Errorf("serialize %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)
+	if rawValue, bad := documents.InvalidRawDocuments[ratio_setting.VideoResolutionPriceOptionKey]; bad {
+		values[ratio_setting.VideoResolutionPriceOptionKey] = rawValue
+	} else {
+		resolutionValue, err := common.Marshal(documents.ResolutionPrice)
+		if err != nil {
+			return nil, fmt.Errorf("serialize %s: %w", ratio_setting.VideoResolutionPriceOptionKey, err)
+		}
+		values[ratio_setting.VideoResolutionPriceOptionKey] = string(resolutionValue)
 	}
-	values[ratio_setting.VideoResolutionPriceOptionKey] = string(resolutionValue)
+	// 终值严格校验：隔离区文档按原始字节透传，因此任何未经本次命令修复的
+	// 文档级坏数据都会在这里被归类为客户端验证错误，绝不悄悄重写。
 	if _, err := parsePricingDocuments(values); err != nil {
 		return nil, pricingValidationError(err)
 	}
@@ -388,6 +474,33 @@ func loadCommittedPricingDocuments() (map[string]string, error) {
 		return nil
 	})
 	return values, err
+}
+
+// loadPublishablePricingDocuments 服务于启动/同步加载：整套定价绝不因一份
+// 老构建落库的坏文档而静默滞留在编译默认值。坏文档单独回退到当前已发布状态
+// （冷启动即内置默认），其余文档照常发布；降级的键返回给调用方响亮告警。
+func loadPublishablePricingDocuments() (map[string]string, []string, error) {
+	var values map[string]string
+	var degraded []string
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		documents, err := lockPricingDocuments(tx)
+		if err != nil {
+			return err
+		}
+		values = clonePricingValues(documents.Raw)
+		if len(documents.InvalidRawDocuments) == 0 {
+			return nil
+		}
+		fallbacks := currentPricingOptionDefaults()
+		for _, key := range modelPricingOptionKeys {
+			if _, bad := documents.InvalidRawDocuments[key]; bad {
+				values[key] = fallbacks[key]
+				degraded = append(degraded, key)
+			}
+		}
+		return nil
+	})
+	return values, degraded, err
 }
 
 func executePricingTransaction(mutation pricingTransactionMutation) (ModelPricingCommandResult, error) {

@@ -297,6 +297,105 @@ func TestExecuteModelPricingCommandRejectsSemanticWriteWithUnrepairedInvalidEntr
 	assert.JSONEq(t, legacy, storedPricingDocuments(t)["ModelPrice"])
 }
 
+// 启动/同步加载必须按文档降级：一份旧版遗留的坏文档只影响它自己
+// （回退到当前已发布状态），其余十一份照常发布，绝不能整套静默回到默认价。
+func TestBootLoadDegradesOnlyInvalidPricingDocuments(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	// 老版本能持久化的形状：空的分辨率表在旧构建里不经校验直接落库
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: ratio_setting.VideoResolutionPriceOptionKey}).
+		Update("value", `{"legacy":{}}`).Error)
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "ModelPrice"}).
+		Update("value", `{"owned":42}`).Error)
+
+	loadOptionsFromDatabase()
+
+	assert.Equal(t, 42.0, ratio_setting.GetModelPriceCopy()["owned"],
+		"valid documents must still publish when a sibling document is corrupt")
+	assert.Equal(t, map[string]float64{"720p": 0.1}, ratio_setting.GetVideoResolutionPriceMap()["owned"],
+		"the corrupt document alone falls back to the last published state")
+	assert.NotContains(t, ratio_setting.GetVideoResolutionPriceMap(), "legacy")
+}
+
+// billing mode 与 expression 是成对约束：任一侧坏则两者一起降级，
+// 其余文档不受影响。
+func TestBootLoadDegradesBillingPairTogether(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "billing_setting.billing_mode"}).
+		Update("value", `{"owned":"tiered_expr","phantom":"tiered_expr"}`).Error)
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "ModelPrice"}).
+		Update("value", `{"owned":42}`).Error)
+
+	loadOptionsFromDatabase()
+
+	assert.Equal(t, 42.0, ratio_setting.GetModelPriceCopy()["owned"])
+	mode, expr, hasExpr := billing_setting.GetBillingModeAndExpr("owned")
+	assert.Equal(t, billing_setting.BillingModeTieredExpr, mode)
+	require.True(t, hasExpr)
+	assert.Equal(t, `tier("owned", p * 1)`, expr)
+	phantomMode, _, _ := billing_setting.GetBillingModeAndExpr("phantom")
+	assert.NotEqual(t, billing_setting.BillingModeTieredExpr, phantomMode,
+		"the invalid billing pair must degrade together instead of publishing a tiered mode without its expression")
+	common.OptionMapRWMutex.RLock()
+	assert.JSONEq(t, fixture["billing_setting.billing_mode"], common.OptionMap["billing_setting.billing_mode"],
+		"the served billing mode document reflects the fallback, not the corrupt stored row")
+	common.OptionMapRWMutex.RUnlock()
+}
+
+// 原始文档编辑器必须能覆盖修复文档级坏数据，与数值级修复同一套语义。
+func TestExecuteModelPricingCommandRepairsLegacyInvalidResolutionDocument(t *testing.T) {
+	setupPricingCommandTest(t)
+	seedPricingDocuments(t, pricingCommandFixture())
+	corrupt := `{"legacy":{}}`
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: ratio_setting.VideoResolutionPriceOptionKey}).
+		Update("value", corrupt).Error)
+	corrected := `{"legacy":{"720p":0.5}}`
+
+	result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:              PricingCommandReplaceDocuments,
+		Values:            map[string]string{ratio_setting.VideoResolutionPriceOptionKey: corrected},
+		ExpectedDocuments: map[string]string{ratio_setting.VideoResolutionPriceOptionKey: corrupt},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Committed)
+	assert.JSONEq(t, corrected, storedPricingDocuments(t)[ratio_setting.VideoResolutionPriceOptionKey])
+}
+
+// 存在未修复的文档级坏数据时，语义写入必须被归类为客户端验证错误拒绝，
+// 且绝不能悄悄改写坏文档的原始内容。
+func TestSemanticWriteRejectsUnrepairedInvalidResolutionDocumentWithoutRewrite(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	corrupt := `{"legacy":{}}`
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: ratio_setting.VideoResolutionPriceOptionKey}).
+		Update("value", corrupt).Error)
+	price := 2.0
+
+	result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandSave,
+		TargetName: "owned",
+		Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+	})
+
+	var validationError *PricingValidationError
+	require.ErrorAs(t, err, &validationError)
+	assert.False(t, result.Committed)
+	stored := storedPricingDocuments(t)
+	assert.JSONEq(t, corrupt, stored[ratio_setting.VideoResolutionPriceOptionKey])
+	assert.JSONEq(t, fixture["ModelPrice"], stored["ModelPrice"])
+}
+
 func TestExecuteModelPricingCommandResolutionSavePreservesLegacy(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()
@@ -1292,22 +1391,3 @@ func TestPricingPublicationPendingConvergesOnNextDatabaseLoad(t *testing.T) {
 	assert.Equal(t, 6.5, ratio_setting.GetModelPriceCopy()["owned"])
 }
 
-func TestPricingPublicationLoadRejectsTieredModeWithoutExpression(t *testing.T) {
-	setupPricingCommandTest(t)
-	fixture := pricingCommandFixture()
-	seedPricingDocuments(t, fixture)
-	require.NoError(t, DB.Model(&Option{}).
-		Where(&Option{Key: "ModelPrice"}).
-		Update("value", `{"owned":99}`).Error)
-	require.NoError(t, DB.Model(&Option{}).
-		Where(&Option{Key: "billing_setting.billing_mode"}).
-		Update("value", `{"owned":"tiered_expr","missing":"tiered_expr"}`).Error)
-
-	loadOptionsFromDatabase()
-
-	assert.Equal(t, 1.7, ratio_setting.GetModelPriceCopy()["owned"])
-	assert.Equal(t, "ratio", stringPricingDocument(t, fixture, "billing_setting.billing_mode")["target"])
-	common.OptionMapRWMutex.RLock()
-	assert.JSONEq(t, fixture["billing_setting.billing_mode"], common.OptionMap["billing_setting.billing_mode"])
-	common.OptionMapRWMutex.RUnlock()
-}

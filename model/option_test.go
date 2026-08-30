@@ -127,14 +127,13 @@ func TestLoadOptionsFromDatabasePublishesVideoResolutionPriceIndependently(t *te
 	common.OptionMapRWMutex.RUnlock()
 }
 
-func TestLoadOptionsFromDatabaseRejectsInvalidVideoResolutionPriceWithoutPartialPublication(t *testing.T) {
+// 存储的分辨率文档坏掉时，加载把它单独降级为上一次发布的内容继续服务，
+// 不会把坏值发布出去，也不会阻塞其余文档的整套发布。
+func TestLoadOptionsFromDatabaseDegradesInvalidVideoResolutionPriceToLastPublished(t *testing.T) {
 	setupVideoResolutionOptionTest(t)
 	const validPrice = `{"sora-2":{"720p":0.1}}`
 	require.NoError(t, UpdateOption(ratio_setting.VideoResolutionPriceOptionKey, validPrice))
 	validExposed := ratio_setting.GetExposedData()["video_resolution_price"].(map[string]map[string]float64)
-	pricingMap = []Pricing{{ModelName: "cached-pricing"}}
-	vendorsList = []PricingVendor{{Name: "cached-vendor"}}
-	lastGetPricingTime = time.Now()
 
 	require.NoError(t, DB.Model(&Option{}).
 		Where(commonKeyCol+" = ?", ratio_setting.VideoResolutionPriceOptionKey).
@@ -147,9 +146,6 @@ func TestLoadOptionsFromDatabaseRejectsInvalidVideoResolutionPriceWithoutPartial
 	common.OptionMapRWMutex.RUnlock()
 	assert.Equal(t, map[string]map[string]float64{"sora-2": {"720p": 0.1}}, ratio_setting.GetVideoResolutionPriceMap())
 	assert.Equal(t, validExposed, ratio_setting.GetExposedData()["video_resolution_price"])
-	assert.Equal(t, []Pricing{{ModelName: "cached-pricing"}}, pricingMap)
-	assert.Equal(t, []PricingVendor{{Name: "cached-vendor"}}, vendorsList)
-	assert.False(t, lastGetPricingTime.IsZero())
 }
 
 func TestConcurrentVideoResolutionPriceUpdatesPublishLatestDatabaseValue(t *testing.T) {

@@ -443,7 +443,9 @@ func TestPricingCommandRouteRejectsNullInEveryNumericDocumentWithHTTP400(t *test
 	}
 }
 
-func TestPricingCommandRouteStoredDocumentErrorUsesHTTP500(t *testing.T) {
+// 与数值级先例一致：未修复的文档级坏数据阻塞语义命令时归类为可操作的
+// 客户端验证错误（400，点名坏文档），而不是笼统的 500。
+func TestPricingCommandRouteUnrepairedStoredDocumentIsClientActionable(t *testing.T) {
 	db := setupOptionControllerTest(t)
 	seedControllerPricingDocuments(t, "stored-invalid")
 	require.NoError(t, db.Model(&model.Option{}).
@@ -456,8 +458,9 @@ func TestPricingCommandRouteStoredDocumentErrorUsesHTTP500(t *testing.T) {
 
 	UpdatePricingOption(ctx)
 
-	assert.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
+	assert.Contains(t, recorder.Body.String(), "ModelPrice")
 }
 
 func TestPricingCommandRouteBulkCASRequiresEveryExpectedDocument(t *testing.T) {
