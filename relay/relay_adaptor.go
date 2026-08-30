@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -61,10 +62,10 @@ const taskBillingPlanContextKey = "task_billing_plan"
 // PrepareTaskBillingPlan freezes task billing before any channel is selected.
 // Repeated calls reuse the request-scoped plan so retries and task relay share
 // the same pricing kind, source model, request identity, and price table.
-func PrepareTaskBillingPlan(c *gin.Context, modelName, requestID string) *relaycommon.TaskBillingPlan {
+func PrepareTaskBillingPlan(c *gin.Context, modelName, requestID string) (*relaycommon.TaskBillingPlan, error) {
 	if value, ok := c.Get(taskBillingPlanContextKey); ok {
 		if plan, ok := value.(*relaycommon.TaskBillingPlan); ok && plan != nil {
-			return plan
+			return plan, nil
 		}
 	}
 	if requestID == "" {
@@ -75,15 +76,28 @@ func PrepareTaskBillingPlan(c *gin.Context, modelName, requestID string) *relayc
 		c.Set(common.RequestIdKey, requestID)
 	}
 
-	plan := relaycommon.NewLegacyTaskBillingPlan(modelName, requestID)
 	isSuno := constant.TaskPlatform(c.GetString("platform")) == constant.TaskPlatformSuno || constant.IsSunoModel(modelName)
+	var prices map[string]float64
 	if !isSuno {
-		if prices, ok := ratio_setting.GetVideoResolutionPrices(modelName); ok && len(prices) > 0 {
-			plan, _ = relaycommon.NewVideoResolutionTaskBillingPlan(modelName, requestID, prices)
-		}
+		prices, _ = ratio_setting.GetVideoResolutionPrices(modelName)
+	}
+	plan, err := makeTaskBillingPlan(modelName, requestID, isSuno, prices)
+	if err != nil {
+		return nil, err
 	}
 	c.Set(taskBillingPlanContextKey, plan)
-	return plan
+	return plan, nil
+}
+
+func makeTaskBillingPlan(modelName, requestID string, isSuno bool, prices map[string]float64) (*relaycommon.TaskBillingPlan, error) {
+	if isSuno || len(prices) == 0 {
+		return relaycommon.NewLegacyTaskBillingPlan(modelName, requestID), nil
+	}
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(modelName, requestID, prices)
+	if err != nil {
+		return nil, fmt.Errorf("prepare video resolution billing plan: %w", err)
+	}
+	return plan, nil
 }
 
 var taskChannelTypes = []int{

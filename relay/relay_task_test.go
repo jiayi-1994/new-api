@@ -254,6 +254,23 @@ func TestRelayTaskSubmitUsesOriginalModelForResolutionPrice(t *testing.T) {
 	assert.Equal(t, 1, base.requestCalls)
 }
 
+func TestRelayTaskSubmitAttachesMissingFrozenBillingPlan(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 4}}
+	c, info, deps, _ := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	info.RequestId = "direct-task-plan"
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	require.NotNil(t, info.TaskRelayInfo.BillingPlan)
+	assert.Equal(t, relaycommon.TaskBillingKindVideoResolution, info.TaskRelayInfo.BillingPlan.Kind())
+	prepared, err := PrepareTaskBillingPlan(c, info.OriginModelName, info.RequestId)
+	require.NoError(t, err)
+	assert.Same(t, prepared, info.TaskRelayInfo.BillingPlan)
+}
+
 func TestRelayTaskSubmitResolutionPriceAlwaysMultipliesDuration(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 8}}
 	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})

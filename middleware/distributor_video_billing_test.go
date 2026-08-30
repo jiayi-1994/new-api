@@ -9,6 +9,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -125,4 +127,67 @@ func TestDistributeRejectsResolutionRequestWhenNoCompatibleChannelExists(t *test
 
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"code":"video_resolution_not_supported"`)
+}
+
+func TestDistributeSkipsIncompatibleAffinityForResolutionPlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	common.MemoryCacheEnabled = true
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+	})
+
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices)) })
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"resolution-affinity-model":{"720p":0.1}}`))
+	highPriority, lowPriority := int64(100), int64(1)
+	require.NoError(t, db.Create(&[]model.Channel{
+		{Id: 992031, Type: constant.ChannelTypeKling, Key: "kling-key", Name: "incompatible-kling", Status: common.ChannelStatusEnabled, Group: "default", Models: "resolution-affinity-model", Priority: &highPriority},
+		{Id: 992032, Type: constant.ChannelTypeSora, Key: "sora-key", Name: "compatible-sora", Status: common.ChannelStatusEnabled, Group: "default", Models: "resolution-affinity-model", Priority: &lowPriority},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "resolution-affinity-model", ChannelId: 992031, Enabled: true, Priority: &highPriority},
+		{Group: "default", Model: "resolution-affinity-model", ChannelId: 992032, Enabled: true, Priority: &lowPriority},
+	}).Error)
+	model.InitChannelCache()
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	originalSetting := *setting
+	rule := operation_setting.ChannelAffinityRule{
+		Name:             "resolution-affinity-test",
+		ModelRegex:       []string{"^resolution-affinity-model$"},
+		PathRegex:        []string{"/v1/videos"},
+		KeySources:       []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "X-Affinity"}},
+		IncludeRuleName:  true,
+		IncludeModelName: true,
+	}
+	setting.Enabled = true
+	setting.Rules = []operation_setting.ChannelAffinityRule{rule}
+	t.Cleanup(func() { *setting = originalSetting })
+
+	seedRecorder := httptest.NewRecorder()
+	seedContext, _ := gin.CreateTestContext(seedRecorder)
+	seedContext.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	seedContext.Request.Header.Set("X-Affinity", "resolution-affinity-key")
+	_, found := service.GetPreferredChannelByAffinity(seedContext, "resolution-affinity-model", "default")
+	require.False(t, found)
+	service.RecordChannelAffinity(seedContext, 992031)
+	t.Cleanup(func() { service.ClearCurrentChannelAffinityCache(seedContext) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewBufferString(`{"model":"resolution-affinity-model"}`))
+	c.Request.Header.Set("Content-Type", gin.MIMEJSON)
+	c.Request.Header.Set("X-Affinity", "resolution-affinity-key")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+
+	Distribute()(c)
+
+	assert.Equal(t, constant.ChannelTypeSora, c.GetInt(string(constant.ContextKeyChannelType)))
 }

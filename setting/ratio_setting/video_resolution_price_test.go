@@ -72,6 +72,42 @@ func TestGetVideoResolutionPriceUsesCompactWildcardModel(t *testing.T) {
 	assert.Equal(t, 0.25, price)
 }
 
+func TestVideoResolutionPriceMatchesOnlyExactModelsAndCompactWildcard(t *testing.T) {
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{
+		"gemini-2.5-flash-thinking-*":{"720p":0.1},
+		"gpt-4o-gizmo-*":{"720p":0.2},
+		"*":{"720p":0.25},
+		"exact-model":{"720p":0.3},
+		"*-openai-compact":{"720p":0.4}
+	}`))
+	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })
+
+	assert.False(t, HasVideoResolutionPrice("gemini-2.5-flash-thinking-32768"))
+	assert.False(t, HasVideoResolutionPrice("gpt-4o-gizmo-preview"))
+	assert.False(t, HasVideoResolutionPrice("ordinary-model"))
+
+	exactPrice, ok := GetVideoResolutionPrice("exact-model", "720p")
+	require.True(t, ok)
+	assert.Equal(t, 0.3, exactPrice)
+
+	compactPrice, ok := GetVideoResolutionPrice("uncatalogued-openai-compact", "720p")
+	require.True(t, ok)
+	assert.Equal(t, 0.4, compactPrice)
+}
+
+func TestVideoResolutionPriceRejectsBlankModelKeysWithoutReplacingLiveConfig(t *testing.T) {
+	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"kept":{"720p":0.1}}`))
+	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })
+
+	for _, value := range []string{
+		`{"":{"720p":0.2}}`,
+		`{"   ":{"720p":0.2}}`,
+	} {
+		assert.Error(t, UpdateVideoResolutionPriceByJSONString(value))
+		assert.Equal(t, map[string]map[string]float64{"kept": {"720p": 0.1}}, GetVideoResolutionPriceMap())
+	}
+}
+
 func TestGetVideoResolutionPriceMapReturnsDeepCopy(t *testing.T) {
 	require.NoError(t, UpdateVideoResolutionPriceByJSONString(`{"sora-2":{"720p":0.1}}`))
 	t.Cleanup(func() { require.NoError(t, UpdateVideoResolutionPriceByJSONString("{}")) })

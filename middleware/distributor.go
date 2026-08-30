@@ -43,7 +43,11 @@ func Distribute() func(c *gin.Context) {
 		}
 		var billingPlan *relaycommon.TaskBillingPlan
 		if shouldSelectChannel && c.GetInt("relay_mode") == relayconstant.RelayModeVideoSubmit {
-			billingPlan = relay.PrepareTaskBillingPlan(c, modelRequest.Model, "")
+			billingPlan, err = relay.PrepareTaskBillingPlan(c, modelRequest.Model, "")
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCode("video_resolution_not_supported"))
+				return
+			}
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))

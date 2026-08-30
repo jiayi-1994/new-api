@@ -33,6 +33,9 @@ func parseVideoResolutionPriceJSON(value string) (map[string]map[string]float64,
 
 	prices := make(map[string]map[string]float64, len(rawModels))
 	for model, rawResolutions := range rawModels {
+		if strings.TrimSpace(model) == "" {
+			return nil, fmt.Errorf("video resolution price model key must not be blank")
+		}
 		if common.GetJsonType(rawResolutions) != "object" {
 			return nil, fmt.Errorf("video resolution prices for model %q must be a JSON object", model)
 		}
@@ -83,9 +86,8 @@ func cloneVideoResolutionPriceMap(source map[string]map[string]float64) map[stri
 }
 
 func matchingVideoResolutionPricesLocked(model string) (map[string]float64, bool) {
-	matchName := FormatMatchingModelName(model)
-	prices, ok := videoResolutionPrices[matchName]
-	if !ok && strings.HasSuffix(matchName, CompactModelSuffix) {
+	prices, ok := videoResolutionPrices[model]
+	if !ok && strings.HasSuffix(model, CompactModelSuffix) {
 		prices, ok = videoResolutionPrices[CompactWildcardModelKey]
 	}
 	return prices, ok

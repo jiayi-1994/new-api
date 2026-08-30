@@ -176,6 +176,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 }
 
 func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps relayTaskSubmitDeps) (*TaskSubmitResult, *dto.TaskError) {
+	if info.TaskRelayInfo == nil {
+		info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	}
+	if info.TaskRelayInfo.BillingPlan == nil {
+		billingPlan, err := PrepareTaskBillingPlan(c, info.OriginModelName, info.RequestId)
+		if err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "video_resolution_not_supported", http.StatusBadRequest)
+		}
+		info.TaskRelayInfo.BillingPlan = billingPlan
+	}
 	info.InitChannelMeta(c)
 
 	// 1. 确定 platform → 创建适配器 → 验证请求

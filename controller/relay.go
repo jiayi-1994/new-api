@@ -507,7 +507,11 @@ func RelayTask(c *gin.Context) {
 		respondTaskError(c, taskErr)
 		return
 	}
-	billingPlan := relay.PrepareTaskBillingPlan(c, relayInfo.OriginModelName, relayInfo.RequestId)
+	billingPlan, planErr := relay.PrepareTaskBillingPlan(c, relayInfo.OriginModelName, relayInfo.RequestId)
+	if planErr != nil {
+		respondTaskError(c, service.TaskErrorWrapperLocal(planErr, "video_resolution_not_supported", http.StatusBadRequest))
+		return
+	}
 	if relayInfo.TaskRelayInfo == nil {
 		relayInfo.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
 	}
