@@ -59,7 +59,7 @@ func TestUpdateOptionRejectsInvalidVideoResolutionPriceWithoutPersisting(t *test
 	assert.Equal(t, 0.1, price)
 }
 
-func TestVideoResolutionPriceUpdateLeavesTaskBillingModeUntouched(t *testing.T) {
+func TestVideoResolutionPriceUpdatePublishesSingleProtectedSnapshot(t *testing.T) {
 	setupVideoResolutionOptionTest(t)
 	const liveMode = `{"sora-2":"per_second"}`
 	const storedMode = `{"sora-2":"per_call"}`
@@ -77,13 +77,13 @@ func TestVideoResolutionPriceUpdateLeavesTaskBillingModeUntouched(t *testing.T) 
 	var taskOption Option
 	require.NoError(t, DB.First(&taskOption, "key = ?", "TaskBillingMode").Error)
 	assert.Equal(t, storedMode, taskOption.Value)
-	assert.Equal(t, map[string]string{"sora-2": ratio_setting.TaskBillingModePerSecond}, ratio_setting.GetTaskBillingModeMap())
+	assert.Equal(t, map[string]string{"sora-2": ratio_setting.TaskBillingModePerCall}, ratio_setting.GetTaskBillingModeMap())
 	common.OptionMapRWMutex.RLock()
-	assert.Equal(t, liveMode, common.OptionMap["TaskBillingMode"])
+	assert.Equal(t, storedMode, common.OptionMap["TaskBillingMode"])
 	common.OptionMapRWMutex.RUnlock()
 }
 
-func TestTaskBillingModeUpdateLeavesVideoResolutionPriceUntouched(t *testing.T) {
+func TestTaskBillingModeUpdatePublishesVideoResolutionPriceLast(t *testing.T) {
 	setupVideoResolutionOptionTest(t)
 	const livePrice = `{"sora-2":{"720p":0.1}}`
 	const storedPrice = `{"sora-2":{"720p":0.9}}`
@@ -98,9 +98,9 @@ func TestTaskBillingModeUpdateLeavesVideoResolutionPriceUntouched(t *testing.T) 
 	var priceOption Option
 	require.NoError(t, DB.First(&priceOption, "key = ?", ratio_setting.VideoResolutionPriceOptionKey).Error)
 	assert.Equal(t, storedPrice, priceOption.Value)
-	assert.Equal(t, map[string]map[string]float64{"sora-2": {"720p": 0.1}}, ratio_setting.GetVideoResolutionPriceMap())
+	assert.Equal(t, map[string]map[string]float64{"sora-2": {"720p": 0.9}}, ratio_setting.GetVideoResolutionPriceMap())
 	common.OptionMapRWMutex.RLock()
-	assert.Equal(t, livePrice, common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey])
+	assert.Equal(t, storedPrice, common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey])
 	common.OptionMapRWMutex.RUnlock()
 }
 
@@ -221,7 +221,7 @@ func TestConcurrentVideoResolutionPriceUpdatesPublishLatestDatabaseValue(t *test
 	assert.True(t, lastGetPricingTime.IsZero())
 }
 
-func TestUpdateOptionsBulkPublishesCommittedVideoResolutionPriceBeforeUnrelatedErrors(t *testing.T) {
+func TestUpdateOptionsBulkRejectsInvalidProtectedDocumentWithoutPersisting(t *testing.T) {
 	setupVideoResolutionOptionTest(t)
 	require.NoError(t, UpdateOption(
 		ratio_setting.VideoResolutionPriceOptionKey,
@@ -236,13 +236,13 @@ func TestUpdateOptionsBulkPublishesCommittedVideoResolutionPriceBeforeUnrelatedE
 
 	var stored Option
 	require.NoError(t, DB.First(&stored, "key = ?", ratio_setting.VideoResolutionPriceOptionKey).Error)
-	assert.Equal(t, `{"sora-2":{"720p":0.2}}`, stored.Value)
+	assert.Equal(t, `{"sora-2":{"720p":0.1}}`, stored.Value)
 	common.OptionMapRWMutex.RLock()
 	assert.Equal(t, stored.Value, common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey])
 	common.OptionMapRWMutex.RUnlock()
 	price, ok := ratio_setting.GetVideoResolutionPrice("sora-2", "720p")
 	assert.True(t, ok)
-	assert.Equal(t, 0.2, price)
+	assert.Equal(t, 0.1, price)
 	exposed := ratio_setting.GetExposedData()["video_resolution_price"].(map[string]map[string]float64)
-	assert.Equal(t, 0.2, exposed["sora-2"]["720p"])
+	assert.Equal(t, 0.1, exposed["sora-2"]["720p"])
 }

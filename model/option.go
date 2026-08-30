@@ -190,34 +190,26 @@ func InitOptionMap() {
 	loadOptionsFromDatabase()
 }
 
-var videoResolutionPriceOptionMu sync.Mutex
+var modelPricingOptionMu sync.Mutex
+
+// Kept as an alias for the model lifecycle methods until their controller
+// callers migrate to ModelPricingCommand. It is the same process lock used by
+// every protected pricing-document writer.
+var videoResolutionPriceOptionMu = &modelPricingOptionMu
 
 var publishVideoResolutionPriceOption = func(value string) error {
-	if err := ratio_setting.ValidateVideoResolutionPriceByJSONString(value); err != nil {
-		return err
-	}
-	if err := ratio_setting.UpdateVideoResolutionPriceByJSONString(value); err != nil {
-		return err
-	}
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey] = value
-	common.OptionMapRWMutex.Unlock()
-	InvalidatePricingCache()
-	return nil
+	return publishVideoResolutionPriceOptionLowLevel(value)
 }
 
 func loadOptionsFromDatabase() {
-	videoResolutionPriceOptionMu.Lock()
-	var priceOption Option
-	priceResult := DB.Where(commonKeyCol+" = ?", ratio_setting.VideoResolutionPriceOptionKey).Find(&priceOption)
-	if priceResult.Error != nil {
-		common.SysLog("failed to load video resolution prices from database: " + priceResult.Error.Error())
-	} else if priceResult.RowsAffected > 0 {
-		if err := publishVideoResolutionPriceOption(priceOption.Value); err != nil {
-			common.SysLog("failed to publish video resolution prices: " + err.Error())
-		}
+	modelPricingOptionMu.Lock()
+	pricingValues, pricingErr := loadCommittedPricingDocuments()
+	if pricingErr != nil {
+		common.SysLog("failed to load pricing documents from database: " + pricingErr.Error())
+	} else if err := publishPricingDocumentsLowLevel(pricingValues); err != nil {
+		common.SysLog("failed to publish pricing documents: " + err.Error())
 	}
-	videoResolutionPriceOptionMu.Unlock()
+	modelPricingOptionMu.Unlock()
 
 	options, err := AllOption()
 	if err != nil {
@@ -225,7 +217,7 @@ func loadOptionsFromDatabase() {
 		return
 	}
 	for _, option := range options {
-		if option.Key == ratio_setting.VideoResolutionPriceOptionKey {
+		if isProtectedPricingOption(option.Key) {
 			continue
 		}
 		err := updateOptionMap(option.Key, option.Value)
@@ -257,9 +249,9 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
-	if key == ratio_setting.VideoResolutionPriceOptionKey {
-		videoResolutionPriceOptionMu.Lock()
-		defer videoResolutionPriceOptionMu.Unlock()
+	if isProtectedPricingOption(key) {
+		_, err := updateProtectedPricingOptions(map[string]string{key: value})
+		return err
 	}
 	// Save to database first
 	option := Option{
@@ -275,9 +267,6 @@ func UpdateOption(key string, value string) error {
 	// otherwise it will execute Update (with all fields).
 	if err := DB.Save(&option).Error; err != nil {
 		return err
-	}
-	if key == ratio_setting.VideoResolutionPriceOptionKey {
-		return publishVideoResolutionPriceOption(value)
 	}
 	return updateOptionMap(key, value)
 }
@@ -296,10 +285,31 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
-	_, hasPrice := values[ratio_setting.VideoResolutionPriceOptionKey]
-	if hasPrice {
-		videoResolutionPriceOptionMu.Lock()
-		defer videoResolutionPriceOptionMu.Unlock()
+	hasProtected := false
+	for key := range values {
+		if isProtectedPricingOption(key) {
+			hasProtected = true
+			break
+		}
+	}
+	if hasProtected {
+		_, err := updateOptionsIncludingProtected(values)
+		if err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			if !isProtectedPricingOption(key) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := updateOptionMap(key, values[key]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -322,15 +332,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if hasPrice {
-		if err := publishVideoResolutionPriceOption(values[ratio_setting.VideoResolutionPriceOptionKey]); err != nil {
-			return err
-		}
-	}
 	for _, k := range keys {
-		if k == ratio_setting.VideoResolutionPriceOptionKey {
-			continue
-		}
 		if err := updateOptionMap(k, values[k]); err != nil {
 			return err
 		}

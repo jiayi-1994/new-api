@@ -1,8 +1,11 @@
 package billing_setting
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/samber/lo"
@@ -55,6 +58,22 @@ func GetBillingExprCopy() map[string]string {
 	return lo.Assign(billingSetting.BillingExpr)
 }
 
+func BillingMode2JSONString() string {
+	value, err := common.Marshal(GetBillingModeCopy())
+	if err != nil {
+		return "{}"
+	}
+	return string(value)
+}
+
+func BillingExpr2JSONString() string {
+	value, err := common.Marshal(GetBillingExprCopy())
+	if err != nil {
+		return "{}"
+	}
+	return string(value)
+}
+
 func GetPricingSyncData(base map[string]any) map[string]any {
 	extra := make(map[string]any, 2)
 	if modes := GetBillingModeCopy(); len(modes) > 0 {
@@ -72,6 +91,62 @@ func GetPricingSyncData(base map[string]any) map[string]any {
 
 func SmokeTestExpr(exprStr string) error {
 	return smokeTestExpr(exprStr)
+}
+
+// ValidatePricingDocuments validates the two persisted billing-setting maps
+// without publishing either one. Callers can therefore validate an entire
+// pricing snapshot before making any database or in-memory change.
+func ValidatePricingDocuments(modeValue, exprValue string) error {
+	if common.GetJsonType(json.RawMessage(strings.TrimSpace(modeValue))) != "object" {
+		return fmt.Errorf("billing modes must be a JSON object")
+	}
+	if common.GetJsonType(json.RawMessage(strings.TrimSpace(exprValue))) != "object" {
+		return fmt.Errorf("billing expressions must be a JSON object")
+	}
+	if err := common.ValidateJSONNoDuplicateKeys(json.RawMessage(modeValue)); err != nil {
+		return fmt.Errorf("parse billing modes: %w", err)
+	}
+	if err := common.ValidateJSONNoDuplicateKeys(json.RawMessage(exprValue)); err != nil {
+		return fmt.Errorf("parse billing expressions: %w", err)
+	}
+
+	var modes map[string]string
+	if err := common.Unmarshal([]byte(modeValue), &modes); err != nil {
+		return fmt.Errorf("parse billing modes: %w", err)
+	}
+	for model, mode := range modes {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("billing mode model key must not be blank")
+		}
+		if mode != BillingModeRatio && mode != BillingModeTieredExpr {
+			return fmt.Errorf("unsupported billing mode %q for model %q", mode, model)
+		}
+	}
+
+	var expressions map[string]string
+	if err := common.Unmarshal([]byte(exprValue), &expressions); err != nil {
+		return fmt.Errorf("parse billing expressions: %w", err)
+	}
+	for model, expression := range expressions {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("billing expression model key must not be blank")
+		}
+		if strings.TrimSpace(expression) == "" {
+			return fmt.Errorf("billing expression for model %q must not be blank", model)
+		}
+		if err := smokeTestExpr(expression); err != nil {
+			return fmt.Errorf("invalid billing expression for model %q: %w", model, err)
+		}
+	}
+	for model, mode := range modes {
+		if mode != BillingModeTieredExpr {
+			continue
+		}
+		if strings.TrimSpace(expressions[model]) == "" {
+			return fmt.Errorf("tiered billing mode for model %q requires a billing expression", model)
+		}
+	}
+	return nil
 }
 
 func smokeTestExpr(exprStr string) error {
