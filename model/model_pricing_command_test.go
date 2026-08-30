@@ -1390,4 +1390,3 @@ func TestPricingPublicationPendingConvergesOnNextDatabaseLoad(t *testing.T) {
 	loadOptionsFromDatabase()
 	assert.Equal(t, 6.5, ratio_setting.GetModelPriceCopy()["owned"])
 }
-
