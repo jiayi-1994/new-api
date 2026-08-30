@@ -448,6 +448,94 @@ describe('model drawer video resolution persistence', () => {
     await view.cleanup()
   })
 
+  // 未配置任何精确价格条目的模型（未定价/通配符/表达式计价）加载为 ratio 为空的
+  // per-token 草稿；未触碰定价的纯元数据保存不得被定价完整性校验拦截。
+  test('metadata-only save of an unpriced model is not blocked by pricing gates', async () => {
+    const originalOptionValues = pricingOptions.map((option) => option.value)
+    for (const option of pricingOptions) {
+      if (
+        [
+          'ModelPrice',
+          'ModelRatio',
+          'CreateCacheRatio',
+          'TaskBillingMode',
+          'VideoResolutionPrice',
+        ].includes(option.key)
+      ) {
+        option.value = '{}'
+      }
+    }
+    const view = await renderDrawer()
+    try {
+      const iconInput =
+        document.querySelector<HTMLInputElement>('input[name="icon"]')
+      assert.ok(iconInput)
+      await act(async () => {
+        changeInputValue(iconInput, 'unpriced-icon')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 1)
+      assert.equal(Object.hasOwn(putCalls[0].body as object, 'pricing'), false)
+    } finally {
+      await view.cleanup()
+      pricingOptions.forEach((option, index) => {
+        option.value = originalOptionValues[index]
+      })
+    }
+  })
+
+  // 表达式计价（tiered_expr）模型的定价归属在系统定价页：抽屉里的按次/按量
+  // 改价会让后端 deletePricingName 连带删除 billing 表达式，必须被拦截；
+  // 纯元数据保存不受影响。
+  test('blocks per-token pricing edits on an expression-priced model', async () => {
+    const originalOptionValues = pricingOptions.map((option) => option.value)
+    for (const option of pricingOptions) {
+      if (
+        [
+          'ModelPrice',
+          'ModelRatio',
+          'CreateCacheRatio',
+          'TaskBillingMode',
+          'VideoResolutionPrice',
+        ].includes(option.key)
+      ) {
+        option.value = '{}'
+      }
+      if (option.key === 'billing_setting.billing_mode') {
+        option.value = '{"video":"tiered_expr"}'
+      }
+      if (option.key === 'billing_setting.billing_expr') {
+        option.value = '{"video":"tier(\\"video\\", p * 1)"}'
+      }
+    }
+    const view = await renderDrawer()
+    try {
+      const ratioInput =
+        document.querySelector<HTMLInputElement>('input[name="ratio"]')
+      assert.ok(ratioInput)
+      await act(async () => {
+        changeInputValue(ratioInput, '2')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 0)
+    } finally {
+      await view.cleanup()
+      pricingOptions.forEach((option, index) => {
+        option.value = originalOptionValues[index]
+      })
+    }
+  })
+
   test('omits pricing during an untouched rename so the backend moves all documents', async () => {
     const view = await renderDrawer()
     const nameInput = document.querySelector<HTMLInputElement>(

@@ -173,6 +173,23 @@ function lookupTaskBillingMode(
   )
 }
 
+// 表达式计价（tiered_expr）的归属在系统定价页；抽屉据此拦截会摧毁表达式的改价
+function lookupBillingMode(
+  settings: ModelSettings | null,
+  modelName: string
+): string {
+  if (!settings || !modelName) return ''
+  return (
+    safeJsonParse<Record<string, string>>(
+      settings['billing_setting.billing_mode'],
+      {
+        fallback: {},
+        silent: true,
+      }
+    )[modelName] || ''
+  )
+}
+
 // Pricing is not stored on the model row: it lives in system options as
 // model-name keyed JSON maps, so the drawer reads those maps to populate its
 // optional pricing selection. Unchanged pricing is omitted from the request.
@@ -541,8 +558,51 @@ export function ModelMutateDrawer({
       if (submittingRef.current) return
       submittingRef.current = true
 
-      if (
+      // 完整性校验只对「会被发送的定价草稿」把关：未定价/通配符/表达式计价的
+      // 模型加载为空草稿，未触碰定价的纯元数据保存与改名不得被拦截。
+      const draftPricingFields: PricingFields = {
+        price: values.price,
+        ratio: values.ratio,
+        cacheRatio: values.cacheRatio,
+        createCacheRatio: values.createCacheRatio,
+        completionRatio: values.completionRatio,
+        imageRatio: values.imageRatio,
+        audioRatio: values.audioRatio,
+        audioCompletionRatio: values.audioCompletionRatio,
+      }
+      const draftResolutionPrices = resolutionValidation.prices ?? {}
+      const currentPricingSignature = pricingDraftSignature(
+        pricingMode,
+        draftPricingFields,
+        taskBillingMode,
+        draftResolutionPrices
+      )
+      const pricingTouched =
         canManagePricing &&
+        currentPricingSignature !== loadedPricingSignatureRef.current
+
+      // 按次/按量选择会让后端 deletePricingName 连带删除 billing 表达式，
+      // 这份配置抽屉从未加载也从未展示，不能被静默覆盖。
+      if (
+        pricingTouched &&
+        pricingMode !== 'video_resolution' &&
+        lookupBillingMode(
+          modelSettingsRef.current,
+          modelData?.data?.model_name ??
+            currentRow?.model_name ??
+            values.model_name
+        ) === 'tiered_expr'
+      ) {
+        toast.error(
+          t(
+            'This model is priced by a billing expression; edit its pricing in the pricing settings page'
+          )
+        )
+        submittingRef.current = false
+        return
+      }
+      if (
+        pricingTouched &&
         pricingMode === 'video_resolution' &&
         (resolutionValidation.prices === null ||
           Object.keys(resolutionValidation.prices).length === 0)
@@ -552,7 +612,7 @@ export function ModelMutateDrawer({
         return
       }
       if (
-        canManagePricing &&
+        pricingTouched &&
         pricingMode === 'per-request' &&
         !isCompleteFinitePricingNumber(values.price)
       ) {
@@ -564,7 +624,7 @@ export function ModelMutateDrawer({
         return
       }
       if (
-        canManagePricing &&
+        pricingTouched &&
         pricingMode === 'per-token' &&
         !isCompleteFinitePricingNumber(values.ratio)
       ) {
@@ -613,23 +673,13 @@ export function ModelMutateDrawer({
           audioRatio,
           audioCompletionRatio,
         }
-        const resolutionPrices = resolutionValidation.prices ?? {}
-        const currentPricingSignature = pricingDraftSignature(
-          pricingMode,
-          pricingFields,
-          taskBillingMode,
-          resolutionPrices
-        )
         let pricing: ModelPricingSelection | undefined
-        if (
-          canManagePricing &&
-          currentPricingSignature !== loadedPricingSignatureRef.current
-        ) {
+        if (pricingTouched) {
           pricing =
             pricingMode === 'video_resolution'
               ? {
                   mode: 'video_resolution',
-                  resolution_prices: resolutionPrices,
+                  resolution_prices: draftResolutionPrices,
                 }
               : buildModelPricingSelection({
                   name: submittedModelName,
