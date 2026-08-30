@@ -36,6 +36,7 @@ import {
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import type { SystemOptionsResponse } from '../types'
 import { GroupRatioForm } from './group-ratio-form'
 import {
   buildPricingDocumentReplacement,
@@ -43,6 +44,7 @@ import {
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 import { ModelRatioForm } from './model-ratio-form'
+import { adoptCommittedPricingDocuments } from './pricing-document-cache'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
@@ -432,10 +434,11 @@ export function RatioSettingsCard({
               expected_documents: replacement.expected_documents,
             })
             if (pricingResponse.committed) {
-              const committedDocuments = pricingResponse.data as Record<
-                PricingDocumentKey,
-                string
-              >
+              const committedDocuments = pricingResponse.data
+              await adoptCommittedPricingDocuments(
+                queryClient,
+                committedDocuments
+              )
               modelRawDefaults.current = committedDocuments
               const committedFormValues = modelFormValuesFromDocuments(
                 committedDocuments,
@@ -481,6 +484,26 @@ export function RatioSettingsCard({
               }
               modelNormalizedDefaults.current = committedNormalized
               setSavedModelValues(committedNormalized)
+              queryClient.setQueryData<SystemOptionsResponse>(
+                ['system-options'],
+                (current) => {
+                  if (!current) return current
+                  const value = String(normalized.ExposeRatioEnabled)
+                  const hasExposureOption = current.data.some(
+                    (option) => option.key === 'ExposeRatioEnabled'
+                  )
+                  return {
+                    ...current,
+                    data: hasExposureOption
+                      ? current.data.map((option) =>
+                          option.key === 'ExposeRatioEnabled'
+                            ? { ...option, value }
+                            : option
+                        )
+                      : [...current.data, { key: 'ExposeRatioEnabled', value }],
+                  }
+                }
+              )
               exposureSaved = true
             } else {
               exposureFailureMessage =

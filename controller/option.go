@@ -145,6 +145,7 @@ func writePricingCommandSuccess(c *gin.Context, result model.ModelPricingCommand
 		"success":               true,
 		"message":               message,
 		"data":                  data,
+		"pricing_documents":     result.Values,
 		"committed":             result.Committed,
 		"publication_recovered": result.PublicationRecovered,
 		"publication_pending":   result.PublicationPending,

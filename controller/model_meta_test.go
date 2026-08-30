@@ -128,6 +128,19 @@ func modelMetaContext(method, path, body string, role int) (*gin.Context, *httpt
 	return c, recorder
 }
 
+type modelMutationResponseEnvelope struct {
+	Success          bool              `json:"success"`
+	Data             *model.Model      `json:"data"`
+	PricingDocuments map[string]string `json:"pricing_documents"`
+}
+
+func decodeModelMutationResponse(t *testing.T, recorder *httptest.ResponseRecorder) modelMutationResponseEnvelope {
+	t.Helper()
+	var response modelMutationResponseEnvelope
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	return response
+}
+
 func TestModelMetaPricingLegacyCreateWithoutPricing(t *testing.T) {
 	db := setupModelMetaControllerTest(t)
 	c, recorder := modelMetaContext(http.MethodPost, "/api/models/", `{"model_name":"legacy-create","description":"legacy"}`, common.RoleAdminUser)
@@ -203,6 +216,24 @@ func TestModelMetaPricingCreateRequiresRoot(t *testing.T) {
 	assert.Zero(t, count)
 }
 
+func TestModelMetaPricingCreateReturnsModelAndCommittedPricingDocuments(t *testing.T) {
+	setupModelMetaControllerTest(t)
+	c, recorder := modelMetaContext(http.MethodPost, "/api/models/", `{
+		"model_name":"root-priced-create",
+		"pricing":{"mode":"per_request","price":1.25}
+	}`, common.RoleRootUser)
+
+	CreateModelMeta(c)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	response := decodeModelMutationResponse(t, recorder)
+	require.True(t, response.Success)
+	require.NotNil(t, response.Data)
+	assert.Equal(t, "root-priced-create", response.Data.ModelName)
+	require.Len(t, response.PricingDocuments, len(pricingDocumentsForControllerModel("unused")))
+	assert.JSONEq(t, `{"root-priced-create":1.25}`, response.PricingDocuments["ModelPrice"])
+}
+
 func TestModelMetaPricingSameNameSaveRequiresRoot(t *testing.T) {
 	db := setupModelMetaControllerTest(t)
 	item := &model.Model{ModelName: "admin-priced-save", Status: 1, SyncOfficial: 1}
@@ -222,6 +253,30 @@ func TestModelMetaPricingSameNameSaveRequiresRoot(t *testing.T) {
 	var option model.Option
 	require.NoError(t, db.First(&option, "key = ?", "ModelPrice").Error)
 	assert.JSONEq(t, `{"admin-priced-save":1.25,"untouched":2.5}`, option.Value)
+}
+
+func TestModelMetaPricingSameNameSaveReturnsModelAndCommittedPricingDocuments(t *testing.T) {
+	setupModelMetaControllerTest(t)
+	item := &model.Model{ModelName: "root-priced-save", Status: 1, SyncOfficial: 1}
+	require.NoError(t, item.Insert())
+	seedControllerPricingDocuments(t, item.ModelName)
+	c, recorder := modelMetaContext(http.MethodPut, "/api/models/", fmt.Sprintf(`{
+		"id":%d,
+		"model_name":"root-priced-save",
+		"status":1,
+		"sync_official":1,
+		"pricing":{"mode":"per_request","price":9}
+	}`, item.Id), common.RoleRootUser)
+
+	UpdateModelMeta(c)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	response := decodeModelMutationResponse(t, recorder)
+	require.True(t, response.Success)
+	require.NotNil(t, response.Data)
+	assert.Equal(t, item.Id, response.Data.Id)
+	require.Len(t, response.PricingDocuments, len(pricingDocumentsForControllerModel("unused")))
+	assert.JSONEq(t, `{"root-priced-save":9,"untouched":2.5}`, response.PricingDocuments["ModelPrice"])
 }
 
 func TestModelMetaPricingRenameRequiresRoot(t *testing.T) {
@@ -265,6 +320,14 @@ func TestModelMetaPricingRenameWithoutSelectionMovesAllDocuments(t *testing.T) {
 	require.NoError(t, db.First(&stored, item.Id).Error)
 	assert.Equal(t, "root-rename-target", stored.ModelName)
 	assertControllerPricingName(t, db, "root-rename-source", "root-rename-target")
+	response := decodeModelMutationResponse(t, recorder)
+	require.Len(t, response.PricingDocuments, len(pricingDocumentsForControllerModel("unused")))
+	for key, raw := range response.PricingDocuments {
+		var document map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(raw, &document), key)
+		assert.NotContains(t, document, "root-rename-source", key)
+		assert.Contains(t, document, "root-rename-target", key)
+	}
 }
 
 func TestModelMetaPricingDuplicateRenameRollsBack(t *testing.T) {
@@ -324,4 +387,11 @@ func TestModelMetaPricingDeleteRemovesAllDocuments(t *testing.T) {
 	require.NoError(t, db.Model(&model.Model{}).Where("id = ?", item.Id).Count(&count).Error)
 	assert.Zero(t, count)
 	assertControllerPricingName(t, db, item.ModelName, "")
+	response := decodeModelMutationResponse(t, recorder)
+	require.Len(t, response.PricingDocuments, len(pricingDocumentsForControllerModel("unused")))
+	for key, raw := range response.PricingDocuments {
+		var document map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(raw, &document), key)
+		assert.NotContains(t, document, item.ModelName, key)
+	}
 }

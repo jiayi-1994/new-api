@@ -33,7 +33,6 @@ import {
 import type {
   DifferencesMap,
   RatioType,
-  SystemOptionsResponse,
   UpstreamChannel,
   UpstreamConfig,
 } from '../types'
@@ -53,9 +52,9 @@ import {
 } from './constants'
 import {
   buildPricingDocumentReplacement,
-  PRICING_DOCUMENT_KEYS,
   type PricingDocumentKey,
 } from './model-pricing-persistence'
+import { adoptCommittedPricingDocuments } from './pricing-document-cache'
 import {
   NUMERIC_SYNC_FIELDS,
   RATIO_SYNC_FIELDS,
@@ -210,26 +209,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       return response
     },
     onSuccess: async (data) => {
-      await queryClient.cancelQueries({ queryKey: ['system-options'] })
-      queryClient.setQueryData<SystemOptionsResponse>(
-        ['system-options'],
-        (current) => ({
-          success: true,
-          message: current?.message ?? '',
-          data: [
-            ...(current?.data.filter(
-              (option) =>
-                !PRICING_DOCUMENT_KEYS.includes(
-                  option.key as PricingDocumentKey
-                )
-            ) ?? []),
-            ...PRICING_DOCUMENT_KEYS.map((key) => ({
-              key,
-              value: data.data[key],
-            })),
-          ],
-        })
-      )
+      await adoptCommittedPricingDocuments(queryClient, data.data)
       if (data.publication_pending) {
         toast.warning(
           t(

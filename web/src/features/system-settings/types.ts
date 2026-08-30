@@ -62,7 +62,10 @@ export type PricingCommandRequest = {
 export type PricingCommandResponse = {
   success: boolean
   message: string
-  data: Record<string, string>
+  data: Record<
+    import('./models/model-pricing-persistence').PricingDocumentKey,
+    string
+  >
   committed: boolean
   publication_recovered: boolean
   publication_pending: boolean

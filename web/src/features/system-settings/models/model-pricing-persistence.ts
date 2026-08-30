@@ -133,12 +133,28 @@ const stringDocumentKeys = [
 ] as const
 
 function numberOrUndefined(value?: string): number | undefined {
-  return isCompleteFinitePricingNumber(value) ? Number(value) : undefined
+  if (value === undefined || value === '') return undefined
+  if (!isCompleteFinitePricingNumber(value)) {
+    throw new Error('pricing data contains an invalid number')
+  }
+  return Number(value)
 }
 
 export function buildModelPricingSelection(
   data: ModelRatioData
 ): ModelPricingSelection {
+  if (
+    data.billingMode === 'per-request' &&
+    !isCompleteFinitePricingNumber(data.price)
+  ) {
+    throw new Error('per-request pricing requires a complete fixed price')
+  }
+  if (
+    data.billingMode === 'per-token' &&
+    !isCompleteFinitePricingNumber(data.ratio)
+  ) {
+    throw new Error('per-token pricing requires a complete model ratio')
+  }
   const allNumbers = {
     price: numberOrUndefined(data.price),
     ratio: numberOrUndefined(data.ratio),

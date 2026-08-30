@@ -259,26 +259,44 @@ describe('model pricing persistence', () => {
     })
   })
 
-  for (const invalidPrice of ['.', '', '1.']) {
-    test(`rejects incomplete fixed price ${JSON.stringify(invalidPrice)} before deleting existing documents`, () => {
+  for (const invalidPrice of ['', '.', '1.', '-1', '1e2']) {
+    test(`refuses to build an incomplete fixed price ${JSON.stringify(invalidPrice)}`, () => {
       const original = documentsFixture()
-      const selection = buildModelPricingSelection({
-        name: 'video',
-        billingMode: 'per-request',
-        price: invalidPrice,
-      })
 
       assert.throws(() =>
-        applyModelPricingMutation(original, {
-          kind: 'save',
-          name: 'source',
-          selection,
+        buildModelPricingSelection({
+          name: 'video',
+          billingMode: 'per-request',
+          price: invalidPrice,
         })
       )
       assert.equal(original.ModelPrice.source, 0.3)
       assert.equal(original.ModelRatio.source, 1.5)
     })
   }
+
+  for (const invalidRatio of ['', '.', '1.', '-1', '1e2']) {
+    test(`refuses to build an incomplete model ratio ${JSON.stringify(invalidRatio)}`, () => {
+      assert.throws(() =>
+        buildModelPricingSelection({
+          name: 'video',
+          billingMode: 'per-token',
+          ratio: invalidRatio,
+        })
+      )
+    })
+  }
+
+  test('refuses an invalid populated optional ratio instead of omitting it', () => {
+    assert.throws(() =>
+      buildModelPricingSelection({
+        name: 'video',
+        billingMode: 'per-token',
+        ratio: '1',
+        createCacheRatio: '1.',
+      })
+    )
+  })
 
   test('rejects a semantically incomplete ratio selection before deleting existing documents', () => {
     const original = documentsFixture()
@@ -288,6 +306,20 @@ describe('model pricing persistence', () => {
         kind: 'save',
         name: 'source',
         selection: { mode: 'per_token' },
+      })
+    )
+    assert.equal(original.ModelPrice.source, 0.3)
+    assert.equal(original.ModelRatio.source, 1.5)
+  })
+
+  test('rejects a negative numeric selection before deleting existing documents', () => {
+    const original = documentsFixture()
+
+    assert.throws(() =>
+      applyModelPricingMutation(original, {
+        kind: 'save',
+        name: 'source',
+        selection: { mode: 'per_token', ratio: -1 },
       })
     )
     assert.equal(original.ModelPrice.source, 0.3)

@@ -87,10 +87,12 @@ export const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
 const completePricingNumberRegex = /^(?:\d+|\d+\.\d+|\.\d+)$/
 
 export function isCompleteFinitePricingNumber(value: unknown): boolean {
-  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0
   if (typeof value !== 'string') return false
   return (
-    completePricingNumberRegex.test(value) && Number.isFinite(Number(value))
+    completePricingNumberRegex.test(value) &&
+    Number.isFinite(Number(value)) &&
+    Number(value) >= 0
   )
 }
 

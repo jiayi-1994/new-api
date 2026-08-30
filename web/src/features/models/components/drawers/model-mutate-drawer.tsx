@@ -23,7 +23,6 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import * as z from 'zod'
 
 import {
   SideDrawerSection,
@@ -76,10 +75,12 @@ import {
   getOptionValue,
   useSystemOptions,
 } from '@/features/system-settings/hooks/use-system-options'
+import { isCompleteFinitePricingNumber } from '@/features/system-settings/models/model-pricing-core'
 import {
   buildModelPricingSelection,
   type ModelPricingSelection,
 } from '@/features/system-settings/models/model-pricing-persistence'
+import { adoptCommittedPricingDocuments } from '@/features/system-settings/models/pricing-document-cache'
 import { VideoResolutionPriceEditor } from '@/features/system-settings/models/video-resolution-price-editor'
 import {
   parseVideoResolutionPriceOption,
@@ -96,45 +97,11 @@ import { useAuthStore } from '@/stores/auth-store'
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
+import {
+  createExtendedModelFormSchema,
+  type ExtendedModelFormValues,
+} from '../../lib/model-mutate-schema'
 import type { Model } from '../../types'
-
-function isFiniteNumberString(value: string | undefined): boolean {
-  if (value === undefined || value === '') return true
-  return value.trim() !== '' && Number.isFinite(Number(value))
-}
-
-// Extended schema for ratio configuration (internal form state only)
-export function createExtendedModelFormSchema(t: (key: string) => string) {
-  const optionalFiniteNumberString = z
-    .string()
-    .optional()
-    .refine(isFiniteNumberString, t('Please enter a valid number'))
-
-  return z.object({
-    id: z.number().optional(),
-    model_name: z.string().min(1, t('Model name is required')),
-    description: z.string(),
-    icon: z.string(),
-    tags: z.array(z.string()),
-    vendor_id: z.number().optional(),
-    endpoints: z.string(),
-    name_rule: z.number(),
-    status: z.boolean(),
-    sync_official: z.boolean(),
-    price: optionalFiniteNumberString,
-    ratio: optionalFiniteNumberString,
-    cacheRatio: optionalFiniteNumberString,
-    createCacheRatio: optionalFiniteNumberString,
-    completionRatio: optionalFiniteNumberString,
-    imageRatio: optionalFiniteNumberString,
-    audioRatio: optionalFiniteNumberString,
-    audioCompletionRatio: optionalFiniteNumberString,
-  })
-}
-
-type ExtendedModelFormValues = z.infer<
-  ReturnType<typeof createExtendedModelFormSchema>
->
 
 type PricingMode = 'per-token' | 'per-request' | 'video_resolution'
 type PricingSubMode = 'ratio' | 'price'
@@ -455,7 +422,7 @@ export function ModelMutateDrawer({
 
   const handlePromptPriceChange = (value: string) => {
     setPromptPrice(value)
-    if (value && isFiniteNumberString(value)) {
+    if (value && isCompleteFinitePricingNumber(value)) {
       const ratio = Number(value) / 2
       form.setValue('ratio', ratio.toString())
     } else {
@@ -467,9 +434,9 @@ export function ModelMutateDrawer({
     setCompletionPrice(value)
     if (
       value &&
-      isFiniteNumberString(value) &&
+      isCompleteFinitePricingNumber(value) &&
       promptPrice &&
-      isFiniteNumberString(promptPrice) &&
+      isCompleteFinitePricingNumber(promptPrice) &&
       Number(promptPrice) > 0
     ) {
       const completionRatio = Number(value) / Number(promptPrice)
@@ -581,8 +548,26 @@ export function ModelMutateDrawer({
         submittingRef.current = false
         return
       }
-      if (canManagePricing && pricingMode === 'per-request' && !values.price) {
+      if (
+        canManagePricing &&
+        pricingMode === 'per-request' &&
+        !isCompleteFinitePricingNumber(values.price)
+      ) {
+        form.setError('price', {
+          message: t('Please enter a valid number'),
+        })
         toast.error(t('Price is required'))
+        submittingRef.current = false
+        return
+      }
+      if (
+        canManagePricing &&
+        pricingMode === 'per-token' &&
+        !isCompleteFinitePricingNumber(values.ratio)
+      ) {
+        form.setError('ratio', {
+          message: t('Please enter a valid number'),
+        })
         submittingRef.current = false
         return
       }
@@ -664,6 +649,12 @@ export function ModelMutateDrawer({
               })
 
         if (response.success) {
+          if (response.pricing_documents) {
+            await adoptCommittedPricingDocuments(
+              queryClient,
+              response.pricing_documents
+            )
+          }
           if (response.publication_pending) {
             toast.warning(
               t(
@@ -680,7 +671,9 @@ export function ModelMutateDrawer({
             )
           }
           queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
-          queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          if (!response.publication_pending) {
+            queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          }
           onOpenChange(false)
         } else {
           toast.error(response.message || 'Operation failed')
@@ -703,6 +696,7 @@ export function ModelMutateDrawer({
       canManagePricing,
       modelData,
       currentRow,
+      form,
       t,
     ]
   )
@@ -1131,7 +1125,10 @@ export function ModelMutateDrawer({
                                   onChange={(e) => {
                                     const value = e.target.value
                                     field.onChange(value)
-                                    if (value && isFiniteNumberString(value)) {
+                                    if (
+                                      value &&
+                                      isCompleteFinitePricingNumber(value)
+                                    ) {
                                       setPromptPrice(
                                         (Number(value) * 2).toString()
                                       )
@@ -1143,7 +1140,7 @@ export function ModelMutateDrawer({
                               </FormControl>
                               <FormDescription>
                                 {field.value &&
-                                isFiniteNumberString(field.value)
+                                isCompleteFinitePricingNumber(field.value)
                                   ? `Calculated price: $${(Number(field.value) * 2).toFixed(4)} per 1M tokens`
                                   : t('Multiplier for prompt tokens.')}
                               </FormDescription>
@@ -1169,9 +1166,9 @@ export function ModelMutateDrawer({
                                     const ratio = form.getValues('ratio')
                                     if (
                                       value &&
-                                      isFiniteNumberString(value) &&
+                                      isCompleteFinitePricingNumber(value) &&
                                       ratio &&
-                                      isFiniteNumberString(ratio)
+                                      isCompleteFinitePricingNumber(ratio)
                                     ) {
                                       const compPrice =
                                         Number(ratio) * 2 * Number(value)
@@ -1184,9 +1181,9 @@ export function ModelMutateDrawer({
                               </FormControl>
                               <FormDescription>
                                 {field.value &&
-                                isFiniteNumberString(field.value) &&
+                                isCompleteFinitePricingNumber(field.value) &&
                                 promptPrice &&
-                                isFiniteNumberString(promptPrice)
+                                isCompleteFinitePricingNumber(promptPrice)
                                   ? `Calculated price: $${(Number(promptPrice) * Number(field.value)).toFixed(4)} per 1M tokens`
                                   : t('Multiplier for completion tokens.')}
                               </FormDescription>
@@ -1208,11 +1205,13 @@ export function ModelMutateDrawer({
                             }
                           />
                           <p className='text-muted-foreground text-sm'>
-                            {promptPrice && isFiniteNumberString(promptPrice)
+                            {promptPrice &&
+                            isCompleteFinitePricingNumber(promptPrice)
                               ? `Calculated ratio: ${(Number(promptPrice) / 2).toFixed(4)}`
                               : t('Enter Input price to calculate ratio')}
                           </p>
-                          {promptPrice && !isFiniteNumberString(promptPrice) ? (
+                          {promptPrice &&
+                          !isCompleteFinitePricingNumber(promptPrice) ? (
                             <p className='text-destructive text-sm'>
                               {t('Please enter a valid number')}
                             </p>
@@ -1231,15 +1230,15 @@ export function ModelMutateDrawer({
                           />
                           <p className='text-muted-foreground text-sm'>
                             {completionPrice &&
-                            isFiniteNumberString(completionPrice) &&
+                            isCompleteFinitePricingNumber(completionPrice) &&
                             promptPrice &&
-                            isFiniteNumberString(promptPrice) &&
+                            isCompleteFinitePricingNumber(promptPrice) &&
                             Number(promptPrice) > 0
                               ? `Calculated ratio: ${(Number(completionPrice) / Number(promptPrice)).toFixed(4)}`
                               : t('Enter Completion price to calculate ratio')}
                           </p>
                           {completionPrice &&
-                          !isFiniteNumberString(completionPrice) ? (
+                          !isCompleteFinitePricingNumber(completionPrice) ? (
                             <p className='text-destructive text-sm'>
                               {t('Please enter a valid number')}
                             </p>

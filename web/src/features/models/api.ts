@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ModelPricingSelection } from '@/features/system-settings/models/model-pricing-persistence'
+import type {
+  ModelPricingSelection,
+  PricingDocumentKey,
+} from '@/features/system-settings/models/model-pricing-persistence'
 import { api } from '@/lib/api'
 
 import type {
@@ -95,6 +98,7 @@ export type ModelMutationResponse = {
   success: boolean
   message?: string
   data?: Model
+  pricing_documents?: Record<PricingDocumentKey, string>
   committed?: boolean
   publication_recovered?: boolean
   publication_pending?: boolean
@@ -114,9 +118,7 @@ export async function updateModelStatus(
 /**
  * Delete model
  */
-export async function deleteModel(
-  id: number
-): Promise<{ success: boolean; message?: string }> {
+export async function deleteModel(id: number): Promise<ModelMutationResponse> {
   const res = await api.delete(`/api/models/${id}`)
   return res.data
 }

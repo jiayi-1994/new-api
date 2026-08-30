@@ -69,6 +69,8 @@ const { ROLE } = await import('@/lib/roles')
 const { useAuthStore } = await import('@/stores/auth-store')
 const drawerModule = await import('../model-mutate-drawer')
 const { ModelMutateDrawer } = drawerModule
+const { createExtendedModelFormSchema } =
+  await import('../../../lib/model-mutate-schema')
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
@@ -114,7 +116,11 @@ const pricingOptions = [
 ]
 
 const putCalls: Array<{ url: string; body: unknown }> = []
+const postCalls: Array<{ url: string; body: unknown }> = []
 let putResponder = async () => ({
+  data: { success: true, data: modelFixture },
+})
+let postResponder = async () => ({
   data: { success: true, data: modelFixture },
 })
 spyOn(api, 'get').mockImplementation((async (url: string) => {
@@ -133,6 +139,10 @@ spyOn(api, 'put').mockImplementation((async (url: string, body: unknown) => {
   putCalls.push({ url, body })
   return putResponder()
 }) as typeof api.put)
+spyOn(api, 'post').mockImplementation((async (url: string, body: unknown) => {
+  postCalls.push({ url, body })
+  return postResponder()
+}) as typeof api.post)
 
 function changeInputValue(input: HTMLInputElement, value: string) {
   const valueSetter = Object.getOwnPropertyDescriptor(
@@ -162,7 +172,9 @@ function setRole(role: number) {
   useAuthStore.getState().auth.setUser({ id: 1, username: 'admin', role })
 }
 
-async function renderDrawer() {
+async function renderDrawer(
+  currentRow: typeof modelFixture | null = modelFixture
+) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
@@ -182,20 +194,27 @@ async function renderDrawer() {
     success: true,
     data: { items: [] },
   })
-  await act(async () => {
+  const render = () =>
     root.render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
           <ModelMutateDrawer
             open
             onOpenChange={() => undefined}
-            currentRow={modelFixture}
+            currentRow={currentRow}
           />
         </I18nextProvider>
       </QueryClientProvider>
     )
+  await act(async () => {
+    render()
   })
   return {
+    queryClient,
+    remount: async () => {
+      await act(async () => root.render(null))
+      await act(async () => render())
+    },
     cleanup: async () => {
       await act(async () => root.unmount())
       queryClient.clear()
@@ -209,12 +228,16 @@ const resolutionPriceInput = () =>
 
 const submitButton = () =>
   [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
-    button.textContent?.includes('Update Model')
+    /(?:Update Model|Save changes)/.test(button.textContent || '')
   )
 
 beforeEach(async () => {
   putCalls.length = 0
+  postCalls.length = 0
   putResponder = async () => ({
+    data: { success: true, data: modelFixture },
+  })
+  postResponder = async () => ({
     data: { success: true, data: modelFixture },
   })
   setRole(ROLE.SUPER_ADMIN)
@@ -318,6 +341,54 @@ describe('model drawer video resolution persistence', () => {
     await view.cleanup()
   })
 
+  test('publication pending adopts committed documents before the drawer is reopened', async () => {
+    const committedPricingOptions = Object.fromEntries(
+      pricingOptions.map((option) => [option.key, option.value])
+    )
+    committedPricingOptions.VideoResolutionPrice =
+      '{ "video": { "1080p": 0.25 } }'
+    putResponder = async () => ({
+      data: {
+        success: true,
+        data: modelFixture,
+        committed: true,
+        publication_pending: true,
+        pricing_documents: committedPricingOptions,
+      },
+    })
+    const view = await renderDrawer()
+    try {
+      const input = resolutionPriceInput()
+      assert.ok(input)
+      await act(async () => {
+        changeInputValue(input, '0.2')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+      await view.remount()
+
+      const cached = view.queryClient.getQueryData<{
+        data: Array<{ key: string; value: string }>
+      }>(['system-options'])
+      assert.deepEqual(
+        Object.fromEntries(
+          cached?.data
+            .filter((option) => option.key in committedPricingOptions)
+            .map((option) => [option.key, option.value]) ?? []
+        ),
+        committedPricingOptions
+      )
+      const reopenedPrice = resolutionPriceInput()
+      assert.ok(reopenedPrice)
+      assert.equal(reopenedPrice.value, '0.25')
+    } finally {
+      await view.cleanup()
+    }
+  })
+
   test('omits pricing for an untouched same-name metadata save', async () => {
     const view = await renderDrawer()
     const iconInput =
@@ -397,7 +468,16 @@ describe('model drawer video resolution persistence', () => {
     await view.cleanup()
   })
 
-  for (const invalidValue of ['1x', 'Infinity', '   ']) {
+  for (const invalidValue of [
+    '1x',
+    'Infinity',
+    '   ',
+    '',
+    '.',
+    '1.',
+    '-1',
+    '1e2',
+  ]) {
     test(`does not submit a destructive ratio mutation for ${JSON.stringify(invalidValue)}`, async () => {
       const view = await renderDrawer()
       try {
@@ -429,6 +509,67 @@ describe('model drawer video resolution persistence', () => {
       }
     })
   }
+
+  test('does not create a model when the selected ratio is incomplete', async () => {
+    const view = await renderDrawer(null)
+    try {
+      const nameInput = document.querySelector<HTMLInputElement>(
+        'input[name="model_name"]'
+      )
+      const ratioInput = document.querySelector<HTMLInputElement>(
+        'input[name="ratio"]'
+      )
+      assert.ok(nameInput)
+      assert.ok(ratioInput)
+      await act(async () => {
+        changeInputValue(nameInput, 'new-video')
+        changeInputValue(ratioInput, '1.')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(postCalls.length, 0)
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('does not update when a populated advanced ratio is incomplete', async () => {
+    const view = await renderDrawer()
+    try {
+      const perTokenRadio = document.querySelector<HTMLElement>('#per-token')
+      assert.ok(perTokenRadio)
+      await act(async () => {
+        perTokenRadio.click()
+      })
+      const advancedButton = [
+        ...document.querySelectorAll<HTMLButtonElement>('button'),
+      ].find((button) => button.textContent?.includes('Advanced options'))
+      assert.ok(advancedButton)
+      await act(async () => {
+        advancedButton.click()
+      })
+      const cacheRatioInput = document.querySelector<HTMLInputElement>(
+        'input[name="cacheRatio"]'
+      )
+      assert.ok(cacheRatioInput)
+      await act(async () => {
+        changeInputValue(cacheRatioInput, '1.')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 0)
+    } finally {
+      await view.cleanup()
+    }
+  })
 
   test('localizes numeric validation errors in the active language', async () => {
     await i18n.changeLanguage('zh')
@@ -464,22 +605,7 @@ describe('model drawer video resolution persistence', () => {
   })
 
   test('builds numeric validation with the active translator', () => {
-    const createSchema = (
-      drawerModule as typeof drawerModule & {
-        createExtendedModelFormSchema?: (
-          translate: (key: string) => string
-        ) => {
-          safeParse: (value: unknown) => {
-            success: boolean
-            error?: { issues: Array<{ message: string }> }
-          }
-        }
-      }
-    ).createExtendedModelFormSchema
-    assert.equal(typeof createSchema, 'function')
-    assert.ok(createSchema)
-
-    const result = createSchema((key) =>
+    const result = createExtendedModelFormSchema((key) =>
       key === 'Please enter a valid number' ? '请输入有效的数值' : key
     ).safeParse({
       model_name: 'video',
@@ -496,6 +622,10 @@ describe('model drawer video resolution persistence', () => {
     assert.ok(
       result.error?.issues.some((issue) => issue.message === '请输入有效的数值')
     )
+  })
+
+  test('keeps schema factories out of the React component module', () => {
+    assert.equal('createExtendedModelFormSchema' in drawerModule, false)
   })
 
   test('ordinary admins can save metadata but cannot rename or mutate pricing', async () => {

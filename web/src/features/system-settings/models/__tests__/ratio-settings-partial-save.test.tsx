@@ -24,6 +24,8 @@ import { Window } from 'happy-dom'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 
+import type { SystemOptionsResponse } from '../../types'
+
 // @ts-expect-error Bun exposes module mocks at runtime without installed types.
 const { mock, spyOn } = await import('bun:test')
 
@@ -171,6 +173,15 @@ async function renderSettings(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+  queryClient.setQueryData<SystemOptionsResponse>(['system-options'], {
+    success: true,
+    message: '',
+    data: [
+      ...Object.entries(rawDocuments).map(([key, value]) => ({ key, value })),
+      { key: 'ExposeRatioEnabled', value: 'false' },
+      { key: 'UnrelatedOption', value: 'preserved' },
+    ],
+  })
   let refetchCount = 0
   const originalRefetch = queryClient.refetchQueries.bind(queryClient)
   queryClient.refetchQueries = (async (...args) => {
@@ -268,6 +279,31 @@ async function renderSettings(
         videoRow.click()
       })
     },
+    remountFromCache: async () => {
+      const cached = queryClient.getQueryData<SystemOptionsResponse>([
+        'system-options',
+      ])
+      const values = Object.fromEntries(
+        cached?.data.map((option) => [option.key, option.value]) ?? []
+      ) as typeof rawDocuments & { ExposeRatioEnabled?: string }
+      const cachedDocuments = Object.fromEntries(
+        (Object.keys(rawDocuments) as Array<keyof typeof rawDocuments>).map(
+          (key) => [key, values[key]]
+        )
+      ) as typeof rawDocuments
+      await act(async () => root.render(null))
+      await act(async () =>
+        renderCard(
+          modelDefaultsFromDocuments(
+            cachedDocuments,
+            values.ExposeRatioEnabled === 'true'
+          )
+        )
+      )
+      const switchToJson = findButton('Switch to JSON')
+      assert.ok(switchToJson)
+      await act(async () => switchToJson.click())
+    },
     saveTwiceSynchronously: async () => {
       const saveButton = findButton('Save model prices')
       assert.ok(saveButton)
@@ -297,6 +333,44 @@ after(() => {
 })
 
 describe('ratio settings partial saves', () => {
+  test('publication pending remains the committed snapshot after the editor is remounted', async () => {
+    putResponder = async (url) => ({
+      data:
+        url === '/api/option/pricing'
+          ? {
+              success: true,
+              committed: true,
+              publication_recovered: false,
+              publication_pending: true,
+              data: concurrentlyUpdatedDocuments,
+            }
+          : { success: true, message: '' },
+    })
+    const view = await renderSettings()
+    try {
+      await view.save()
+      await view.remountFromCache()
+
+      const priceTextarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[name="ModelPrice"]'
+      )
+      const ratioTextarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[name="ModelRatio"]'
+      )
+      assert.ok(priceTextarea)
+      assert.ok(ratioTextarea)
+      assert.deepEqual(JSON.parse(priceTextarea.value), { video: 0.4 })
+      assert.deepEqual(JSON.parse(ratioTextarea.value), { concurrent: 2 })
+      const exposeSwitch =
+        document.querySelector<HTMLElement>('[role="switch"]')
+      assert.ok(exposeSwitch)
+      assert.equal(exposeSwitch.getAttribute('aria-checked'), 'true')
+      assert.equal(view.refetchCount(), 0)
+    } finally {
+      await view.cleanup()
+    }
+  })
+
   for (const publication of [
     { name: 'pending', publicationPending: true, publicationRecovered: false },
     {
