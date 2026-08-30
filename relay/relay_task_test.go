@@ -26,6 +26,8 @@ type taskSubmitTestAdaptor struct {
 	taskcommon.BaseBilling
 	selection       relaycommon.VideoBillingSelection
 	resolveErr      *dto.TaskError
+	estimateRatios  map[string]float64
+	adjustRatios    map[string]float64
 	didEstimate     bool
 	didAdjust       bool
 	didBuildRequest bool
@@ -42,11 +44,17 @@ func (a *taskSubmitTestAdaptor) ValidateRequestAndSetAction(_ *gin.Context, info
 
 func (a *taskSubmitTestAdaptor) EstimateBilling(*gin.Context, *relaycommon.RelayInfo) map[string]float64 {
 	a.didEstimate = true
+	if a.estimateRatios != nil {
+		return a.estimateRatios
+	}
 	return map[string]float64{"seconds": 99, "size": 99}
 }
 
 func (a *taskSubmitTestAdaptor) AdjustBillingOnSubmit(*relaycommon.RelayInfo, []byte) map[string]float64 {
 	a.didAdjust = true
+	if a.adjustRatios != nil {
+		return a.adjustRatios
+	}
 	return map[string]float64{"seconds": 99, "size": 99}
 }
 
@@ -159,7 +167,8 @@ func (b *taskSubmitRejectingBilling) Reserve(target int) error {
 }
 
 type taskSubmitTestState struct {
-	preConsumeCalls int
+	preConsumeCalls  int
+	preConsumedQuota int
 }
 
 func taskSubmitVideoTestContext(
@@ -202,8 +211,9 @@ func taskSubmitVideoTestContext(
 	state := &taskSubmitTestState{}
 	deps := relayTaskSubmitDeps{
 		getTaskAdaptor: func(constant.TaskPlatform) channel.TaskAdaptor { return adaptor },
-		preConsume: func(_ *gin.Context, _ int, relayInfo *relaycommon.RelayInfo) *dto.TaskError {
+		preConsume: func(_ *gin.Context, quota int, relayInfo *relaycommon.RelayInfo) *dto.TaskError {
 			state.preConsumeCalls++
+			state.preConsumedQuota = quota
 			relayInfo.Billing = taskSubmitTestBilling{}
 			return nil
 		},
@@ -322,22 +332,86 @@ func TestRelayTaskSubmitRejectsUnconfiguredResolutionBeforeRequest(t *testing.T)
 	assert.Zero(t, base.requestCalls)
 }
 
-func TestRelayTaskSubmitRejectsUnconfiguredModelBeforePreConsume(t *testing.T) {
+func TestRelayTaskSubmitUnconfiguredVideoModelUsesLegacyPrice(t *testing.T) {
+	base := &taskSubmitTestAdaptor{}
+	c, info, deps, state := taskSubmitVideoTestContext(t, base)
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.True(t, base.didEstimate)
+	assert.True(t, base.didAdjust)
+	assert.Equal(t, 980100, state.preConsumedQuota)
+	assert.Nil(t, info.ResolvedVideoBilling)
+}
+
+func TestRelayTaskSubmitLegacyPerCallIgnoresDurationMultiplier(t *testing.T) {
+	base := &taskSubmitTestAdaptor{}
+	c, info, deps, state := taskSubmitVideoTestContext(t, base)
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"client-model":"per_call"}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 100, state.preConsumedQuota)
+	assert.Equal(t, 100, result.Quota)
+}
+
+func TestRelayTaskSubmitLegacyPerSecondUsesEstimateThenSubmitAdjustment(t *testing.T) {
+	base := &taskSubmitTestAdaptor{
+		estimateRatios: map[string]float64{"seconds": 2, "size": 3},
+		adjustRatios:   map[string]float64{"seconds": 4, "size": 5},
+	}
+	c, info, deps, state := taskSubmitVideoTestContext(t, base)
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"client-model":"per_second"}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 600, state.preConsumedQuota)
+	assert.Equal(t, 2000, result.Quota)
+	assert.Equal(t, map[string]float64{"seconds": 4, "size": 5}, info.PriceData.OtherRatios())
+}
+
+func TestRelayTaskSubmitResolutionPlanUsesFrozenTableAfterLiveRemoval(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}}
 	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1})
+	require.NoError(t, err)
+	info.TaskRelayInfo.BillingPlan = plan
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.001}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 250, state.preConsumedQuota)
+	assert.Equal(t, 250, result.Quota)
+}
+
+func TestRelayTaskSubmitResolutionPlanDoesNotFallbackForMissingTier(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 5}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1})
+	require.NoError(t, err)
+	info.TaskRelayInfo.BillingPlan = plan
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
 
 	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	assert.Nil(t, result)
 	require.NotNil(t, taskErr)
-	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
 	assert.Zero(t, state.preConsumeCalls)
-	assert.False(t, base.didBuildRequest)
-	assert.False(t, base.didRequest)
-	assert.Zero(t, base.requestCalls)
 }
 
 func TestRelayTaskSubmitRejectsUnknownResolutionBeforePreConsume(t *testing.T) {
@@ -398,19 +472,23 @@ func TestRelayTaskSubmitResolverRejectionStopsBeforePreConsumeAndRequest(t *test
 	assert.Zero(t, base.requestCalls)
 }
 
-func TestRelayTaskSubmitKeepsLegacySunoPath(t *testing.T) {
+func TestRelayTaskSubmitSunoUsesLegacyPriceWhenResolutionTableMatches(t *testing.T) {
 	base := &taskSubmitTestAdaptor{}
 	c, info, deps, state := taskSubmitVideoTestContext(t, base)
 	c.Set("platform", string(constant.TaskPlatformSuno))
-	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.9}}`))
 	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.1}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
 
 	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
 
 	require.Nil(t, taskErr)
 	require.NotNil(t, result)
 	assert.True(t, base.didEstimate)
+	assert.True(t, base.didAdjust)
+	assert.Equal(t, 980100, state.preConsumedQuota)
+	assert.Equal(t, 980100, result.Quota)
+	assert.Nil(t, info.ResolvedVideoBilling)
 	assert.True(t, base.didRequest)
 	assert.Equal(t, 1, state.preConsumeCalls)
 	assert.Equal(t, 1, base.requestCalls)

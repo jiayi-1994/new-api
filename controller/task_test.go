@@ -10,10 +10,43 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaskBillingContextLegacyFixedPerSecondRemainsPerSecond(t *testing.T) {
+	original := ratio_setting.TaskBillingMode2JSONString()
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"legacy-video":"per_second"}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(original)) })
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "legacy-video",
+		PriceData: hosttypes.PriceData{
+			ModelPrice: 0.3,
+			UsePrice:   true,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+
+	assert.False(t, taskBillingContextFromRelayInfo(info).PerCallBilling)
+}
+
+func TestTaskBillingReservationRequestIDUsesFrozenPlanIdentity(t *testing.T) {
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "req-frozen", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{
+		RequestId:     "req-live-mutated",
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{BillingPlan: plan},
+	}
+
+	assert.Equal(t, "req-frozen", taskBillingReservationRequestID(info))
+}
 
 func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
 	info := &relaycommon.RelayInfo{

@@ -186,6 +186,7 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 		}
 		info.TaskRelayInfo.BillingPlan = billingPlan
 	}
+	plan := info.TaskRelayInfo.BillingPlan
 	info.InitChannelMeta(c)
 
 	// 1. 确定 platform → 创建适配器 → 验证请求
@@ -216,12 +217,12 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 	}
 
 	info.OriginModelName = modelName
-	resolutionPricing := platform != constant.TaskPlatformSuno
+	resolutionPricing := plan.Kind() == relaycommon.TaskBillingKindVideoResolution
 	perCallBilling := false
 	if resolutionPricing {
 		resolver, ok := adaptor.(channel.VideoBillingResolver)
 		if !ok {
-			return nil, videoResolutionNotSupported(modelName, "unknown")
+			return nil, videoResolutionNotSupported(plan.OriginModelName(), "unknown")
 		}
 		selection, taskErr := resolver.ResolveVideoBilling(c, info)
 		if taskErr != nil {
@@ -237,19 +238,18 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 			return nil, videoResolutionNotSupported(modelName, resolution)
 		}
 		selection = validated.Selection
-		selectedPrice, ok := ratio_setting.GetVideoResolutionPrice(modelName, selection.EffectiveResolution)
+		selectedPrice, ok := plan.ResolutionPrice(selection.EffectiveResolution)
 		if !ok {
-			return nil, videoResolutionNotSupported(modelName, selection.EffectiveResolution)
+			return nil, videoResolutionNotSupported(plan.OriginModelName(), selection.EffectiveResolution)
 		}
 
 		priceData, clamp, err := helper.BuildVideoResolutionPriceData(c, info, selectedPrice, selection)
 		if err != nil {
-			return nil, videoResolutionNotSupported(modelName, selection.EffectiveResolution)
+			return nil, videoResolutionNotSupported(plan.OriginModelName(), selection.EffectiveResolution)
 		}
 		info.PriceData = priceData
 		noteTaskQuotaClamp(info, clamp)
 	} else {
-		// Suno remains on the legacy task-price path.
 		priceData, err := helper.ModelPriceHelperPerCall(c, info)
 		if err != nil {
 			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)

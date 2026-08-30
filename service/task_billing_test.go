@@ -1058,6 +1058,10 @@ func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 	const userQuota, tokenQuota, preConsumed = 10_000, 8_000, 600
 	seedUser(t, userID, userQuota)
 	seedToken(t, tokenID, userID, "sk-resolution-durable-preconsume", tokenQuota)
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "resolution-durable-preconsume", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
 
 	g := gin.New()
 	recorder := httptest.NewRecorder()
@@ -1070,6 +1074,7 @@ func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 		OriginModelName: "video-model",
 		ForcePreConsume: true,
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan:          billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{},
 		},
 	}
@@ -1096,6 +1101,10 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 	seedChannel(t, channelID)
 	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
 	require.NoError(t, err)
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "resolution-base-stats", map[string]float64{"1080p": 0.1},
+	)
+	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
 		RequestId:       "resolution-base-stats",
 		UserId:          userID,
@@ -1112,6 +1121,7 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 			},
 		},
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
@@ -1156,7 +1166,12 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 
 // resolutionSubmitRelayInfo 构造一次分辨率任务提交的 RelayInfo：0.1/秒 × 8 秒 ×
 // 1.25 分组倍率 × 1.2 video_input 倍率。
-func resolutionSubmitRelayInfo(requestId string, userID, tokenID, channelID, quota int) *relaycommon.RelayInfo {
+func resolutionSubmitRelayInfo(t *testing.T, requestId string, userID, tokenID, channelID, quota int) *relaycommon.RelayInfo {
+	t.Helper()
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", requestId, map[string]float64{"1080p": 0.1},
+	)
+	require.NoError(t, err)
 	return &relaycommon.RelayInfo{
 		RequestId:       requestId,
 		UserId:          userID,
@@ -1171,6 +1186,7 @@ func resolutionSubmitRelayInfo(requestId string, userID, tokenID, channelID, quo
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.25},
 		},
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
@@ -1194,7 +1210,7 @@ func TestResolutionTaskInsertFailureSynchronouslyRefundsReservation(t *testing.T
 
 	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
 	require.NoError(t, err)
-	info := resolutionSubmitRelayInfo("resolution-insert-failure", userID, tokenID, channelID, preConsumed)
+	info := resolutionSubmitRelayInfo(t, "resolution-insert-failure", userID, tokenID, channelID, preConsumed)
 	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
@@ -1253,7 +1269,7 @@ func TestResolutionTaskInsertRefundLogReportsTheReservationAmount(t *testing.T) 
 
 	reserved, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
 	require.NoError(t, err)
-	info := resolutionSubmitRelayInfo("resolution-quota-mismatch", userID, tokenID, channelID, reserved)
+	info := resolutionSubmitRelayInfo(t, "resolution-quota-mismatch", userID, tokenID, channelID, reserved)
 	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
@@ -1282,7 +1298,7 @@ func TestSweepOrphanedResolutionReservationsRecordsARefundLog(t *testing.T) {
 	seedUser(t, userID, userQuota)
 	seedToken(t, tokenID, userID, "sk-resolution-orphan-log", tokenQuota)
 
-	info := resolutionSubmitRelayInfo("resolution-orphan-log", userID, tokenID, 0, quota)
+	info := resolutionSubmitRelayInfo(t, "resolution-orphan-log", userID, tokenID, 0, quota)
 	info.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	require.Nil(t, PreConsumeBilling(c, quota, info))
@@ -1330,9 +1346,9 @@ func TestResolutionReservationFallsBackToWalletWhenSubscriptionIsExhausted(t *te
 	sources := make(chan string, len(requestIds))
 	for i, requestId := range requestIds {
 		submissions.Add(1)
-		go func() {
+		info := resolutionSubmitRelayInfo(t, requestId, userID, 4110+i, channelID, preConsumed)
+		go func(info *relaycommon.RelayInfo) {
 			defer submissions.Done()
-			info := resolutionSubmitRelayInfo(requestId, userID, 4110+i, channelID, preConsumed)
 			info.UserSetting.BillingPreference = "subscription_first"
 			c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 			if apiErr := PreConsumeBilling(c, preConsumed, info); apiErr != nil {
@@ -1340,7 +1356,7 @@ func TestResolutionReservationFallsBackToWalletWhenSubscriptionIsExhausted(t *te
 				return
 			}
 			sources <- info.BillingSource
-		}()
+		}(info)
 	}
 	submissions.Wait()
 	close(errs)
@@ -1375,9 +1391,9 @@ func TestSweepOrphanedResolutionReservationsOnlyRefundsAfterGracePeriod(t *testi
 	seedUser(t, userID, userQuota)
 	seedToken(t, tokenID, userID, "sk-resolution-orphan-sweep", tokenQuota)
 
-	fresh := resolutionSubmitRelayInfo("resolution-orphan-fresh", userID, tokenID, 0, quota)
+	fresh := resolutionSubmitRelayInfo(t, "resolution-orphan-fresh", userID, tokenID, 0, quota)
 	fresh.UserSetting.BillingPreference = "wallet_only"
-	stale := resolutionSubmitRelayInfo("resolution-orphan-stale", userID, tokenID, 0, quota)
+	stale := resolutionSubmitRelayInfo(t, "resolution-orphan-stale", userID, tokenID, 0, quota)
 	stale.UserSetting.BillingPreference = "wallet_only"
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	require.Nil(t, PreConsumeBilling(c, quota, fresh))
@@ -1445,6 +1461,10 @@ func TestResolutionRoundedZeroSubscriptionDoesNotReserveSyntheticTokenQuota(t *t
 		EndTime:     time.Now().Add(time.Hour).Unix(),
 	}
 	require.NoError(t, model.DB.Create(subscription).Error)
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "request-resolution-zero-subscription", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
 
 	info := &relaycommon.RelayInfo{
 		UserId:          userID,
@@ -1454,6 +1474,7 @@ func TestResolutionRoundedZeroSubscriptionDoesNotReserveSyntheticTokenQuota(t *t
 		OriginModelName: "video-model",
 		ForcePreConsume: true,
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan:          billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{},
 		},
 	}

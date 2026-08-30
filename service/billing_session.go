@@ -396,6 +396,13 @@ func (s *BillingSession) usesReservationLedger() bool {
 // NewBillingSession 工厂 — 根据计费偏好创建会话并处理回退
 // ---------------------------------------------------------------------------
 
+func usesResolutionReservationLedger(info *relaycommon.RelayInfo) bool {
+	return info != nil &&
+		info.TaskRelayInfo != nil &&
+		info.TaskRelayInfo.BillingPlan != nil &&
+		info.TaskRelayInfo.BillingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution
+}
+
 // NewBillingSession 根据用户计费偏好创建 BillingSession，处理 subscription_first / wallet_first 的回退。
 func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.NewAPIError) {
 	if relayInfo == nil {
@@ -405,10 +412,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 
 	// 分辨率任务走预留账本：上游提交成功但任务落库失败时仍可按 requestId 精确退款
-	usesReservationLedger := relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.ResolvedVideoBilling != nil
+	usesReservationLedger := usesResolutionReservationLedger(relayInfo)
 	newReservationFunding := func(source string) *ResolutionReservationFunding {
 		return &ResolutionReservationFunding{
-			requestId:    relayInfo.RequestId,
+			requestId:    relayInfo.TaskRelayInfo.BillingPlan.RequestID(),
 			userId:       relayInfo.UserId,
 			tokenId:      relayInfo.TokenId,
 			modelName:    relayInfo.OriginModelName,

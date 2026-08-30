@@ -622,7 +622,7 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.NodeName = common.NodeName
 		task.PrivateData.BillingContext = taskBillingContextFromRelayInfo(relayInfo)
 		if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
-			task.PrivateData.BillingReservationRequestId = relayInfo.RequestId
+			task.PrivateData.BillingReservationRequestId = taskBillingReservationRequestID(relayInfo)
 		}
 		task.Quota = chargedQuota
 		task.Data = result.TaskData
@@ -635,6 +635,18 @@ func RelayTask(c *gin.Context) {
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
+}
+
+func taskBillingReservationRequestID(relayInfo *relaycommon.RelayInfo) string {
+	if relayInfo == nil {
+		return ""
+	}
+	if relayInfo.TaskRelayInfo != nil &&
+		relayInfo.TaskRelayInfo.BillingPlan != nil &&
+		relayInfo.TaskRelayInfo.BillingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution {
+		return relayInfo.TaskRelayInfo.BillingPlan.RequestID()
+	}
+	return relayInfo.RequestId
 }
 
 func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.TaskBillingContext {
@@ -668,7 +680,7 @@ func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.Ta
 		ModelRatio:      relayInfo.PriceData.ModelRatio,
 		OtherRatios:     relayInfo.PriceData.OtherRatios(),
 		OriginModelName: relayInfo.OriginModelName,
-		PerCallBilling:  ratio_setting.IsTaskPerCallBilling(relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+		PerCallBilling:  ratio_setting.IsTaskPerCallBilling(relayInfo.OriginModelName),
 	}
 }
 
