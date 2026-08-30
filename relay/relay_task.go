@@ -245,6 +245,16 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 	}
 
 	info.OriginModelName = modelName
+	// 空名冻结的计划（distributor 在请求体缺 model 时提前冻结）不能作为激活
+	// 判定：用最终模型名重新冻结，否则配置了分辨率表的模型会被 legacy 劫持。
+	if plan.OriginModelName() == "" && modelName != "" {
+		refrozen, err := refreezeTaskBillingPlanForModel(c, modelName, plan.RequestID())
+		if err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "video_resolution_not_supported", http.StatusBadRequest)
+		}
+		plan = refrozen
+		info.TaskRelayInfo.BillingPlan = refrozen
+	}
 	resolutionPricing := plan.Kind() == relaycommon.TaskBillingKindVideoResolution
 	perCallBilling := false
 	if resolutionPricing {

@@ -89,6 +89,24 @@ func PrepareTaskBillingPlan(c *gin.Context, modelName, requestID string) (*relay
 	return plan, nil
 }
 
+// refreezeTaskBillingPlanForModel 替换一个在模型名可知之前（空名）冻结的计划：
+// distributor 对缺失 model 字段的提交会提前冻结 legacy("") 计划，激活判定必须
+// 以最终推导的 origin 模型名重做，并同步替换请求级缓存。只能在该请求创建任何
+// 计费会话之前调用；重试携带的已是重冻后的计划，不会再次进入。
+func refreezeTaskBillingPlanForModel(c *gin.Context, modelName, requestID string) (*relaycommon.TaskBillingPlan, error) {
+	isSuno := constant.TaskPlatform(c.GetString("platform")) == constant.TaskPlatformSuno || constant.IsSunoModel(modelName)
+	var prices map[string]float64
+	if !isSuno {
+		prices, _ = ratio_setting.GetVideoResolutionPrices(modelName)
+	}
+	plan, err := makeTaskBillingPlan(modelName, requestID, isSuno, prices)
+	if err != nil {
+		return nil, err
+	}
+	c.Set(taskBillingPlanContextKey, plan)
+	return plan, nil
+}
+
 func makeTaskBillingPlan(modelName, requestID string, isSuno bool, prices map[string]float64) (*relaycommon.TaskBillingPlan, error) {
 	if isSuno || len(prices) == 0 {
 		return relaycommon.NewLegacyTaskBillingPlan(modelName, requestID), nil

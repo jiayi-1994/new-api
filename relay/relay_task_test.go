@@ -493,6 +493,37 @@ func TestRelayTaskSubmitRetryKeepsFrozenPlanFundingAndRequestIdentity(t *testing
 	assert.Equal(t, 2, base.requestCalls)
 }
 
+// distributor 在请求体缺 model 时会以空模型名提前冻结 legacy 计划（令牌绑定
+// 渠道的提交路径）。首次进入计费前必须用最终推导的模型名重新冻结，
+// 否则配置了分辨率表的模型会被空名 legacy 计划劫持、绕过分辨率计费。
+func TestRelayTaskSubmitRefreezesEmptyModelPlanBeforeBilling(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
+	emptyPlan, err := PrepareTaskBillingPlan(c, "", "req-empty-freeze")
+	require.NoError(t, err)
+	require.Equal(t, relaycommon.TaskBillingKindLegacy, emptyPlan.Kind())
+	require.Empty(t, emptyPlan.OriginModelName())
+	info.TaskRelayInfo.BillingPlan = emptyPlan
+	info.RequestId = "req-empty-freeze"
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	require.NotNil(t, info.TaskRelayInfo.BillingPlan)
+	assert.Equal(t, relaycommon.TaskBillingKindVideoResolution, info.TaskRelayInfo.BillingPlan.Kind())
+	assert.Equal(t, "client-model", info.TaskRelayInfo.BillingPlan.OriginModelName())
+	assert.Equal(t, "req-empty-freeze", info.TaskRelayInfo.BillingPlan.RequestID())
+	assert.Equal(t, 250, result.Quota)
+	assert.Equal(t, 250, state.preConsumedQuota)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	cached, err := PrepareTaskBillingPlan(c, "client-model", "other-request")
+	require.NoError(t, err)
+	assert.Same(t, info.TaskRelayInfo.BillingPlan, cached)
+}
+
 // 旧版镜像：两次尝试之间上线了匹配的分辨率表，冻结的旧版计划必须继续走
 // 历史估算/预扣路径，并复用第一次尝试的计费会话与资金来源。
 func TestRelayTaskSubmitRetryKeepsLegacyPlanWhenResolutionTableAppears(t *testing.T) {
