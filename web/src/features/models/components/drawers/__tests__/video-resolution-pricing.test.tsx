@@ -173,7 +173,8 @@ function setRole(role: number) {
 }
 
 async function renderDrawer(
-  currentRow: typeof modelFixture | null = modelFixture
+  currentRow: typeof modelFixture | null = modelFixture,
+  onOpenChange: (open: boolean) => void = () => undefined
 ) {
   const container = document.createElement('div')
   document.body.append(container)
@@ -200,7 +201,7 @@ async function renderDrawer(
         <I18nextProvider i18n={i18n}>
           <ModelMutateDrawer
             open
-            onOpenChange={() => undefined}
+            onOpenChange={onOpenChange}
             currentRow={currentRow}
           />
         </I18nextProvider>
@@ -384,6 +385,45 @@ describe('model drawer video resolution persistence', () => {
       const reopenedPrice = resolutionPriceInput()
       assert.ok(reopenedPrice)
       assert.equal(reopenedPrice.value, '0.25')
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('a committed model update still completes if the pricing cache disappears before adoption', async () => {
+    const committedPricingOptions = Object.fromEntries(
+      pricingOptions.map((option) => [option.key, option.value])
+    )
+    const openChanges: boolean[] = []
+    const view = await renderDrawer(modelFixture, (open) => {
+      openChanges.push(open)
+    })
+    putResponder = async () => {
+      view.queryClient.removeQueries({ queryKey: ['system-options'] })
+      return {
+        data: {
+          success: true,
+          data: modelFixture,
+          committed: true,
+          publication_pending: true,
+          pricing_documents: committedPricingOptions,
+        },
+      }
+    }
+    try {
+      const input = resolutionPriceInput()
+      assert.ok(input)
+      await act(async () => {
+        changeInputValue(input, '0.2')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 1)
+      assert.deepEqual(openChanges, [false])
     } finally {
       await view.cleanup()
     }

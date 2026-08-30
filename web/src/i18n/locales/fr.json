@@ -5264,5 +5264,7 @@
     "Ratio exposure was saved, but pricing could not be updated.": "L'affichage des ratios a été enregistré, mais la tarification n'a pas pu être mise à jour."
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
+  "Delete result is unknown. Do not retry; refresh and review the model list.": "Le résultat de la suppression est inconnu. Ne réessayez pas ; actualisez et vérifiez la liste des modèles.",
+  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Le résultat de la suppression est inconnu pour {{count}} modèle(s). Ne réessayez pas ; actualisez et vérifiez la liste des modèles."
 }

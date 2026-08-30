@@ -5264,5 +5264,7 @@
     "Ratio exposure was saved, but pricing could not be updated.": "倍率の公開設定は保存されましたが、料金を更新できませんでした。"
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
+  "Delete result is unknown. Do not retry; refresh and review the model list.": "削除結果は不明です。再試行せず、モデル一覧を更新して確認してください。",
+  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "{{count}} 件のモデルの削除結果は不明です。再試行せず、モデル一覧を更新して確認してください。"
 }

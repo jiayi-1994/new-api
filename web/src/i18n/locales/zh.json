@@ -5264,5 +5264,7 @@
     "Ratio exposure was saved, but pricing could not be updated.": "倍率公开设置已保存，但定价更新失败。"
   },
   "DashScope Video Payload": "DashScope 视频请求包装",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "将 /v1/videos 的顶层 prompt/参考图自动包装为 input/parameters 结构（适配即梦式上游，如 meaicc）"
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "将 /v1/videos 的顶层 prompt/参考图自动包装为 input/parameters 结构（适配即梦式上游，如 meaicc）",
+  "Delete result is unknown. Do not retry; refresh and review the model list.": "删除结果未知。请勿重试；请刷新并核对模型列表。",
+  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "{{count}} 个模型的删除结果未知。请勿重试；请刷新并核对模型列表。"
 }

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
 import { Power, PowerOff, Trash2, Copy } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -50,6 +50,8 @@ export function DataTableBulkActions<TData>({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deletePending, setDeletePending] = useState(false)
+  const [unknownDeleteCount, setUnknownDeleteCount] = useState(0)
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedIds = selectedRows.reduce<number[]>((ids, row) => {
@@ -76,11 +78,24 @@ export function DataTableBulkActions<TData>({
     handleBatchDisableModels(selectedIds, queryClient, handleClearSelection)
   }
 
-  const handleDeleteAll = () => {
-    handleBatchDeleteModels(selectedIds, queryClient, () => {
-      setShowDeleteConfirm(false)
-      handleClearSelection()
-    })
+  const handleDeleteAll = async () => {
+    if (deletePending || unknownDeleteCount > 0) return
+    setDeletePending(true)
+    try {
+      const outcome = await handleBatchDeleteModels(
+        selectedIds,
+        queryClient,
+        () => {
+          setShowDeleteConfirm(false)
+          handleClearSelection()
+        }
+      )
+      if (outcome.unknownIds.length > 0) {
+        setUnknownDeleteCount(outcome.unknownIds.length)
+      }
+    } finally {
+      setDeletePending(false)
+    }
   }
 
   const handleCopyNames = async () => {
@@ -186,20 +201,32 @@ export function DataTableBulkActions<TData>({
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
         title={t('Delete Models?')}
-        description={t(
-          'Are you sure you want to delete {{count}} model(s)? This action cannot be undone.',
-          { count: selectedIds.length }
-        )}
+        description={
+          unknownDeleteCount > 0
+            ? t(
+                'Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.',
+                { count: unknownDeleteCount }
+              )
+            : t(
+                'Are you sure you want to delete {{count}} model(s)? This action cannot be undone.',
+                { count: selectedIds.length }
+              )
+        }
         contentHeight='auto'
         footer={
           <>
             <Button
               variant='outline'
               onClick={() => setShowDeleteConfirm(false)}
+              disabled={deletePending}
             >
               {t('Cancel')}
             </Button>
-            <Button variant='destructive' onClick={handleDeleteAll}>
+            <Button
+              variant='destructive'
+              onClick={handleDeleteAll}
+              disabled={deletePending || unknownDeleteCount > 0}
+            >
               {t('Delete')}
             </Button>
           </>

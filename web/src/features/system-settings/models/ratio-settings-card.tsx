@@ -45,8 +45,8 @@ import {
 } from './model-pricing-persistence'
 import { ModelRatioForm } from './model-ratio-form'
 import {
-  adoptCommittedPricingDocuments,
   ensureSystemOptionsCacheBase,
+  tryAdoptCommittedPricingDocuments,
 } from './pricing-document-cache'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -439,7 +439,7 @@ export function RatioSettingsCard({
             })
             if (pricingResponse.committed) {
               const committedDocuments = pricingResponse.data
-              await adoptCommittedPricingDocuments(
+              const cacheAdopted = await tryAdoptCommittedPricingDocuments(
                 queryClient,
                 committedDocuments
               )
@@ -460,7 +460,8 @@ export function RatioSettingsCard({
               )
               setModelEditorRevision((revision) => revision + 1)
               pricingCommitted = true
-              pricingPending = pricingResponse.publication_pending
+              pricingPending =
+                pricingResponse.publication_pending || !cacheAdopted
               pricingPublicationPendingRef.current = pricingPending
             } else {
               pricingFailureMessage =

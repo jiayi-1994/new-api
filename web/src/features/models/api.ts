@@ -119,7 +119,10 @@ export async function updateModelStatus(
  * Delete model
  */
 export async function deleteModel(id: number): Promise<ModelMutationResponse> {
-  const res = await api.delete(`/api/models/${id}`)
+  const res = await api.delete(`/api/models/${id}`, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 

@@ -5264,5 +5264,7 @@
     "Ratio exposure was saved, but pricing could not be updated.": "Cài đặt hiển thị hệ số đã được lưu nhưng không thể cập nhật giá."
   },
   "DashScope Video Payload": "DashScope Video Payload",
-  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
+  "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams",
+  "Delete result is unknown. Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình.",
+  "Delete result is unknown for {{count}} model(s). Do not retry; refresh and review the model list.": "Không xác định được kết quả xóa của {{count}} mô hình. Đừng thử lại; hãy làm mới và kiểm tra danh sách mô hình."
 }

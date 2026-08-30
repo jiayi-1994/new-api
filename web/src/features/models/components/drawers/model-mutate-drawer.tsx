@@ -81,8 +81,8 @@ import {
   type ModelPricingSelection,
 } from '@/features/system-settings/models/model-pricing-persistence'
 import {
-  adoptCommittedPricingDocuments,
   ensureSystemOptionsCacheBase,
+  tryAdoptCommittedPricingDocuments,
 } from '@/features/system-settings/models/pricing-document-cache'
 import { VideoResolutionPriceEditor } from '@/features/system-settings/models/video-resolution-price-editor'
 import {
@@ -663,13 +663,14 @@ export function ModelMutateDrawer({
               })
 
         if (response.success) {
+          let cacheAdopted = true
           if (response.pricing_documents) {
-            await adoptCommittedPricingDocuments(
+            cacheAdopted = await tryAdoptCommittedPricingDocuments(
               queryClient,
               response.pricing_documents
             )
           }
-          if (response.publication_pending) {
+          if (response.publication_pending || !cacheAdopted) {
             toast.warning(
               t(
                 'Pricing was saved, but live settings are still converging. Do not retry.'
@@ -685,7 +686,7 @@ export function ModelMutateDrawer({
             )
           }
           queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
-          if (!response.publication_pending) {
+          if (!response.publication_pending && cacheAdopted) {
             queryClient.invalidateQueries({ queryKey: ['system-options'] })
           }
           onOpenChange(false)

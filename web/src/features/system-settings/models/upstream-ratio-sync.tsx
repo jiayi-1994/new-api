@@ -55,8 +55,8 @@ import {
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 import {
-  adoptCommittedPricingDocuments,
   ensureSystemOptionsCacheBase,
+  tryAdoptCommittedPricingDocuments,
 } from './pricing-document-cache'
 import {
   NUMERIC_SYNC_FIELDS,
@@ -212,8 +212,11 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       return response
     },
     onSuccess: async (data) => {
-      await adoptCommittedPricingDocuments(queryClient, data.data)
-      if (data.publication_pending) {
+      const cacheAdopted = await tryAdoptCommittedPricingDocuments(
+        queryClient,
+        data.data
+      )
+      if (data.publication_pending || !cacheAdopted) {
         toast.warning(
           t(
             'Pricing was saved, but live settings are still converging. Do not retry.'

@@ -111,6 +111,44 @@ func TestModelMetaDeleteRemovesEveryPricingDocumentAtomically(t *testing.T) {
 	assertLifecyclePricingName(t, storedPricingDocuments(t), "owned", "")
 }
 
+func TestModelMetaDeleteRepairsInvalidPricingOwnedByDeletedModel(t *testing.T) {
+	setupPricingCommandTest(t)
+	seedPricingDocuments(t, pricingCommandFixture())
+	item := seedLifecycleModel(t, "owned")
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "ModelPrice"}).
+		Update("value", `{"owned":-1,"unrelated":3}`).Error)
+
+	result, err := DeleteModelMetaByIDWithPricingResult(item.Id)
+
+	require.NoError(t, err)
+	assert.True(t, result.Committed)
+	var count int64
+	require.NoError(t, DB.Model(&Model{}).Where("id = ?", item.Id).Count(&count).Error)
+	assert.Zero(t, count)
+	assert.JSONEq(t, `{"unrelated":3}`, storedPricingDocuments(t)["ModelPrice"])
+}
+
+func TestModelMetaDeleteRollsBackWhenAnotherInvalidPricingEntryRemains(t *testing.T) {
+	setupPricingCommandTest(t)
+	seedPricingDocuments(t, pricingCommandFixture())
+	item := seedLifecycleModel(t, "owned")
+	legacy := `{"owned":1,"other":null}`
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "ModelPrice"}).
+		Update("value", legacy).Error)
+
+	result, err := DeleteModelMetaByIDWithPricingResult(item.Id)
+
+	var validationError *PricingValidationError
+	require.ErrorAs(t, err, &validationError)
+	assert.False(t, result.Committed)
+	var count int64
+	require.NoError(t, DB.Model(&Model{}).Where("id = ?", item.Id).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+	assert.JSONEq(t, legacy, storedPricingDocuments(t)["ModelPrice"])
+}
+
 func TestModelMetaRenameRollsBackEveryPricingDocumentWhenModelWriteFails(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()

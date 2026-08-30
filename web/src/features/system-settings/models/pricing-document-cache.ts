@@ -87,3 +87,18 @@ export async function adoptCommittedPricingDocuments(
     })
   )
 }
+
+export async function tryAdoptCommittedPricingDocuments(
+  queryClient: QueryClient,
+  documents: Record<PricingDocumentKey, string>
+): Promise<boolean> {
+  try {
+    await adoptCommittedPricingDocuments(queryClient, documents)
+    return true
+  } catch {
+    void queryClient
+      .invalidateQueries({ queryKey: SYSTEM_OPTIONS_QUERY_KEY })
+      .catch(() => undefined)
+    return false
+  }
+}

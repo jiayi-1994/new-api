@@ -409,6 +409,40 @@ func TestPricingCommandRouteBulkValidationErrorsUseHTTP400(t *testing.T) {
 	}
 }
 
+func TestPricingCommandRouteRejectsNullInEveryNumericDocumentWithHTTP400(t *testing.T) {
+	for _, key := range []string{
+		"AudioCompletionRatio",
+		"AudioRatio",
+		"CacheRatio",
+		"CompletionRatio",
+		"CreateCacheRatio",
+		"ImageRatio",
+		"ModelPrice",
+		"ModelRatio",
+	} {
+		t.Run(key, func(t *testing.T) {
+			db := setupOptionControllerTest(t)
+			expected := seedControllerPricingDocuments(t, "null-invalid")
+			body := fmt.Sprintf(`{
+				"kind":"replace_documents",
+				"values":{%q:"{\"null-invalid\":null}"},
+				"expected_documents":{%q:%q}
+			}`, key, key, expected[key])
+			ctx, recorder := optionControllerContext(body, common.RoleRootUser)
+
+			UpdatePricingOption(ctx)
+
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			for documentKey, value := range expected {
+				var stored model.Option
+				require.NoError(t, db.First(&stored, "key = ?", documentKey).Error)
+				assert.JSONEq(t, value, stored.Value, documentKey)
+			}
+		})
+	}
+}
+
 func TestPricingCommandRouteStoredDocumentErrorUsesHTTP500(t *testing.T) {
 	db := setupOptionControllerTest(t)
 	seedControllerPricingDocuments(t, "stored-invalid")

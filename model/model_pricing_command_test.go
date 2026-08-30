@@ -207,6 +207,96 @@ func TestExecuteModelPricingCommandRejectsNegativeRawNumericDocumentsWithoutMuta
 	}
 }
 
+func TestExecuteModelPricingCommandRejectsNullRawNumericDocumentsWithoutMutation(t *testing.T) {
+	for _, key := range modelPricingNumericOptionKeys {
+		t.Run(key, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			fixture := pricingCommandFixture()
+			seedPricingDocuments(t, fixture)
+
+			result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+				Kind:   PricingCommandReplaceDocuments,
+				Values: map[string]string{key: `{"owned":null}`},
+			})
+
+			var validationError *PricingValidationError
+			require.ErrorAs(t, err, &validationError)
+			assert.False(t, result.Committed)
+			stored := storedPricingDocuments(t)
+			for documentKey, expected := range fixture {
+				assert.JSONEq(t, expected, stored[documentKey], documentKey)
+			}
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandRejectsNonNumberRawNumericValues(t *testing.T) {
+	for _, rawValue := range []string{`"1"`, `true`, `{}`, `[]`} {
+		t.Run(rawValue, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			fixture := pricingCommandFixture()
+			seedPricingDocuments(t, fixture)
+
+			_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+				Kind: PricingCommandReplaceDocuments,
+				Values: map[string]string{
+					"ModelPrice": fmt.Sprintf(`{"owned":%s}`, rawValue),
+				},
+			})
+
+			var validationError *PricingValidationError
+			require.ErrorAs(t, err, &validationError)
+			assert.JSONEq(t, fixture["ModelPrice"], storedPricingDocuments(t)["ModelPrice"])
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandRepairsLegacyInvalidNumericDocument(t *testing.T) {
+	for _, invalid := range []string{"-1", "null"} {
+		t.Run(invalid, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			seedPricingDocuments(t, pricingCommandFixture())
+			legacy := fmt.Sprintf(`{"owned":%s,"unrelated":3}`, invalid)
+			require.NoError(t, DB.Model(&Option{}).
+				Where(&Option{Key: "ModelPrice"}).
+				Update("value", legacy).Error)
+			corrected := `{"owned":1,"unrelated":3}`
+
+			result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+				Kind:              PricingCommandReplaceDocuments,
+				Values:            map[string]string{"ModelPrice": corrected},
+				ExpectedDocuments: map[string]string{"ModelPrice": legacy},
+			})
+
+			require.NoError(t, err)
+			assert.True(t, result.Committed)
+			assert.JSONEq(t, corrected, storedPricingDocuments(t)["ModelPrice"])
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandRejectsSemanticWriteWithUnrepairedInvalidEntry(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	legacy := `{"legacy":null,"owned":1}`
+	require.NoError(t, DB.Model(&Option{}).
+		Where(&Option{Key: "ModelPrice"}).
+		Update("value", legacy).Error)
+	price := 2.0
+
+	result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandSave,
+		TargetName: "owned",
+		Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+	})
+
+	var validationError *PricingValidationError
+	require.ErrorAs(t, err, &validationError)
+	assert.False(t, result.Committed)
+	assert.JSONEq(t, legacy, storedPricingDocuments(t)["ModelPrice"])
+}
+
 func TestExecuteModelPricingCommandResolutionSavePreservesLegacy(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()

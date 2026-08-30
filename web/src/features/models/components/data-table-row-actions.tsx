@@ -53,6 +53,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { setOpen, setCurrentRow } = useModels()
   const queryClient = useQueryClient()
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deletePending, setDeletePending] = useState(false)
+  const [deleteOutcomeUnknown, setDeleteOutcomeUnknown] = useState(false)
 
   const isEnabled = isModelEnabled(model)
 
@@ -66,6 +68,21 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   }
 
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
+
+  const handleDeleteConfirm = async () => {
+    if (deletePending || deleteOutcomeUnknown) return
+    setDeletePending(true)
+    try {
+      const outcome = await handleDeleteModel(model.id, queryClient)
+      if (outcome === 'success') {
+        setDeleteConfirmOpen(false)
+      } else if (outcome === 'unknown') {
+        setDeleteOutcomeUnknown(true)
+      }
+    } finally {
+      setDeletePending(false)
+    }
+  }
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>
@@ -125,16 +142,21 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
         title={t('Delete Model')}
-        desc={t(
-          'Are you sure you want to delete model "{{name}}"? This action cannot be undone.',
-          { name: model.model_name }
-        )}
+        desc={
+          deleteOutcomeUnknown
+            ? t(
+                'Delete result is unknown. Do not retry; refresh and review the model list.'
+              )
+            : t(
+                'Are you sure you want to delete model "{{name}}"? This action cannot be undone.',
+                { name: model.model_name }
+              )
+        }
         confirmText={t('Delete')}
         destructive
-        handleConfirm={() => {
-          handleDeleteModel(model.id, queryClient)
-          setDeleteConfirmOpen(false)
-        }}
+        disabled={deleteOutcomeUnknown}
+        isLoading={deletePending}
+        handleConfirm={handleDeleteConfirm}
       />
     </div>
   )

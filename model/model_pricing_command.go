@@ -40,6 +40,7 @@ var modelPricingOptionKeySet = func() map[string]struct{} {
 
 type PricingDocuments struct {
 	Numeric         map[string]map[string]float64
+	InvalidNumeric  map[string]map[string]json.RawMessage
 	Strings         map[string]map[string]string
 	ResolutionPrice map[string]map[string]float64
 	Raw             map[string]string
@@ -203,7 +204,7 @@ func lockPricingDocuments(tx *gorm.DB) (*PricingDocuments, error) {
 		}
 		values[key] = option.Value
 	}
-	return parsePricingDocuments(values)
+	return parseLockedPricingDocuments(values)
 }
 
 func requireJSONObject(key, value string) error {
@@ -218,8 +219,17 @@ func requireJSONObject(key, value string) error {
 }
 
 func parsePricingDocuments(values map[string]string) (*PricingDocuments, error) {
+	return parsePricingDocumentsWithMode(values, true)
+}
+
+func parseLockedPricingDocuments(values map[string]string) (*PricingDocuments, error) {
+	return parsePricingDocumentsWithMode(values, false)
+}
+
+func parsePricingDocumentsWithMode(values map[string]string, strictNumeric bool) (*PricingDocuments, error) {
 	documents := &PricingDocuments{
 		Numeric:         make(map[string]map[string]float64, len(modelPricingNumericOptionKeys)),
+		InvalidNumeric:  make(map[string]map[string]json.RawMessage, len(modelPricingNumericOptionKeys)),
 		Strings:         make(map[string]map[string]string, len(modelPricingStringOptionKeys)),
 		ResolutionPrice: make(map[string]map[string]float64),
 		Raw:             make(map[string]string, len(modelPricingOptionKeys)),
@@ -235,25 +245,49 @@ func parsePricingDocuments(values map[string]string) (*PricingDocuments, error) 
 		documents.Raw[key] = value
 	}
 	for _, key := range modelPricingNumericOptionKeys {
-		var document map[string]float64
-		if err := common.Unmarshal([]byte(values[key]), &document); err != nil {
+		var rawDocument map[string]json.RawMessage
+		if err := common.Unmarshal([]byte(values[key]), &rawDocument); err != nil {
 			return nil, fmt.Errorf("parse pricing option %q: %w", key, err)
 		}
-		if document == nil {
-			document = make(map[string]float64)
-		}
-		for model, value := range document {
+		document := make(map[string]float64, len(rawDocument))
+		invalidDocument := make(map[string]json.RawMessage)
+		for model, rawValue := range rawDocument {
 			if strings.TrimSpace(model) == "" {
 				return nil, fmt.Errorf("pricing option %q contains a blank model key", key)
 			}
+			if common.GetJsonType(rawValue) != "number" {
+				if strictNumeric {
+					return nil, fmt.Errorf("pricing option %q contains a non-number value for model %q", key, model)
+				}
+				invalidDocument[model] = rawValue
+				continue
+			}
+			var value float64
+			if err := common.Unmarshal(rawValue, &value); err != nil {
+				if strictNumeric {
+					return nil, fmt.Errorf("parse pricing option %q value for model %q: %w", key, model, err)
+				}
+				invalidDocument[model] = rawValue
+				continue
+			}
 			if math.IsNaN(value) || math.IsInf(value, 0) {
-				return nil, fmt.Errorf("pricing option %q contains a non-finite value for model %q", key, model)
+				if strictNumeric {
+					return nil, fmt.Errorf("pricing option %q contains a non-finite value for model %q", key, model)
+				}
+				invalidDocument[model] = rawValue
+				continue
 			}
 			if value < 0 {
-				return nil, fmt.Errorf("pricing option %q contains a negative value for model %q", key, model)
+				if strictNumeric {
+					return nil, fmt.Errorf("pricing option %q contains a negative value for model %q", key, model)
+				}
+				invalidDocument[model] = rawValue
+				continue
 			}
+			document[model] = value
 		}
 		documents.Numeric[key] = document
+		documents.InvalidNumeric[key] = invalidDocument
 	}
 	for _, key := range modelPricingStringOptionKeys {
 		var document map[string]string
@@ -291,7 +325,18 @@ func parsePricingDocuments(values map[string]string) (*PricingDocuments, error) 
 func pricingDocumentValues(documents *PricingDocuments) (map[string]string, error) {
 	values := make(map[string]string, len(modelPricingOptionKeys))
 	for _, key := range modelPricingNumericOptionKeys {
-		value, err := common.Marshal(documents.Numeric[key])
+		rawDocument := make(map[string]json.RawMessage, len(documents.Numeric[key])+len(documents.InvalidNumeric[key]))
+		for model, rawValue := range documents.InvalidNumeric[key] {
+			rawDocument[model] = rawValue
+		}
+		for model, numericValue := range documents.Numeric[key] {
+			rawValue, err := common.Marshal(numericValue)
+			if err != nil {
+				return nil, fmt.Errorf("serialize pricing option %q value for model %q: %w", key, model, err)
+			}
+			rawDocument[model] = rawValue
+		}
+		value, err := common.Marshal(rawDocument)
 		if err != nil {
 			return nil, fmt.Errorf("serialize pricing option %q: %w", key, err)
 		}
@@ -553,6 +598,9 @@ func deletePricingName(documents *PricingDocuments, name string) {
 	for _, document := range documents.Numeric {
 		delete(document, name)
 	}
+	for _, document := range documents.InvalidNumeric {
+		delete(document, name)
+	}
 	for _, document := range documents.Strings {
 		delete(document, name)
 	}
@@ -560,9 +608,17 @@ func deletePricingName(documents *PricingDocuments, name string) {
 }
 
 func renamePricingName(documents *PricingDocuments, source, target string) {
-	for _, document := range documents.Numeric {
+	for key, document := range documents.Numeric {
 		if value, ok := document[source]; ok {
 			delete(document, source)
+			delete(documents.InvalidNumeric[key], target)
+			document[target] = value
+		}
+	}
+	for key, document := range documents.InvalidNumeric {
+		if value, ok := document[source]; ok {
+			delete(document, source)
+			delete(documents.Numeric[key], target)
 			document[target] = value
 		}
 	}
@@ -579,11 +635,16 @@ func renamePricingName(documents *PricingDocuments, source, target string) {
 }
 
 func copyPricingName(documents *PricingDocuments, source, target string) {
-	for _, document := range documents.Numeric {
+	for key, document := range documents.Numeric {
 		if value, ok := document[source]; ok {
+			delete(documents.InvalidNumeric[key], target)
 			document[target] = value
+		} else if invalidValue, ok := documents.InvalidNumeric[key][source]; ok {
+			delete(document, target)
+			documents.InvalidNumeric[key][target] = invalidValue
 		} else {
 			delete(document, target)
+			delete(documents.InvalidNumeric[key], target)
 		}
 	}
 	for _, document := range documents.Strings {
@@ -671,6 +732,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 	deletePricingName(documents, target)
 	setNumber := func(key string, value *float64) {
 		if value != nil {
+			delete(documents.InvalidNumeric[key], target)
 			documents.Numeric[key][target] = *value
 		}
 	}
