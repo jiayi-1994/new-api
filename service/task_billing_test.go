@@ -1105,6 +1105,131 @@ func TestResolutionSettlementUsesFrozenQuotaPerUnit(t *testing.T) {
 	assert.Equal(t, 300, task.Quota)
 }
 
+// mutateEveryLivePricingOption 在任务已持久化后改动所有会影响任务计费的在线配置，
+// 用于证明运行中任务的结算/退款只读取其存储的 TaskBillingContext 快照。
+func mutateEveryLivePricingOption(t *testing.T) {
+	t.Helper()
+	originalPrices := ratio_setting.ModelPrice2JSONString()
+	originalRatios := ratio_setting.ModelRatio2JSONString()
+	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	originalResolution := ratio_setting.VideoResolutionPrice2JSONString()
+	originalGroups := ratio_setting.GroupRatio2JSONString()
+	originalQuotaPerUnit := common.QuotaPerUnit
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalRatios))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalResolution))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroups))
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"test-model":9.9,"video-model":9.9}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":123,"video-model":123}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"test-model":"per_call","video-model":"per_call"}`))
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"test-model":{"1080p":0.9},"video-model":{"1080p":0.9}}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":7}`))
+	common.QuotaPerUnit = originalQuotaPerUnit * 3
+}
+
+// 旧版持久化任务在所有在线定价配置改变后仍按历史路径结算：存储上下文的
+// PerCallBilling=false 压过在线 per_call 模式，适配器调整照常生效。
+func TestLegacySettlementUsesStoredContextAfterEveryLivePricingChange(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 60, 60, 60
+	const initQuota, preConsumed, adaptorQuota = 10000, 5000, 3000
+	const tokenRemain = 8000
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-legacy-live-change", tokenRemain)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
+
+	mutateEveryLivePricingOption(t)
+
+	adaptor := &mockAdaptor{adjustReturn: adaptorQuota}
+	settleTaskBillingOnComplete(ctx, adaptor, task, &relaycommon.TaskInfo{Status: model.TaskStatusSuccess})
+
+	assert.Equal(t, 1, adaptor.adjustCalls)
+	assert.Equal(t, initQuota+(preConsumed-adaptorQuota), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-adaptorQuota), getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, adaptorQuota, task.Quota)
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, preConsumed-adaptorQuota, log.Quota)
+}
+
+// 分辨率持久化任务在所有在线定价配置（含 QuotaPerUnit）改变后，
+// 仍只用冻结快照结算。
+func TestResolutionSettlementUsesSnapshotAfterEveryLivePricingChange(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 61, 61
+	seedUser(t, userID, 1_000_000)
+	seedChannel(t, channelID)
+	frozenQuotaPerUnit := common.QuotaPerUnit
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext = resolutionBillingContext(8)
+	require.NoError(t, model.DB.Create(task).Error)
+
+	mutateEveryLivePricingOption(t)
+
+	settleTaskBillingOnComplete(context.Background(), &mockAdaptor{adjustReturn: 424242}, task, &relaycommon.TaskInfo{
+		Status:                   model.TaskStatusSuccess,
+		EffectiveDurationSeconds: 4,
+	})
+
+	want, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, frozenQuotaPerUnit)
+	require.NoError(t, err)
+	assert.Equal(t, want, task.Quota)
+	assert.Equal(t, 1_000_000+(preConsumed-want), getUserQuota(t, userID))
+}
+
+// 旧版与分辨率持久化任务失败时，均从存储的额度与计费上下文退款；
+// 在线定价怎么改都不影响退款金额，预留标识原样保留。
+func TestPersistedTasksRefundStoredQuotaAfterEveryLivePricingChange(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 62, 62, 62
+	const initQuota, legacyQuota = 50_000, 3000
+	const tokenRemain = 40_000
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-refund-live-change", tokenRemain)
+	seedChannel(t, channelID)
+
+	legacyTask := makeTask(userID, channelID, legacyQuota, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(legacyTask).Error)
+	resolutionQuota, _, err := relaycommon.CalculateVideoResolutionQuota(0.1, 8, 1.25, map[string]float64{"video_input": 1.2})
+	require.NoError(t, err)
+	resolutionTask := makeTask(userID, channelID, resolutionQuota, tokenID, BillingSourceWallet, 0)
+	resolutionTask.TaskID = resolutionTask.TaskID + "-resolution"
+	resolutionTask.PrivateData.BillingContext = resolutionBillingContext(8)
+	resolutionTask.PrivateData.BillingReservationRequestId = "req-refund-live-change"
+	require.NoError(t, model.DB.Create(resolutionTask).Error)
+
+	mutateEveryLivePricingOption(t)
+
+	assert.True(t, RefundTaskQuota(ctx, legacyTask, "legacy task failed"))
+	assert.True(t, RefundTaskQuota(ctx, resolutionTask, "resolution task failed"))
+
+	assert.Equal(t, initQuota+legacyQuota+resolutionQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+legacyQuota+resolutionQuota, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTaskQuota(t, legacyTask.ID))
+	assert.Zero(t, getTaskQuota(t, resolutionTask.ID))
+	assert.Equal(t, int64(2), countLogs(t))
+
+	var persisted model.Task
+	require.NoError(t, model.DB.First(&persisted, resolutionTask.ID).Error)
+	assert.Equal(t, "req-refund-live-change", persisted.PrivateData.BillingReservationRequestId)
+	require.NotNil(t, persisted.PrivateData.BillingContext)
+	assert.Equal(t, model.TaskPricingKindVideoResolution, persisted.PrivateData.BillingContext.PricingKind)
+	assert.Equal(t, "1080p", persisted.PrivateData.BillingContext.EffectiveResolution)
+}
+
 func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 	truncate(t)
 	originalBatchUpdateEnabled := common.BatchUpdateEnabled

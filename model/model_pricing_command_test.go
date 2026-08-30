@@ -1031,6 +1031,114 @@ func TestPricingOptionMaterializationDefaultsUsePairedBillingSnapshot(t *testing
 	assert.Equal(t, `tier("old", p * 1)`, expressions["paired-default"])
 }
 
+// blockFirstPricingLockHolder 让第一个进入串行化事务并锁定 options 行的写者
+// 停在锁内，用于构造生命周期命令与 CAS 原始写者的真实并发交错。
+func blockFirstPricingLockHolder(t *testing.T) (ready <-chan struct{}, release func()) {
+	t.Helper()
+	readyChannel := make(chan struct{}, 1)
+	releaseChannel := make(chan struct{})
+	callbackName := "block-first-pricing-lock-holder-" + t.Name()
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "options" {
+			return
+		}
+		if _, insideTransaction := tx.Statement.ConnPool.(*sql.Tx); !insideTransaction {
+			return
+		}
+		select {
+		case <-releaseChannel:
+			return
+		default:
+		}
+		select {
+		case readyChannel <- struct{}{}:
+		default:
+		}
+		<-releaseChannel
+	}))
+	t.Cleanup(func() { require.NoError(t, DB.Callback().Query().Remove(callbackName)) })
+	return readyChannel, func() { close(releaseChannel) }
+}
+
+// 生命周期事务持有行锁期间启动的陈旧 CAS 写者必须收到 OptionConflictError，
+// 而不是覆盖生命周期的提交。
+func TestStaleCASWriterConflictsAfterConcurrentLifecycleCommit(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	staleSnapshot := fixture["ModelPrice"]
+	ready, release := blockFirstPricingLockHolder(t)
+
+	price := 9.9
+	lifecycleDone := make(chan error, 1)
+	go func() {
+		_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+			Kind:       PricingCommandSave,
+			TargetName: "owned",
+			Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+		})
+		lifecycleDone <- err
+	}()
+	<-ready
+
+	casDone := make(chan error, 1)
+	go func() {
+		casDone <- UpdateOptionCAS("ModelPrice", `{"owned":123}`, staleSnapshot)
+	}()
+	release()
+
+	require.NoError(t, <-lifecycleDone)
+	casErr := <-casDone
+	var conflict *OptionConflictError
+	require.ErrorAs(t, casErr, &conflict)
+	assert.Equal(t, "ModelPrice", conflict.Key)
+	var conflictCurrent map[string]float64
+	require.NoError(t, common.Unmarshal([]byte(conflict.CurrentValue), &conflictCurrent))
+	assert.Equal(t, 9.9, conflictCurrent["owned"])
+
+	stored := numericPricingDocument(t, storedPricingDocuments(t), "ModelPrice")
+	assert.Equal(t, 9.9, stored["owned"])
+	assert.NotContains(t, stored, "stale")
+}
+
+// CAS 原始写者先提交时，随后执行的生命周期命令必须基于锁定的当前文档重放，
+// 而不是它启动前的陈旧快照。
+func TestLifecycleCommandRebasesOnDocumentsCommittedByCASWriter(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+	ready, release := blockFirstPricingLockHolder(t)
+
+	casDone := make(chan error, 1)
+	go func() {
+		casDone <- UpdateOptionCAS("ModelPrice", `{"owned":2.5,"target":2.7,"unrelated":3.7}`, fixture["ModelPrice"])
+	}()
+	<-ready
+
+	lifecycleDone := make(chan error, 1)
+	go func() {
+		_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+			Kind:       PricingCommandRename,
+			SourceName: "owned",
+			TargetName: "renamed",
+		})
+		lifecycleDone <- err
+	}()
+	release()
+
+	require.NoError(t, <-casDone)
+	require.NoError(t, <-lifecycleDone)
+
+	stored := storedPricingDocuments(t)
+	prices := numericPricingDocument(t, stored, "ModelPrice")
+	assert.NotContains(t, prices, "owned")
+	assert.Equal(t, 2.5, prices["renamed"], "rename must move the CAS-committed price, not the pre-CAS snapshot")
+	assert.Equal(t, "per_call", stringPricingDocument(t, stored, "TaskBillingMode")["renamed"])
+	resolution := resolutionPricingDocument(t, stored)
+	assert.NotContains(t, resolution, "owned")
+	assert.Equal(t, map[string]float64{"720p": 0.1}, resolution["renamed"])
+}
+
 func TestUpdateOptionCASUsesExactRawDocument(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()

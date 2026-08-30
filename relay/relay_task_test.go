@@ -116,6 +116,22 @@ func (a *retryVideoTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.R
 	}, nil
 }
 
+type retryLegacyTaskSubmitTestAdaptor struct {
+	*taskSubmitTestAdaptor
+}
+
+func (a *retryLegacyTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+	a.didRequest = true
+	a.requestCalls++
+	if a.requestCalls == 1 {
+		return nil, errors.New("forced first attempt failure")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBufferString(`{"id":"upstream-task"}`)),
+	}, nil
+}
+
 type unsupportedVideoAdaptorSpy struct {
 	channel.TaskAdaptor
 	buildCalls   int
@@ -476,6 +492,117 @@ func TestRelayTaskSubmitRetryKeepsFrozenPlanFundingAndRequestIdentity(t *testing
 	require.True(t, ok)
 	assert.Equal(t, 0.1, frozenPrice)
 	assert.Equal(t, 2, base.requestCalls)
+}
+
+// 旧版镜像：两次尝试之间上线了匹配的分辨率表，冻结的旧版计划必须继续走
+// 历史估算/预扣路径，并复用第一次尝试的计费会话与资金来源。
+func TestRelayTaskSubmitRetryKeepsLegacyPlanWhenResolutionTableAppears(t *testing.T) {
+	base := &taskSubmitTestAdaptor{}
+	adaptor := &retryLegacyTaskSubmitTestAdaptor{base}
+	c, info, deps, state := taskSubmitVideoTestContext(t, adaptor)
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"client-model":"per_call"}`))
+	plan := relaycommon.NewLegacyTaskBillingPlan("client-model", "req-legacy-frozen")
+	info.RequestId = "req-legacy-frozen"
+	info.TaskRelayInfo.BillingPlan = plan
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	require.NotNil(t, info.Billing)
+	frozenBilling := info.Billing
+	frozenFunding := info.BillingSource
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 100, state.preConsumedQuota)
+
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+	info.RequestId = "req-live-mutated"
+	result, taskErr = relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 100, result.Quota)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Same(t, frozenBilling, info.Billing)
+	assert.Equal(t, frozenFunding, info.BillingSource)
+	assert.Same(t, plan, info.TaskRelayInfo.BillingPlan)
+	assert.Equal(t, relaycommon.TaskBillingKindLegacy, info.TaskRelayInfo.BillingPlan.Kind())
+	assert.Equal(t, "req-legacy-frozen", info.TaskRelayInfo.BillingPlan.RequestID())
+	assert.Nil(t, info.ResolvedVideoBilling)
+	assert.True(t, base.didEstimate)
+	assert.True(t, base.didAdjust)
+	assert.Equal(t, 2, base.requestCalls)
+}
+
+// 一张紧凑通配符表独立激活多个具体的非 Suno 模型；Suno 请求命中同一张表仍保持旧版；
+// 激活与冻结均不改动存储的表文档。
+func TestPrepareTaskBillingPlanCompactWildcardActivatesConcreteModelsIndependently(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"*-openai-compact":{"720p":0.1,"1080p":0.2}}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+	})
+	storedBefore := ratio_setting.VideoResolutionPrice2JSONString()
+	newContext := func() *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		return c
+	}
+
+	planA, err := PrepareTaskBillingPlan(newContext(), "model-a-openai-compact", "req-wildcard-a")
+	require.NoError(t, err)
+	planB, err := PrepareTaskBillingPlan(newContext(), "model-b-openai-compact", "req-wildcard-b")
+	require.NoError(t, err)
+	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, planA.Kind())
+	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, planB.Kind())
+	assert.NotSame(t, planA, planB)
+	assert.Equal(t, "model-a-openai-compact", planA.OriginModelName())
+	assert.Equal(t, "model-b-openai-compact", planB.OriginModelName())
+	assert.Equal(t, "req-wildcard-a", planA.RequestID())
+	assert.Equal(t, "req-wildcard-b", planB.RequestID())
+	assert.Equal(t, 0.1, mustResolutionPrice(t, planA, "720p"))
+	assert.Equal(t, 0.2, mustResolutionPrice(t, planB, "1080p"))
+
+	plainPlan, err := PrepareTaskBillingPlan(newContext(), "model-a", "req-wildcard-plain")
+	require.NoError(t, err)
+	assert.Equal(t, relaycommon.TaskBillingKindLegacy, plainPlan.Kind())
+
+	sunoContext := newContext()
+	sunoContext.Set("platform", string(constant.TaskPlatformSuno))
+	sunoPlan, err := PrepareTaskBillingPlan(sunoContext, "model-c-openai-compact", "req-wildcard-suno")
+	require.NoError(t, err)
+	assert.Equal(t, relaycommon.TaskBillingKindLegacy, sunoPlan.Kind())
+
+	assert.Equal(t, storedBefore, ratio_setting.VideoResolutionPrice2JSONString())
+}
+
+// 渠道能力决定分辨率计划的可路由渠道集合，但查询/切换能力不得改动存储的表
+// 或已冻结的计划快照；旧版计划保持不受限的历史路由。
+func TestTaskChannelCapabilityGatesRoutingWithoutMutatingFrozenPricingState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"*-openai-compact":{"720p":0.1}}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+	})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	plan, err := PrepareTaskBillingPlan(c, "model-capability-openai-compact", "req-capability")
+	require.NoError(t, err)
+	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, plan.Kind())
+	storedBefore := ratio_setting.VideoResolutionPrice2JSONString()
+
+	compatible := CompatibleTaskChannelTypes(plan.Kind())
+	assert.Contains(t, compatible, constant.ChannelTypeSora)
+	assert.NotContains(t, compatible, constant.ChannelTypeKling)
+	assert.True(t, TaskChannelTypeSupportsBilling(plan.Kind(), constant.ChannelTypeSora))
+	assert.False(t, TaskChannelTypeSupportsBilling(plan.Kind(), constant.ChannelTypeKling))
+	assert.Nil(t, CompatibleTaskChannelTypes(relaycommon.TaskBillingKindLegacy))
+	assert.True(t, TaskChannelTypeSupportsBilling(relaycommon.TaskBillingKindLegacy, constant.ChannelTypeKling))
+
+	assert.Equal(t, storedBefore, ratio_setting.VideoResolutionPrice2JSONString())
+	assert.Equal(t, 0.1, mustResolutionPrice(t, plan, "720p"))
 }
 
 func TestRelayTaskSubmitRejectsUnknownResolutionBeforePreConsume(t *testing.T) {

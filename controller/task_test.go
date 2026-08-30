@@ -168,6 +168,43 @@ func TestTaskBillingReservationRequestIDUsesFrozenPlanIdentity(t *testing.T) {
 	assert.Equal(t, "req-frozen", taskBillingReservationRequestID(info))
 }
 
+// 冻结为旧版的请求在持久化时刻即使已有匹配的在线分辨率表，
+// 落库的计费上下文也必须保持旧版合同（无 PricingKind、无预留标识）。
+func TestLegacyBillingContextIgnoresLiveResolutionTableAddedAfterFreeze(t *testing.T) {
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"legacy-video":{"720p":0.9}}`))
+	require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(`{"legacy-video":"per_call"}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+	})
+
+	info := &relaycommon.RelayInfo{
+		RequestId:       "req-live",
+		OriginModelName: "legacy-video",
+		PriceData: hosttypes.PriceData{
+			ModelPrice: 0.2,
+			UsePrice:   true,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: relaycommon.NewLegacyTaskBillingPlan("legacy-video", "req-legacy-frozen"),
+		},
+	}
+
+	billingContext := taskBillingContextFromRelayInfo(info)
+	require.NotNil(t, billingContext)
+	assert.Empty(t, billingContext.PricingKind)
+	assert.Equal(t, 0.2, billingContext.ModelPrice)
+	assert.Equal(t, "legacy-video", billingContext.OriginModelName)
+	assert.True(t, billingContext.PerCallBilling)
+	assert.Empty(t, billingContext.EffectiveResolution)
+	assert.Empty(t, taskBillingReservationRequestID(info))
+}
+
 func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "req-resolution-snapshot", map[string]float64{"1080p": 0.18},
