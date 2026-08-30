@@ -5257,7 +5257,11 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Only super administrators can rename models or change model pricing.": "Seuls les super-administrateurs peuvent renommer les modèles ou modifier leur tarification.",
+    "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "La tarification a été enregistrée, mais l'affichage des ratios n'a pas pu être mis à jour. Réessayez uniquement ce paramètre.",
+    "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "L'affichage des ratios a été enregistré, mais la tarification a changé sur le serveur. Vérifiez la tarification actualisée avant de réenregistrer.",
+    "Ratio exposure was saved, but pricing could not be updated.": "L'affichage des ratios a été enregistré, mais la tarification n'a pas pu être mise à jour."
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

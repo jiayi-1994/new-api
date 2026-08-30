@@ -39,6 +39,7 @@ for (const key of [
   'navigator',
   'HTMLElement',
   'HTMLInputElement',
+  'HTMLTextAreaElement',
   'HTMLButtonElement',
   'SVGElement',
   'Node',
@@ -64,6 +65,8 @@ reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { api } = await import('@/lib/api')
+const { ROLE } = await import('@/lib/roles')
+const { useAuthStore } = await import('@/stores/auth-store')
 const { ModelMutateDrawer } = await import('../model-mutate-drawer')
 
 const i18n = createInstance()
@@ -103,6 +106,9 @@ const pricingOptions = [
 ]
 
 const putCalls: Array<{ url: string; body: unknown }> = []
+let putResponder = async () => ({
+  data: { success: true, data: modelFixture },
+})
 spyOn(api, 'get').mockImplementation((async (url: string) => {
   if (url === '/api/option/') {
     return { data: { success: true, message: '', data: pricingOptions } }
@@ -117,7 +123,7 @@ spyOn(api, 'get').mockImplementation((async (url: string) => {
 }) as typeof api.get)
 spyOn(api, 'put').mockImplementation((async (url: string, body: unknown) => {
   putCalls.push({ url, body })
-  return { data: { success: true, data: modelFixture } }
+  return putResponder()
 }) as typeof api.put)
 
 function changeInputValue(input: HTMLInputElement, value: string) {
@@ -130,6 +136,22 @@ function changeInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(
     new domWindow.Event('input', { bubbles: true }) as unknown as Event
   )
+}
+
+function changeTextareaValue(input: HTMLTextAreaElement, value: string) {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    domWindow.HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(valueSetter)
+  valueSetter.call(input, value)
+  input.dispatchEvent(
+    new domWindow.Event('input', { bubbles: true }) as unknown as Event
+  )
+}
+
+function setRole(role: number) {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'admin', role })
 }
 
 async function renderDrawer() {
@@ -165,7 +187,6 @@ async function renderDrawer() {
       </QueryClientProvider>
     )
   })
-  assert.ok(document.querySelector('#video-resolution-price-1'))
   return {
     cleanup: async () => {
       await act(async () => root.unmount())
@@ -185,9 +206,14 @@ const submitButton = () =>
 
 beforeEach(() => {
   putCalls.length = 0
+  putResponder = async () => ({
+    data: { success: true, data: modelFixture },
+  })
+  setRole(ROLE.SUPER_ADMIN)
 })
 
 after(() => {
+  useAuthStore.getState().auth.reset()
   mock.restore()
   domWindow.close()
 })
@@ -360,5 +386,128 @@ describe('model drawer video resolution persistence', () => {
 
     assert.equal(putCalls.length, 0)
     await view.cleanup()
+  })
+
+  for (const invalidValue of ['1x', 'Infinity', '   ']) {
+    test(`does not submit a destructive ratio mutation for ${JSON.stringify(invalidValue)}`, async () => {
+      const view = await renderDrawer()
+      try {
+        const perTokenRadio = document.querySelector<HTMLElement>('#per-token')
+        assert.ok(perTokenRadio)
+        await act(async () => {
+          perTokenRadio.click()
+        })
+        const ratioInput = document.querySelector<HTMLInputElement>(
+          'input[name="ratio"]'
+        )
+        assert.ok(ratioInput)
+        await act(async () => {
+          changeInputValue(ratioInput, invalidValue)
+        })
+        const button = submitButton()
+        assert.ok(button)
+        await act(async () => {
+          button.click()
+        })
+
+        assert.equal(putCalls.length, 0)
+        assert.match(
+          document.body.textContent || '',
+          /Please enter a valid number/
+        )
+      } finally {
+        await view.cleanup()
+      }
+    })
+  }
+
+  test('ordinary admins can save metadata but cannot rename or mutate pricing', async () => {
+    setRole(ROLE.ADMIN)
+    const view = await renderDrawer()
+    try {
+      const nameInput = document.querySelector<HTMLInputElement>(
+        'input[name="model_name"]'
+      )
+      const descriptionInput = document.querySelector<HTMLTextAreaElement>(
+        'textarea[name="description"]'
+      )
+      assert.ok(nameInput)
+      assert.ok(descriptionInput)
+      assert.equal(nameInput.disabled, true)
+      assert.equal(document.body.textContent?.includes('Pricing mode'), false)
+      assert.match(
+        document.body.textContent || '',
+        /Only super administrators can rename models or change model pricing\./
+      )
+      await act(async () => {
+        changeInputValue(nameInput, 'forbidden-rename')
+        changeTextareaValue(descriptionInput, 'metadata update')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+      })
+
+      assert.equal(putCalls.length, 1)
+      const body = putCalls[0].body as {
+        model_name?: string
+        description?: string
+        pricing?: unknown
+      }
+      assert.equal(body.model_name, 'video')
+      assert.equal(body.description, 'metadata update')
+      assert.equal(Object.hasOwn(body, 'pricing'), false)
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('super administrators retain rename and pricing controls', async () => {
+    const view = await renderDrawer()
+    try {
+      const nameInput = document.querySelector<HTMLInputElement>(
+        'input[name="model_name"]'
+      )
+      assert.ok(nameInput)
+      assert.equal(nameInput.disabled, false)
+      assert.match(document.body.textContent || '', /Pricing mode/)
+    } finally {
+      await view.cleanup()
+    }
+  })
+
+  test('synchronous double submit sends only one model mutation', async () => {
+    let releaseResponse: (() => void) | undefined
+    putResponder = () =>
+      new Promise((resolve) => {
+        releaseResponse = () =>
+          resolve({ data: { success: true, data: modelFixture } })
+      })
+    const view = await renderDrawer()
+    try {
+      const iconInput =
+        document.querySelector<HTMLInputElement>('input[name="icon"]')
+      assert.ok(iconInput)
+      await act(async () => {
+        changeInputValue(iconInput, 'video-icon')
+      })
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => {
+        button.click()
+        button.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      assert.equal(putCalls.length, 1)
+      assert.ok(releaseResponse)
+      await act(async () => {
+        releaseResponse?.()
+      })
+    } finally {
+      await view.cleanup()
+    }
   })
 })

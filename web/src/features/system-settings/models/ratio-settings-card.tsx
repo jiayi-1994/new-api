@@ -39,6 +39,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import { GroupRatioForm } from './group-ratio-form'
 import {
   buildPricingDocumentReplacement,
+  PRICING_DOCUMENT_KEYS,
   type PricingDocumentKey,
 } from './model-pricing-persistence'
 import { ModelRatioForm } from './model-ratio-form'
@@ -216,6 +217,26 @@ function normalizeModelFormValues(values: ModelFormValues): ModelFormValues {
   )
 }
 
+function formatModelFormValuesForEditing(
+  values: ModelFormValues
+): ModelFormValues {
+  return {
+    ...values,
+    ModelPrice: formatJsonForTextarea(values.ModelPrice),
+    ModelRatio: formatJsonForTextarea(values.ModelRatio),
+    CacheRatio: formatJsonForTextarea(values.CacheRatio),
+    CreateCacheRatio: formatJsonForTextarea(values.CreateCacheRatio),
+    CompletionRatio: formatJsonForTextarea(values.CompletionRatio),
+    ImageRatio: formatJsonForTextarea(values.ImageRatio),
+    AudioRatio: formatJsonForTextarea(values.AudioRatio),
+    AudioCompletionRatio: formatJsonForTextarea(values.AudioCompletionRatio),
+    BillingMode: formatJsonForTextarea(values.BillingMode),
+    BillingExpr: formatJsonForTextarea(values.BillingExpr),
+    TaskBillingMode: formatJsonForTextarea(values.TaskBillingMode),
+    VideoResolutionPrice: formatJsonForTextarea(values.VideoResolutionPrice),
+  }
+}
+
 export function RatioSettingsCard({
   modelDefaults,
   groupDefaults,
@@ -227,6 +248,8 @@ export function RatioSettingsCard({
   const updateOption = useUpdateOption()
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [modelSavePending, setModelSavePending] = useState(false)
+  const modelSavePendingRef = useRef(false)
 
   const resetMutation = useMutation({
     mutationFn: resetModelRatios,
@@ -269,6 +292,7 @@ export function RatioSettingsCard({
     modelNormalizedDefaults.current
   )
   const modelRawDefaults = useRef(modelPricingDocuments(modelDefaults))
+  const pricingPublicationPendingRef = useRef(false)
 
   const groupNormalizedDefaults = useRef({
     GroupRatio: normalizeJsonString(groupDefaults.GroupRatio),
@@ -287,25 +311,7 @@ export function RatioSettingsCard({
   const modelForm = useForm<ModelFormValues>({
     resolver: zodResolver(modelSchema),
     mode: 'onChange',
-    defaultValues: {
-      ...modelDefaults,
-      ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
-      ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
-      CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
-      CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
-      CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
-      ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
-      AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
-      AudioCompletionRatio: formatJsonForTextarea(
-        modelDefaults.AudioCompletionRatio
-      ),
-      BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
-      BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
-      TaskBillingMode: formatJsonForTextarea(modelDefaults.TaskBillingMode),
-      VideoResolutionPrice: formatJsonForTextarea(
-        modelDefaults.VideoResolutionPrice
-      ),
-    },
+    defaultValues: formatModelFormValuesForEditing(modelDefaults),
   })
 
   const groupForm = useForm<GroupFormValues>({
@@ -325,7 +331,17 @@ export function RatioSettingsCard({
   })
 
   useEffect(() => {
-    modelRawDefaults.current = modelPricingDocuments(modelDefaults)
+    const incomingRawDocuments = modelPricingDocuments(modelDefaults)
+    if (
+      pricingPublicationPendingRef.current &&
+      !PRICING_DOCUMENT_KEYS.every(
+        (key) => incomingRawDocuments[key] === modelRawDefaults.current[key]
+      )
+    ) {
+      return
+    }
+    pricingPublicationPendingRef.current = false
+    modelRawDefaults.current = incomingRawDocuments
     modelNormalizedDefaults.current = {
       ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
@@ -347,25 +363,7 @@ export function RatioSettingsCard({
     }
     setSavedModelValues(modelNormalizedDefaults.current)
 
-    modelForm.reset({
-      ...modelDefaults,
-      ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
-      ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
-      CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
-      CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
-      CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
-      ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
-      AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
-      AudioCompletionRatio: formatJsonForTextarea(
-        modelDefaults.AudioCompletionRatio
-      ),
-      BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
-      BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
-      TaskBillingMode: formatJsonForTextarea(modelDefaults.TaskBillingMode),
-      VideoResolutionPrice: formatJsonForTextarea(
-        modelDefaults.VideoResolutionPrice
-      ),
-    })
+    modelForm.reset(formatModelFormValuesForEditing(modelDefaults))
   }, [modelDefaults, modelForm])
 
   useEffect(() => {
@@ -396,90 +394,180 @@ export function RatioSettingsCard({
 
   const saveModelRatios = useCallback(
     async (values: ModelFormValues) => {
-      const normalized = normalizeModelFormValues(values)
-      const replacement = buildPricingDocumentReplacement(
-        modelPricingDocuments(modelNormalizedDefaults.current),
-        modelPricingDocuments(values),
-        modelRawDefaults.current
-      )
-      const hasPricingChanges = Object.keys(replacement.values).length > 0
-      const exposeRatioChanged =
-        normalized.ExposeRatioEnabled !==
-        modelNormalizedDefaults.current.ExposeRatioEnabled
-
-      if (!hasPricingChanges && !exposeRatioChanged) {
-        toast.info(t('No model price changes to save'))
-        return
-      }
+      if (modelSavePendingRef.current) return
+      modelSavePendingRef.current = true
+      setModelSavePending(true)
 
       try {
-        const [pricingResponse] = await Promise.all([
-          hasPricingChanges
-            ? pricingMutation.mutateAsync({
-                kind: 'replace_documents',
-                target_name: '',
-                values: replacement.values,
-                expected_documents: replacement.expected_documents,
-              })
-            : null,
-          exposeRatioChanged
-            ? updateSystemOption({
-                key: 'ExposeRatioEnabled',
-                value: normalized.ExposeRatioEnabled,
-              })
-            : null,
-        ])
+        const normalized = normalizeModelFormValues(values)
+        const replacement = buildPricingDocumentReplacement(
+          modelPricingDocuments(modelNormalizedDefaults.current),
+          modelPricingDocuments(values),
+          modelRawDefaults.current
+        )
+        const hasPricingChanges = Object.keys(replacement.values).length > 0
+        const exposeRatioChanged =
+          normalized.ExposeRatioEnabled !==
+          modelNormalizedDefaults.current.ExposeRatioEnabled
 
-        if (pricingResponse) {
-          const committedDocuments = pricingResponse.data as Record<
-            PricingDocumentKey,
-            string
-          >
-          modelRawDefaults.current = committedDocuments
-          const committedNormalized = normalizeModelFormValues(
-            modelFormValuesFromDocuments(
-              committedDocuments,
-              normalized.ExposeRatioEnabled
-            )
-          )
-          modelNormalizedDefaults.current = committedNormalized
-          setSavedModelValues(committedNormalized)
-          if (pricingResponse.publication_pending) {
+        if (!hasPricingChanges && !exposeRatioChanged) {
+          toast.info(t('No model price changes to save'))
+          return
+        }
+
+        let pricingCommitted = false
+        let pricingPending = false
+        let pricingConflict = false
+        let pricingFailureMessage = ''
+        let exposureSaved = false
+        let exposureFailureMessage = ''
+
+        if (hasPricingChanges) {
+          try {
+            const pricingResponse = await pricingMutation.mutateAsync({
+              kind: 'replace_documents',
+              target_name: '',
+              values: replacement.values,
+              expected_documents: replacement.expected_documents,
+            })
+            if (pricingResponse.committed) {
+              const committedDocuments = pricingResponse.data as Record<
+                PricingDocumentKey,
+                string
+              >
+              modelRawDefaults.current = committedDocuments
+              const committedFormValues = modelFormValuesFromDocuments(
+                committedDocuments,
+                normalized.ExposeRatioEnabled
+              )
+              const committedNormalized = normalizeModelFormValues({
+                ...committedFormValues,
+                ExposeRatioEnabled:
+                  modelNormalizedDefaults.current.ExposeRatioEnabled,
+              })
+              modelNormalizedDefaults.current = committedNormalized
+              setSavedModelValues(committedNormalized)
+              modelForm.reset(
+                formatModelFormValuesForEditing(committedFormValues)
+              )
+              pricingCommitted = true
+              pricingPending = pricingResponse.publication_pending
+              pricingPublicationPendingRef.current = pricingPending
+            } else {
+              pricingFailureMessage =
+                pricingResponse.message || t('Failed to update setting')
+            }
+          } catch (error: unknown) {
+            pricingConflict =
+              axios.isAxiosError(error) && error.response?.status === 409
+            pricingFailureMessage = axios.isAxiosError(error)
+              ? error.message
+              : t('Failed to update setting')
+          }
+        }
+
+        if (exposeRatioChanged) {
+          try {
+            const exposureResponse = await updateSystemOption({
+              key: 'ExposeRatioEnabled',
+              value: normalized.ExposeRatioEnabled,
+            })
+            if (exposureResponse.success) {
+              const committedNormalized = {
+                ...modelNormalizedDefaults.current,
+                ExposeRatioEnabled: normalized.ExposeRatioEnabled,
+              }
+              modelNormalizedDefaults.current = committedNormalized
+              setSavedModelValues(committedNormalized)
+              exposureSaved = true
+            } else {
+              exposureFailureMessage =
+                exposureResponse.message || t('Failed to update setting')
+            }
+          } catch (error: unknown) {
+            exposureFailureMessage =
+              error instanceof Error && error.message
+                ? error.message
+                : t('Failed to update setting')
+          }
+        }
+
+        const allRequestedChangesSucceeded =
+          (!hasPricingChanges || pricingCommitted) &&
+          (!exposeRatioChanged || exposureSaved)
+        if (
+          allRequestedChangesSucceeded &&
+          !pricingConflict &&
+          !pricingPublicationPendingRef.current
+        ) {
+          await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        }
+        if (pricingConflict) {
+          pricingPublicationPendingRef.current = false
+          await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          await queryClient.refetchQueries({ queryKey: ['system-options'] })
+        }
+
+        if (pricingCommitted) {
+          if (pricingPending) {
             toast.warning(
               t(
                 'Pricing was saved, but live settings are still converging. Do not retry.'
               )
             )
-          } else {
+          } else if (!exposeRatioChanged || exposureSaved) {
             toast.success(t('Setting updated successfully'))
           }
-        } else {
-          modelNormalizedDefaults.current = normalized
-          setSavedModelValues(normalized)
-          toast.success(t('Setting updated successfully'))
-        }
-        queryClient.invalidateQueries({ queryKey: ['system-options'] })
-      } catch (error: unknown) {
-        if (axios.isAxiosError(error) && error.response?.status === 409) {
-          await queryClient.invalidateQueries({
-            queryKey: ['system-options'],
-          })
-          await queryClient.refetchQueries({ queryKey: ['system-options'] })
-          toast.error(
-            t(
-              'Pricing changed on the server. Review the refreshed values before saving again.'
+
+          if (exposeRatioChanged && !exposureSaved) {
+            toast.warning(
+              t(
+                'Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.'
+              )
             )
-          )
+          }
           return
         }
-        toast.error(
-          axios.isAxiosError(error)
-            ? error.message
-            : t('Failed to update setting')
-        )
+
+        if (pricingConflict) {
+          toast.error(
+            t(
+              exposureSaved
+                ? 'Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.'
+                : 'Pricing changed on the server. Review the refreshed values before saving again.'
+            )
+          )
+          if (exposeRatioChanged && !exposureSaved && exposureFailureMessage) {
+            toast.error(exposureFailureMessage)
+          }
+          return
+        }
+
+        if (hasPricingChanges && pricingFailureMessage) {
+          if (exposureSaved) {
+            toast.warning(
+              t('Ratio exposure was saved, but pricing could not be updated.')
+            )
+          } else {
+            toast.error(pricingFailureMessage)
+            if (exposeRatioChanged && exposureFailureMessage) {
+              toast.error(exposureFailureMessage)
+            }
+          }
+          return
+        }
+
+        if (exposureSaved) {
+          toast.success(t('Setting updated successfully'))
+        } else if (exposureFailureMessage) {
+          toast.error(exposureFailureMessage)
+        }
+      } finally {
+        modelSavePendingRef.current = false
+        setModelSavePending(false)
       }
     },
-    [pricingMutation, queryClient, t]
+    [modelForm, pricingMutation, queryClient, t]
   )
 
   const saveGroupRatios = useCallback(
@@ -550,7 +638,11 @@ export function RatioSettingsCard({
           savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
-          isSaving={updateOption.isPending || pricingMutation.isPending}
+          isSaving={
+            modelSavePending ||
+            updateOption.isPending ||
+            pricingMutation.isPending
+          }
           isResetting={resetMutation.isPending}
           variant={tab === 'unset-models' ? 'unset' : 'default'}
         />

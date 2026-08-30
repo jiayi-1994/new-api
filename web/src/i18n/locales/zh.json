@@ -5257,7 +5257,11 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Only super administrators can rename models or change model pricing.": "只有超级管理员可以重命名模型或更改模型定价。",
+    "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "定价已保存，但倍率公开设置更新失败。请仅重试倍率公开设置。",
+    "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "倍率公开设置已保存，但服务器上的定价已发生变化。请检查刷新后的定价，再重新保存。",
+    "Ratio exposure was saved, but pricing could not be updated.": "倍率公开设置已保存，但定价更新失败。"
   },
   "DashScope Video Payload": "DashScope 视频请求包装",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "将 /v1/videos 的顶层 prompt/参考图自动包装为 input/parameters 结构（适配即梦式上游，如 meaicc）"

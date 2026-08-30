@@ -5257,7 +5257,11 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Only super administrators can rename models or change model pricing.": "Chỉ quản trị viên cấp cao mới có thể đổi tên mô hình hoặc thay đổi giá mô hình.",
+    "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "Giá đã được lưu nhưng không thể cập nhật cài đặt hiển thị hệ số. Chỉ thử lại cài đặt hiển thị hệ số.",
+    "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "Cài đặt hiển thị hệ số đã được lưu nhưng giá trên máy chủ đã thay đổi. Hãy kiểm tra giá vừa làm mới trước khi lưu lại.",
+    "Ratio exposure was saved, but pricing could not be updated.": "Cài đặt hiển thị hệ số đã được lưu nhưng không thể cập nhật giá."
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

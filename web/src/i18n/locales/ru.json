@@ -5257,7 +5257,11 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Only super administrators can rename models or change model pricing.": "Переименовывать модели и изменять их цены могут только суперадминистраторы.",
+    "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "Цены сохранены, но настройку отображения коэффициентов обновить не удалось. Повторите только обновление этой настройки.",
+    "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "Настройка отображения коэффициентов сохранена, но цены на сервере изменились. Проверьте обновлённые цены перед повторным сохранением.",
+    "Ratio exposure was saved, but pricing could not be updated.": "Настройка отображения коэффициентов сохранена, но цены обновить не удалось."
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"

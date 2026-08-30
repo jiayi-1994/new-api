@@ -5257,7 +5257,11 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Only super administrators can rename models or change model pricing.": "モデル名やモデル料金を変更できるのはスーパー管理者のみです。",
+    "Pricing was saved, but ratio exposure could not be updated. Retry only ratio exposure.": "料金は保存されましたが、倍率の公開設定を更新できませんでした。倍率の公開設定のみ再試行してください。",
+    "Ratio exposure was saved, but pricing changed on the server. Review the refreshed pricing before saving again.": "倍率の公開設定は保存されましたが、サーバー上の料金が変更されています。更新された料金を確認してから再度保存してください。",
+    "Ratio exposure was saved, but pricing could not be updated.": "倍率の公開設定は保存されましたが、料金を更新できませんでした。"
   },
   "DashScope Video Payload": "DashScope Video Payload",
   "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams": "Wrap /v1/videos prompt and images into input/parameters for DashScope-style upstreams"
