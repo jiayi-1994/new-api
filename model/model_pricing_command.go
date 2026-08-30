@@ -321,7 +321,7 @@ func executePricingTransactionWithPrelock(prelock func(tx *gorm.DB) error, mutat
 
 	result := ModelPricingCommandResult{}
 	var committedValues map[string]string
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
 		if prelock != nil {
 			if err := prelock(tx); err != nil {
 				return err
@@ -380,8 +380,10 @@ func publishPricingDocumentsLowLevel(values map[string]string) error {
 }
 
 type pricingPublicationStep struct {
-	Key   string
-	Value string
+	Key         string
+	Value       string
+	BillingMode string
+	BillingExpr string
 }
 
 func mergePricingDocumentValues(current, final string) (string, error) {
@@ -435,9 +437,18 @@ func pricingPublicationSteps(current, final map[string]string) ([]pricingPublica
 		{Key: "CreateCacheRatio", Value: final["CreateCacheRatio"]},
 		{Key: "ImageRatio", Value: final["ImageRatio"]},
 		{Key: "TaskBillingMode", Value: final["TaskBillingMode"]},
-		{Key: "billing_setting.billing_expr", Value: stagedExpression},
-		{Key: "billing_setting.billing_mode", Value: final["billing_setting.billing_mode"]},
-		{Key: "billing_setting.billing_expr", Value: final["billing_setting.billing_expr"]},
+		{
+			BillingMode: current["billing_setting.billing_mode"],
+			BillingExpr: stagedExpression,
+		},
+		{
+			BillingMode: final["billing_setting.billing_mode"],
+			BillingExpr: stagedExpression,
+		},
+		{
+			BillingMode: final["billing_setting.billing_mode"],
+			BillingExpr: final["billing_setting.billing_expr"],
+		},
 		{Key: "ModelRatio", Value: final["ModelRatio"]},
 		{Key: "ModelPrice", Value: final["ModelPrice"]},
 		{Key: ratio_setting.VideoResolutionPriceOptionKey, Value: final[ratio_setting.VideoResolutionPriceOptionKey]},
@@ -457,6 +468,12 @@ func publishPricingDocuments(values map[string]string, videoPublisher func(strin
 		return err
 	}
 	for _, step := range steps {
+		if step.BillingMode != "" {
+			if err := publishBillingPricingDocumentsLowLevel(step.BillingMode, step.BillingExpr); err != nil {
+				return fmt.Errorf("publish billing pricing documents: %w", err)
+			}
+			continue
+		}
 		if step.Key == ratio_setting.VideoResolutionPriceOptionKey {
 			if err := videoPublisher(step.Value); err != nil {
 				return fmt.Errorf("publish %s: %w", step.Key, err)
@@ -469,6 +486,17 @@ func publishPricingDocuments(values map[string]string, videoPublisher func(strin
 	}
 	InvalidatePricingCache()
 	ratio_setting.InvalidateExposedDataCache()
+	return nil
+}
+
+func publishBillingPricingDocumentsLowLevel(modeValue, exprValue string) error {
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if err := billing_setting.UpdatePricingDocuments(modeValue, exprValue); err != nil {
+		return err
+	}
+	common.OptionMap["billing_setting.billing_mode"] = modeValue
+	common.OptionMap["billing_setting.billing_expr"] = exprValue
 	return nil
 }
 
@@ -742,17 +770,7 @@ func applyModelRowMutation(tx *gorm.DB, mutation *ModelRowMutation, current *Mod
 		if mutation.Model == nil {
 			return fmt.Errorf("create model mutation requires model")
 		}
-		now := common.GetTimestamp()
-		mutation.Model.CreatedTime = now
-		mutation.Model.UpdatedTime = now
-		status := mutation.Model.Status
-		syncOfficial := mutation.Model.SyncOfficial
-		if err := tx.Create(mutation.Model).Error; err != nil {
-			return err
-		}
-		return tx.Model(&Model{}).Where("id = ?", mutation.Model.Id).Updates(map[string]any{
-			"status": status, "sync_official": syncOfficial,
-		}).Error
+		return createModelRecord(tx, mutation.Model)
 	case "update":
 		if mutation.Model == nil {
 			return fmt.Errorf("update model mutation requires model")
@@ -778,13 +796,37 @@ func applyModelRowMutation(tx *gorm.DB, mutation *ModelRowMutation, current *Mod
 
 func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingCommandResult, error) {
 	var lockedModel *Model
+	modelMutationApplied := false
 	prelock := func(tx *gorm.DB) error {
 		var err error
 		lockedModel, err = lockModelRowForMutation(tx, command.ModelMutation)
 		if err != nil {
 			return err
 		}
-		return validateModelMutationCoupling(command, lockedModel)
+		if err := validateModelMutationCoupling(command, lockedModel); err != nil {
+			return err
+		}
+		if command.ModelMutation == nil {
+			return nil
+		}
+		mutation := command.ModelMutation
+		switch mutation.Kind {
+		case "create":
+			if err := ensureActiveModelNameAvailable(tx, mutation.Model.ModelName, 0); err != nil {
+				return err
+			}
+			if err := applyModelRowMutation(tx, mutation, nil); err != nil {
+				return err
+			}
+			modelMutationApplied = true
+		case "update":
+			if lockedModel.ModelName != mutation.Model.ModelName {
+				if err := ensureActiveModelNameAvailable(tx, mutation.Model.ModelName, lockedModel.Id); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	return executePricingTransactionWithPrelock(prelock, func(tx *gorm.DB, documents *PricingDocuments) (map[string]string, error) {
 		switch command.Kind {
@@ -837,8 +879,10 @@ func ExecuteModelPricingCommand(command ModelPricingCommand) (ModelPricingComman
 		if err := writeAllPricingDocuments(tx, values); err != nil {
 			return nil, err
 		}
-		if err := applyModelRowMutation(tx, command.ModelMutation, lockedModel); err != nil {
-			return nil, err
+		if !modelMutationApplied {
+			if err := applyModelRowMutation(tx, command.ModelMutation, lockedModel); err != nil {
+				return nil, err
+			}
 		}
 		return values, nil
 	})

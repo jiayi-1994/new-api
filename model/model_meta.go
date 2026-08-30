@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -46,25 +47,67 @@ type Model struct {
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
 }
 
-func (mi *Model) Insert() error {
+type ModelNameConflictError struct {
+	Name       string
+	ExistingID int
+}
+
+func (e *ModelNameConflictError) Error() string {
+	return fmt.Sprintf("active model %q already exists", e.Name)
+}
+
+func modelNamespaceTransaction(db *gorm.DB, transaction func(*gorm.DB) error) error {
+	return db.Transaction(transaction, &sql.TxOptions{Isolation: sql.LevelSerializable})
+}
+
+// ensureActiveModelNameAvailable performs an indexed locking read inside a
+// serializable transaction. Existing rows are locked directly; an absent name
+// is protected by the database's serializable predicate/range semantics so
+// concurrent creators cannot both commit.
+func ensureActiveModelNameAvailable(tx *gorm.DB, name string, excludeID int) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	query := lockForUpdate(tx).Where("model_name = ?", name)
+	if excludeID != 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	var existing Model
+	result := query.Order("id ASC").Limit(1).Find(&existing)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 0 {
+		return &ModelNameConflictError{Name: name, ExistingID: existing.Id}
+	}
+	return nil
+}
+
+func createModelRecord(tx *gorm.DB, model *Model) error {
 	now := common.GetTimestamp()
-	mi.CreatedTime = now
-	mi.UpdatedTime = now
-
-	// 保存原始值（因为 Create 后可能被 GORM 的 default 标签覆盖为 1）
-	originalStatus := mi.Status
-	originalSyncOfficial := mi.SyncOfficial
-
-	// 先创建记录（GORM 会对零值字段应用默认值）
-	if err := DB.Create(mi).Error; err != nil {
+	model.CreatedTime = now
+	model.UpdatedTime = now
+	status := model.Status
+	syncOfficial := model.SyncOfficial
+	if err := tx.Create(model).Error; err != nil {
 		return err
 	}
-
-	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
-		"status":        originalStatus,
-		"sync_official": originalSyncOfficial,
+	return tx.Model(&Model{}).Where("id = ?", model.Id).Updates(map[string]interface{}{
+		"status": status, "sync_official": syncOfficial,
 	}).Error
+}
+
+func insertModelWithActiveNameGuard(db *gorm.DB, model *Model) error {
+	return modelNamespaceTransaction(db, func(tx *gorm.DB) error {
+		if err := ensureActiveModelNameAvailable(tx, model.ModelName, 0); err != nil {
+			return err
+		}
+		return createModelRecord(tx, model)
+	})
+}
+
+func (mi *Model) Insert() error {
+	return insertModelWithActiveNameGuard(DB, mi)
 }
 
 func IsModelNameDuplicated(id int, name string) (bool, error) {
@@ -81,47 +124,38 @@ func (mi *Model) Update() error {
 	defer videoResolutionPriceOptionMu.Unlock()
 
 	mi.UpdatedTime = common.GetTimestamp()
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
+	var publishedValue string
+	err := modelNamespaceTransaction(DB, func(tx *gorm.DB) error {
+		var current Model
+		if err := lockForUpdate(tx).Where("id = ?", mi.Id).First(&current).Error; err != nil {
+			return err
 		}
-	}()
-
-	var current Model
-	if err := lockForUpdate(tx).Where("id = ?", mi.Id).First(&current).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	if current.ModelName != mi.ModelName {
-		if prices, ok := priceDocument[current.ModelName]; ok {
-			delete(priceDocument, current.ModelName)
-			priceDocument[mi.ModelName] = prices
+		if current.ModelName != mi.ModelName {
+			if err := ensureActiveModelNameAvailable(tx, mi.ModelName, current.Id); err != nil {
+				return err
+			}
 		}
-	}
-	publishedValue, err := saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
+		priceOption, priceDocument, err := loadVideoResolutionPriceOptionForLifecycle(tx)
+		if err != nil {
+			return err
+		}
+		if current.ModelName != mi.ModelName {
+			if prices, ok := priceDocument[current.ModelName]; ok {
+				delete(priceDocument, current.ModelName)
+				priceDocument[mi.ModelName] = prices
+			}
+		}
+		publishedValue, err = saveVideoResolutionPriceOptionForLifecycle(tx, priceOption, priceDocument)
+		if err != nil {
+			return err
+		}
 
-	// 使用 Select 强制更新所有字段，包括零值
-	if err := tx.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
-		Updates(mi).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	if err := tx.Commit().Error; err != nil {
+		// 使用 Select 强制更新所有字段，包括零值
+		return tx.Model(&Model{}).Where("id = ?", mi.Id).
+			Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+			Updates(mi).Error
+	})
+	if err != nil {
 		return err
 	}
 	return publishVideoResolutionPriceOption(publishedValue)

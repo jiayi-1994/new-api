@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -29,6 +30,7 @@ var billingSetting = BillingSetting{
 	BillingMode: make(map[string]string),
 	BillingExpr: make(map[string]string),
 }
+var billingSettingMu sync.RWMutex
 
 func init() {
 	config.GlobalConfig.Register("billing_setting", &billingSetting)
@@ -39,6 +41,8 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func GetBillingMode(model string) string {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
 	if mode, ok := billingSetting.BillingMode[model]; ok {
 		return mode
 	}
@@ -46,43 +50,156 @@ func GetBillingMode(model string) string {
 }
 
 func GetBillingExpr(model string) (string, bool) {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
 	expr, ok := billingSetting.BillingExpr[model]
 	return expr, ok
 }
 
+// GetBillingModeAndExpr reads both billing documents under one synchronization
+// boundary so request paths cannot pair a new mode with an old expression.
+func GetBillingModeAndExpr(model string) (string, string, bool) {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
+	mode, ok := billingSetting.BillingMode[model]
+	if !ok {
+		mode = BillingModeRatio
+	}
+	expr, hasExpr := billingSetting.BillingExpr[model]
+	return mode, expr, hasExpr
+}
+
 func GetBillingModeCopy() map[string]string {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
 	return lo.Assign(billingSetting.BillingMode)
 }
 
 func GetBillingExprCopy() map[string]string {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
 	return lo.Assign(billingSetting.BillingExpr)
 }
 
-func BillingMode2JSONString() string {
-	value, err := common.Marshal(GetBillingModeCopy())
-	if err != nil {
-		return "{}"
+// PricingDocumentsJSON serializes the mode and expression maps from one
+// in-memory snapshot.
+func PricingDocumentsJSON() (string, string) {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
+	modes, modeErr := common.Marshal(billingSetting.BillingMode)
+	expressions, expressionErr := common.Marshal(billingSetting.BillingExpr)
+	if modeErr != nil || expressionErr != nil {
+		return "{}", "{}"
 	}
-	return string(value)
+	return string(modes), string(expressions)
+}
+
+func BillingMode2JSONString() string {
+	modes, _ := PricingDocumentsJSON()
+	return modes
 }
 
 func BillingExpr2JSONString() string {
-	value, err := common.Marshal(GetBillingExprCopy())
-	if err != nil {
-		return "{}"
-	}
-	return string(value)
+	_, expressions := PricingDocumentsJSON()
+	return expressions
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {
+	billingSettingMu.RLock()
+	modes := lo.Assign(billingSetting.BillingMode)
+	expressions := lo.Assign(billingSetting.BillingExpr)
+	billingSettingMu.RUnlock()
 	extra := make(map[string]any, 2)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
+	if len(modes) > 0 {
 		extra[BillingModeField] = modes
 	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
-		extra[BillingExprField] = exprs
+	if len(expressions) > 0 {
+		extra[BillingExprField] = expressions
 	}
 	return lo.Assign(base, extra)
+}
+
+func decodePricingDocuments(modeValue, exprValue string) (map[string]string, map[string]string, error) {
+	if err := ValidatePricingDocuments(modeValue, exprValue); err != nil {
+		return nil, nil, err
+	}
+	var modes map[string]string
+	if err := common.Unmarshal([]byte(modeValue), &modes); err != nil {
+		return nil, nil, fmt.Errorf("parse billing modes: %w", err)
+	}
+	var expressions map[string]string
+	if err := common.Unmarshal([]byte(exprValue), &expressions); err != nil {
+		return nil, nil, fmt.Errorf("parse billing expressions: %w", err)
+	}
+	if modes == nil {
+		modes = make(map[string]string)
+	}
+	if expressions == nil {
+		expressions = make(map[string]string)
+	}
+	return modes, expressions, nil
+}
+
+// UpdatePricingDocuments validates both maps before atomically publishing the
+// immutable pair to all readers.
+func UpdatePricingDocuments(modeValue, exprValue string) error {
+	modes, expressions, err := decodePricingDocuments(modeValue, exprValue)
+	if err != nil {
+		return err
+	}
+	billingSettingMu.Lock()
+	billingSetting.BillingMode = modes
+	billingSetting.BillingExpr = expressions
+	billingSettingMu.Unlock()
+	return nil
+}
+
+// UpdateConfigFromMap lets config.GlobalConfig route all reflected setters
+// through the same billing snapshot lock. Partial updates validate against the
+// current value while holding the writer lock, avoiding lost concurrent writes.
+func (setting *BillingSetting) UpdateConfigFromMap(values map[string]string) error {
+	billingSettingMu.Lock()
+	defer billingSettingMu.Unlock()
+	modeJSON, err := common.Marshal(setting.BillingMode)
+	if err != nil {
+		return err
+	}
+	exprJSON, err := common.Marshal(setting.BillingExpr)
+	if err != nil {
+		return err
+	}
+	if value, ok := values[BillingModeField]; ok {
+		modeJSON = []byte(value)
+	}
+	if value, ok := values[BillingExprField]; ok {
+		exprJSON = []byte(value)
+	}
+	modes, expressions, err := decodePricingDocuments(string(modeJSON), string(exprJSON))
+	if err != nil {
+		return err
+	}
+	setting.BillingMode = modes
+	setting.BillingExpr = expressions
+	return nil
+}
+
+// ConfigToMap lets config.GlobalConfig serialize the pair without racing a
+// concurrent publisher.
+func (setting *BillingSetting) ConfigToMap() (map[string]string, error) {
+	billingSettingMu.RLock()
+	defer billingSettingMu.RUnlock()
+	modes, err := common.Marshal(setting.BillingMode)
+	if err != nil {
+		return nil, err
+	}
+	expressions, err := common.Marshal(setting.BillingExpr)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		BillingModeField: string(modes),
+		BillingExprField: string(expressions),
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -69,6 +69,27 @@ func TestModelMetaRenameMovesOnlyVideoResolutionPriceAtomically(t *testing.T) {
 	assertTaskBillingModeUnchanged(t, taskMode)
 }
 
+func TestModelMetaRenameRejectsActiveTargetWithoutMutatingResolutionPrice(t *testing.T) {
+	setupModelMetaResolutionPriceTest(t)
+	source := seedResolutionPricedModel(t, "rename-source")
+	target := seedResolutionPricedModel(t, "rename-target")
+	const priceDocument = `{"rename-source":{"720p":0.1},"rename-target":{"1080p":0.2}}`
+	require.NoError(t, UpdateOption(ratio_setting.VideoResolutionPriceOptionKey, priceDocument))
+
+	source.ModelName = target.ModelName
+	err := source.Update()
+	var conflict *ModelNameConflictError
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, target.Id, conflict.ExistingID)
+
+	var storedSource Model
+	require.NoError(t, DB.First(&storedSource, source.Id).Error)
+	assert.Equal(t, "rename-source", storedSource.ModelName)
+	var storedPrices Option
+	require.NoError(t, DB.First(&storedPrices, "key = ?", ratio_setting.VideoResolutionPriceOptionKey).Error)
+	assert.JSONEq(t, priceDocument, storedPrices.Value)
+}
+
 func TestModelMetaDeleteRemovesOnlyVideoResolutionPriceAtomically(t *testing.T) {
 	setupModelMetaResolutionPriceTest(t)
 	modelMeta := seedResolutionPricedModel(t, "video-delete")

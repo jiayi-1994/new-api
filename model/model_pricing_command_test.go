@@ -3,10 +3,12 @@ package model
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -420,6 +422,219 @@ func TestExecuteModelPricingCommandLocksModelBeforePricingDocuments(t *testing.T
 	assert.Less(t, modelQuery, optionQuery, "model row must be locked before option rows to match retained lifecycle writers")
 }
 
+func TestExecuteModelPricingCommandRejectsActiveTargetNameConflict(t *testing.T) {
+	tests := []struct {
+		name          string
+		command       func(source Model) ModelPricingCommand
+		expectsSource bool
+	}{
+		{
+			name: "rename",
+			command: func(source Model) ModelPricingCommand {
+				updated := source
+				updated.ModelName = "target"
+				return ModelPricingCommand{
+					Kind:          PricingCommandRename,
+					SourceName:    "owned",
+					TargetName:    "target",
+					ModelMutation: &ModelRowMutation{Kind: "update", ID: source.Id, Model: &updated},
+				}
+			},
+			expectsSource: true,
+		},
+		{
+			name: "create save",
+			command: func(Model) ModelPricingCommand {
+				price := 4.25
+				return ModelPricingCommand{
+					Kind:       PricingCommandSave,
+					TargetName: "target",
+					Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+					ModelMutation: &ModelRowMutation{
+						Kind:  "create",
+						Model: &Model{ModelName: "target", Status: 1, SyncOfficial: 1},
+					},
+				}
+			},
+		},
+		{
+			name: "create copy",
+			command: func(Model) ModelPricingCommand {
+				return ModelPricingCommand{
+					Kind:       PricingCommandCopy,
+					SourceName: "owned",
+					TargetName: "target",
+					ModelMutation: &ModelRowMutation{
+						Kind:  "create",
+						Model: &Model{ModelName: "target", Status: 1, SyncOfficial: 1},
+					},
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupPricingCommandTest(t)
+			fixture := pricingCommandFixture()
+			seedPricingDocuments(t, fixture)
+
+			source := Model{ModelName: "owned", Status: 1, SyncOfficial: 1}
+			if test.expectsSource {
+				require.NoError(t, DB.Create(&source).Error)
+			}
+			target := Model{ModelName: "target", Status: 1, SyncOfficial: 1}
+			require.NoError(t, DB.Create(&target).Error)
+
+			result, err := ExecuteModelPricingCommand(test.command(source))
+			var conflict *ModelNameConflictError
+			require.ErrorAs(t, err, &conflict)
+			assert.Equal(t, target.Id, conflict.ExistingID)
+			assert.False(t, result.Committed)
+
+			var targetCount int64
+			require.NoError(t, DB.Model(&Model{}).Where("model_name = ?", "target").Count(&targetCount).Error)
+			assert.EqualValues(t, 1, targetCount)
+			if test.expectsSource {
+				var storedSource Model
+				require.NoError(t, DB.First(&storedSource, source.Id).Error)
+				assert.Equal(t, "owned", storedSource.ModelName)
+			}
+			stored := storedPricingDocuments(t)
+			for _, key := range modelPricingOptionKeys {
+				assert.JSONEq(t, fixture[key], stored[key], key)
+			}
+		})
+	}
+}
+
+func TestExecuteModelPricingCommandCreatesModelBeforeLockingPricingDocuments(t *testing.T) {
+	setupPricingCommandTest(t)
+	seedPricingDocuments(t, pricingCommandFixture())
+	price := 4.25
+
+	events := make([]string, 0, len(modelPricingOptionKeys)+1)
+	queryCallback := "pricing-command-create-query-order-" + t.Name()
+	createCallback := "pricing-command-create-row-order-" + t.Name()
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(queryCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "options" {
+			events = append(events, "option-lock")
+		}
+	}))
+	require.NoError(t, DB.Callback().Create().Before("gorm:create").Register(createCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "models" {
+			events = append(events, "model-create")
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Query().Remove(queryCallback))
+		require.NoError(t, DB.Callback().Create().Remove(createCallback))
+	})
+
+	_, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandSave,
+		TargetName: "new-model",
+		Selection:  &ModelPricingSelection{Mode: PricingModeFixed, ModelPrice: &price},
+		ModelMutation: &ModelRowMutation{
+			Kind:  "create",
+			Model: &Model{ModelName: "new-model", Status: 1, SyncOfficial: 1},
+		},
+	})
+	require.NoError(t, err)
+
+	modelCreate := -1
+	optionLock := -1
+	for index, event := range events {
+		if event == "model-create" && modelCreate == -1 {
+			modelCreate = index
+		}
+		if event == "option-lock" && optionLock == -1 {
+			optionLock = index
+		}
+	}
+	require.NotEqual(t, -1, modelCreate)
+	require.NotEqual(t, -1, optionLock)
+	assert.Less(t, modelCreate, optionLock, "create must reserve the model name before pricing option locks")
+}
+
+func TestExecuteModelPricingCommandRollsBackEarlyModelCreateWhenPricingValidationFails(t *testing.T) {
+	setupPricingCommandTest(t)
+	fixture := pricingCommandFixture()
+	seedPricingDocuments(t, fixture)
+
+	result, err := ExecuteModelPricingCommand(ModelPricingCommand{
+		Kind:       PricingCommandSave,
+		TargetName: "invalid-new-model",
+		Selection:  &ModelPricingSelection{Mode: PricingModeFixed},
+		ModelMutation: &ModelRowMutation{
+			Kind:  "create",
+			Model: &Model{ModelName: "invalid-new-model", Status: 1, SyncOfficial: 1},
+		},
+	})
+	require.Error(t, err)
+	assert.False(t, result.Committed)
+	var count int64
+	require.NoError(t, DB.Model(&Model{}).Where("model_name = ?", "invalid-new-model").Count(&count).Error)
+	assert.Zero(t, count)
+	stored := storedPricingDocuments(t)
+	for _, key := range modelPricingOptionKeys {
+		assert.JSONEq(t, fixture[key], stored[key], key)
+	}
+}
+
+func TestInsertModelWithActiveNameGuardSerializesAbsentTargetAcrossConnections(t *testing.T) {
+	dsn := "file:" + filepath.ToSlash(filepath.Join(t.TempDir(), "models.db")) + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	firstDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	secondDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, firstDB.AutoMigrate(&Model{}))
+	for _, db := range []*gorm.DB{firstDB, secondDB} {
+		sqlDB, sqlErr := db.DB()
+		require.NoError(t, sqlErr)
+		sqlDB.SetMaxOpenConns(1)
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	for index, db := range []*gorm.DB{firstDB, secondDB} {
+		callbackName := fmt.Sprintf("active-name-read-%d-%s", index, t.Name())
+		require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+			if tx.Statement.Table == "models" {
+				ready <- struct{}{}
+				<-release
+			}
+		}))
+		t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	}
+
+	results := make(chan error, 2)
+	go func() {
+		results <- insertModelWithActiveNameGuard(firstDB, &Model{ModelName: "concurrent", Status: 1, SyncOfficial: 1})
+	}()
+	go func() {
+		results <- insertModelWithActiveNameGuard(secondDB, &Model{ModelName: "concurrent", Status: 1, SyncOfficial: 1})
+	}()
+	<-ready
+	<-ready
+	close(release)
+
+	firstErr := <-results
+	secondErr := <-results
+	successes := 0
+	if firstErr == nil {
+		successes++
+	}
+	if secondErr == nil {
+		successes++
+	}
+	assert.Equal(t, 1, successes, "serializable absent-name reads must allow at most one creator to commit")
+	var count int64
+	require.NoError(t, firstDB.Model(&Model{}).Where("model_name = ?", "concurrent").Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+}
+
 func TestUpdateOptionCASUsesExactRawDocument(t *testing.T) {
 	setupPricingCommandTest(t)
 	fixture := pricingCommandFixture()
@@ -511,19 +726,26 @@ func TestPricingPublicationPlanKeepsEveryTransitionBillable(t *testing.T) {
 	live := clonePricingValues(current)
 	models := []string{"fixed-to-ratio", "ratio-to-fixed", "tiered-to-fixed", "fixed-to-tiered"}
 	for _, step := range steps {
-		live[step.Key] = step.Value
+		published := step.Key
+		if step.BillingMode != "" {
+			live["billing_setting.billing_mode"] = step.BillingMode
+			live["billing_setting.billing_expr"] = step.BillingExpr
+			published = "billing pricing snapshot"
+		} else {
+			live[step.Key] = step.Value
+		}
 		modes := stringPricingDocument(t, live, "billing_setting.billing_mode")
 		expressions := stringPricingDocument(t, live, "billing_setting.billing_expr")
 		prices := numericPricingDocument(t, live, "ModelPrice")
 		ratios := numericPricingDocument(t, live, "ModelRatio")
 		for _, modelName := range models {
 			if modes[modelName] == "tiered_expr" {
-				assert.NotEmpty(t, expressions[modelName], "%s after publishing %s", modelName, step.Key)
+				assert.NotEmpty(t, expressions[modelName], "%s after publishing %s", modelName, published)
 				continue
 			}
 			_, hasPrice := prices[modelName]
 			_, hasRatio := ratios[modelName]
-			assert.True(t, hasPrice || hasRatio, "%s became unpriced after publishing %s", modelName, step.Key)
+			assert.True(t, hasPrice || hasRatio, "%s became unpriced after publishing %s", modelName, published)
 		}
 	}
 	for _, key := range modelPricingOptionKeys {
