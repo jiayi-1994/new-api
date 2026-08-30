@@ -19,12 +19,15 @@ import (
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
+	resolutionBilling := info.TaskRelayInfo != nil &&
+		info.TaskRelayInfo.BillingPlan != nil &&
+		info.TaskRelayInfo.BillingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution
 	var resolvedVideoBilling *relaycommon.ResolvedVideoBilling
-	if info.TaskRelayInfo != nil {
+	if resolutionBilling {
 		resolvedVideoBilling = info.TaskRelayInfo.ResolvedVideoBilling
 	}
 	// 支持任务仅按次计费：额度不随参数变化，但参数（时长等）仍需记录以便追溯
-	perCallBilling := resolvedVideoBilling == nil && ratio_setting.IsTaskPerCallBilling(info.OriginModelName)
+	perCallBilling := !resolutionBilling && ratio_setting.IsTaskPerCallBilling(info.OriginModelName)
 	if perCallBilling {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
 	}
@@ -52,9 +55,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
-	if resolvedVideoBilling == nil {
+	if !resolutionBilling {
 		other["model_price"] = info.PriceData.ModelPrice
-	} else {
+	} else if resolvedVideoBilling != nil {
 		adminInfo := map[string]interface{}{
 			"video_resolution_billing": map[string]interface{}{
 				"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
@@ -94,7 +97,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Group:     info.UsingGroup,
 		Other:     other,
 	})
-	if resolvedVideoBilling == nil {
+	if !resolutionBilling {
 		model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 		model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -32,6 +33,30 @@ type TaskSubmitResult struct {
 	Platform       constant.TaskPlatform
 	Quota          int
 	//PerCallPrice   types.PriceData
+}
+
+// ValidateFrozenResolutionBilling verifies that the resolved selection is a
+// complete snapshot of the resolution tier frozen on the request plan.
+func ValidateFrozenResolutionBilling(
+	plan *relaycommon.TaskBillingPlan,
+	resolved *relaycommon.ResolvedVideoBilling,
+) (*relaycommon.ResolvedVideoBilling, error) {
+	if plan == nil || plan.Kind() != relaycommon.TaskBillingKindVideoResolution || resolved == nil {
+		return nil, errors.New("resolution billing plan is missing its resolved selection")
+	}
+	validated, err := relaycommon.NewResolvedVideoBilling(resolved.Selection, resolved.SelectedResolutionPrice)
+	if err != nil {
+		return nil, err
+	}
+	if resolved.QuotaPerUnit <= 0 || math.IsNaN(resolved.QuotaPerUnit) || math.IsInf(resolved.QuotaPerUnit, 0) {
+		return nil, errors.New("resolution billing has an invalid quota unit")
+	}
+	frozenPrice, ok := plan.ResolutionPrice(validated.Selection.EffectiveResolution)
+	if !ok || frozenPrice != validated.SelectedResolutionPrice {
+		return nil, errors.New("resolved billing does not match the frozen resolution tier")
+	}
+	validated.QuotaPerUnit = resolved.QuotaPerUnit
+	return validated, nil
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -187,6 +212,9 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 		info.TaskRelayInfo.BillingPlan = billingPlan
 	}
 	plan := info.TaskRelayInfo.BillingPlan
+	if plan.Kind() == relaycommon.TaskBillingKindLegacy {
+		info.TaskRelayInfo.ResolvedVideoBilling = nil
+	}
 	info.InitChannelMeta(c)
 
 	// 1. 确定 platform → 创建适配器 → 验证请求
@@ -249,6 +277,11 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 		}
 		info.PriceData = priceData
 		noteTaskQuotaClamp(info, clamp)
+		resolved, err := ValidateFrozenResolutionBilling(plan, info.ResolvedVideoBilling)
+		if err != nil {
+			return nil, videoResolutionNotSupported(plan.OriginModelName(), selection.EffectiveResolution)
+		}
+		info.ResolvedVideoBilling = resolved
 	} else {
 		priceData, err := helper.ModelPriceHelperPerCall(c, info)
 		if err != nil {

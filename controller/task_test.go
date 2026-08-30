@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -12,9 +13,128 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func TestLegacyFrozenPlanWithStaleResolvedBillingUsesWalletAndPersistsWithoutReservation(t *testing.T) {
+	originalDB := model.DB
+	originalLogDB := model.LOG_DB
+	originalRedisEnabled := common.RedisEnabled
+	originalBatchUpdateEnabled := common.BatchUpdateEnabled
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Task{}))
+	model.DB = db
+	model.LOG_DB = db
+	common.RedisEnabled = false
+	common.BatchUpdateEnabled = false
+	t.Cleanup(func() {
+		model.DB = originalDB
+		model.LOG_DB = originalLogDB
+		common.RedisEnabled = originalRedisEnabled
+		common.BatchUpdateEnabled = originalBatchUpdateEnabled
+	})
+
+	newLegacyInfo := func(userID int, requestID string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			RequestId:       requestID,
+			UserId:          userID,
+			OriginModelName: "legacy-video",
+			UsingGroup:      "default",
+			ForcePreConsume: true,
+			IsPlayground:    true,
+			ChannelMeta:     &relaycommon.ChannelMeta{},
+			PriceData: hosttypes.PriceData{
+				ModelPrice: 0.2,
+				Quota:      100,
+				UsePrice:   true,
+				GroupRatioInfo: hosttypes.GroupRatioInfo{
+					GroupRatio: 1,
+				},
+			},
+			TaskRelayInfo: &relaycommon.TaskRelayInfo{
+				BillingPlan: relaycommon.NewLegacyTaskBillingPlan("legacy-video", requestID+"-frozen"),
+				ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+					Selection: relaycommon.VideoBillingSelection{
+						EffectiveResolution:      "1080p",
+						EffectiveDurationSeconds: 8,
+					},
+					SelectedResolutionPrice: 0.9,
+					QuotaPerUnit:            500,
+				},
+			},
+		}
+	}
+	newTask := func(info *relaycommon.RelayInfo, billingContext *model.TaskBillingContext) *model.Task {
+		task := model.InitTask(constant.TaskPlatform("video-test"), info)
+		task.PrivateData.BillingSource = info.BillingSource
+		task.PrivateData.BillingContext = billingContext
+		if billingContext != nil && billingContext.PricingKind == model.TaskPricingKindVideoResolution {
+			task.PrivateData.BillingReservationRequestId = taskBillingReservationRequestID(info)
+		}
+		task.Quota = 100
+		return task
+	}
+
+	require.NoError(t, db.Create(&model.User{Id: 701, Username: "legacy-success", AffCode: "legacy-success", Quota: 1_000}).Error)
+	successInfo := newLegacyInfo(701, "req-live-success")
+	successInfo.UserSetting.BillingPreference = "wallet_only"
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	session, apiErr := service.NewBillingSession(c, successInfo, 100)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	assert.Equal(t, service.BillingSourceWallet, successInfo.BillingSource)
+	require.NoError(t, session.Settle(100))
+	assert.False(t, session.NeedsRefund())
+	billingContext := taskBillingContextFromRelayInfo(successInfo)
+	require.NotNil(t, billingContext)
+	require.Empty(t, billingContext.PricingKind)
+	require.Empty(t, taskBillingReservationRequestID(successInfo))
+	require.NoError(t, service.PersistSubmittedTask(c, newTask(successInfo, billingContext)))
+	var persisted int64
+	require.NoError(t, db.Model(&model.Task{}).Where("user_id = ?", 701).Count(&persisted).Error)
+	assert.EqualValues(t, 1, persisted)
+	var walletQuota int
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 701).Select("quota").Scan(&walletQuota).Error)
+	assert.Equal(t, 900, walletQuota)
+}
+
+func TestTaskBillingContextResolutionPlanRequiresResolvedSelection(t *testing.T) {
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "req-resolution", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
+
+	assert.Nil(t, taskBillingContextFromRelayInfo(&relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{BillingPlan: plan},
+	}))
+	assert.Nil(t, taskBillingContextFromRelayInfo(&relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan:          plan,
+			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{},
+		},
+	}))
+	assert.Nil(t, taskBillingContextFromRelayInfo(&relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: plan,
+			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				Selection: relaycommon.VideoBillingSelection{
+					EffectiveResolution:      "720p",
+					EffectiveDurationSeconds: 5,
+				},
+				SelectedResolutionPrice: 0.2,
+				QuotaPerUnit:            500,
+			},
+		},
+	}))
+}
 
 func TestTaskBillingContextLegacyFixedPerSecondRemainsPerSecond(t *testing.T) {
 	original := ratio_setting.TaskBillingMode2JSONString()
@@ -49,6 +169,10 @@ func TestTaskBillingReservationRequestIDUsesFrozenPlanIdentity(t *testing.T) {
 }
 
 func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "req-resolution-snapshot", map[string]float64{"1080p": 0.18},
+	)
+	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "video-model",
 		PriceData: hosttypes.PriceData{
@@ -59,6 +183,7 @@ func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
 			},
 		},
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: plan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",

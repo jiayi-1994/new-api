@@ -35,6 +35,10 @@ func TestResolutionPricingAdminLogIncludesPerSecondSelection(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "req-resolution-admin-log", map[string]float64{"1080p": 0.18},
+	)
+	require.NoError(t, err)
 
 	info := &relaycommon.RelayInfo{
 		UserId:          90,
@@ -50,6 +54,7 @@ func TestResolutionPricingAdminLogIncludesPerSecondSelection(t *testing.T) {
 			},
 		},
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
@@ -81,6 +86,53 @@ func TestResolutionPricingAdminLogIncludesPerSecondSelection(t *testing.T) {
 	}, adminInfo["video_resolution_billing"])
 }
 
+func TestLegacyPlanConsumptionIgnoresStaleResolvedVideoBilling(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	seedUser(t, 92, 1_000_000)
+	seedChannel(t, 92)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	info := &relaycommon.RelayInfo{
+		UserId:          92,
+		OriginModelName: "legacy-video",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 92},
+		PriceData: types.PriceData{
+			ModelPrice: 0.2,
+			Quota:      100,
+			UsePrice:   true,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: relaycommon.NewLegacyTaskBillingPlan("legacy-video", "req-legacy-log"),
+			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				Selection: relaycommon.VideoBillingSelection{
+					EffectiveResolution:      "1080p",
+					EffectiveDurationSeconds: 8,
+				},
+				SelectedResolutionPrice: 0.9,
+			},
+		},
+	}
+
+	LogTaskConsumption(c, info)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.Unmarshal([]byte(log.Other), &other))
+	assert.Equal(t, 0.2, other["model_price"])
+	assert.NotContains(t, other, "admin_info")
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, 92).Error)
+	assert.Equal(t, 100, user.UsedQuota)
+	assert.Equal(t, 1, user.RequestCount)
+}
+
 func TestResolutionPricingUserLogOmitsAdminPricingFields(t *testing.T) {
 	truncate(t)
 	gin.SetMode(gin.TestMode)
@@ -89,6 +141,10 @@ func TestResolutionPricingUserLogOmitsAdminPricingFields(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"video-model", "req-resolution-user-log", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
 		UserId:          91,
 		OriginModelName: "video-model",
@@ -101,6 +157,7 @@ func TestResolutionPricingUserLogOmitsAdminPricingFields(t *testing.T) {
 			},
 		},
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "720p",

@@ -601,6 +601,16 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
+		billingContext := taskBillingContextFromRelayInfo(relayInfo)
+		if billingContext == nil {
+			taskErr = service.TaskErrorWrapperLocal(
+				errors.New("resolution billing plan is missing its resolved selection"),
+				"video_resolution_billing_unresolved",
+				http.StatusInternalServerError,
+			)
+			respondTaskError(c, taskErr)
+			return
+		}
 		// 上游已接受，响应也已写出。结算失败时只能按「实际收到的钱」落库：
 		// 重试换渠道可能让最终额度高于预扣额度，若仍用未成功入账的额度建任务，
 		// Task.Insert 的一致性校验会拒绝，最终变成用户免费拿到一个查不到的任务。
@@ -620,7 +630,7 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = taskBillingContextFromRelayInfo(relayInfo)
+		task.PrivateData.BillingContext = billingContext
 		if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
 			task.PrivateData.BillingReservationRequestId = taskBillingReservationRequestID(relayInfo)
 		}
@@ -646,31 +656,39 @@ func taskBillingReservationRequestID(relayInfo *relaycommon.RelayInfo) string {
 		relayInfo.TaskRelayInfo.BillingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution {
 		return relayInfo.TaskRelayInfo.BillingPlan.RequestID()
 	}
-	return relayInfo.RequestId
+	return ""
 }
 
 func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.TaskBillingContext {
 	if relayInfo == nil {
 		return nil
 	}
-	if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.ResolvedVideoBilling != nil {
-		resolved := relayInfo.TaskRelayInfo.ResolvedVideoBilling
-		independentRatios := make(map[string]float64, len(resolved.Selection.IndependentRatios))
-		for name, ratio := range resolved.Selection.IndependentRatios {
+	if relayInfo.TaskRelayInfo != nil &&
+		relayInfo.TaskRelayInfo.BillingPlan != nil &&
+		relayInfo.TaskRelayInfo.BillingPlan.Kind() == relaycommon.TaskBillingKindVideoResolution {
+		validated, err := relay.ValidateFrozenResolutionBilling(
+			relayInfo.TaskRelayInfo.BillingPlan,
+			relayInfo.TaskRelayInfo.ResolvedVideoBilling,
+		)
+		if err != nil {
+			return nil
+		}
+		independentRatios := make(map[string]float64, len(validated.Selection.IndependentRatios))
+		for name, ratio := range validated.Selection.IndependentRatios {
 			independentRatios[name] = ratio
 		}
 		if len(independentRatios) == 0 {
 			independentRatios = nil
 		}
 		return &model.TaskBillingContext{
-			ModelPrice:               resolved.SelectedResolutionPrice,
+			ModelPrice:               validated.SelectedResolutionPrice,
 			GroupRatio:               relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			OriginModelName:          relayInfo.OriginModelName,
 			PricingKind:              model.TaskPricingKindVideoResolution,
-			EffectiveResolution:      resolved.Selection.EffectiveResolution,
-			SelectedResolutionPrice:  resolved.SelectedResolutionPrice,
-			EffectiveDurationSeconds: resolved.Selection.EffectiveDurationSeconds,
-			QuotaPerUnit:             resolved.QuotaPerUnit,
+			EffectiveResolution:      validated.Selection.EffectiveResolution,
+			SelectedResolutionPrice:  validated.SelectedResolutionPrice,
+			EffectiveDurationSeconds: validated.Selection.EffectiveDurationSeconds,
+			QuotaPerUnit:             validated.QuotaPerUnit,
 			IndependentRatios:        independentRatios,
 		}
 	}

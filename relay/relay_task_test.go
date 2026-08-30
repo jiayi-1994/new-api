@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -97,6 +98,22 @@ func (a *taskSubmitTestAdaptor) GetChannelName() string { return "test" }
 
 type videoTaskSubmitTestAdaptor struct {
 	*taskSubmitTestAdaptor
+}
+
+type retryVideoTaskSubmitTestAdaptor struct {
+	*videoTaskSubmitTestAdaptor
+}
+
+func (a *retryVideoTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+	a.didRequest = true
+	a.requestCalls++
+	if a.requestCalls == 1 {
+		return nil, errors.New("forced first attempt failure")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBufferString(`{"id":"upstream-task"}`)),
+	}, nil
 }
 
 type unsupportedVideoAdaptorSpy struct {
@@ -214,7 +231,8 @@ func taskSubmitVideoTestContext(
 		preConsume: func(_ *gin.Context, quota int, relayInfo *relaycommon.RelayInfo) *dto.TaskError {
 			state.preConsumeCalls++
 			state.preConsumedQuota = quota
-			relayInfo.Billing = taskSubmitTestBilling{}
+			relayInfo.Billing = &taskSubmitTestBilling{}
+			relayInfo.BillingSource = service.BillingSourceWallet
 			return nil
 		},
 	}
@@ -412,6 +430,52 @@ func TestRelayTaskSubmitResolutionPlanDoesNotFallbackForMissingTier(t *testing.T
 	require.NotNil(t, taskErr)
 	assert.Equal(t, "video_resolution_not_supported", taskErr.Code)
 	assert.Zero(t, state.preConsumeCalls)
+}
+
+func TestRelayTaskSubmitRetryKeepsFrozenPlanFundingAndRequestIdentity(t *testing.T) {
+	base := &taskSubmitTestAdaptor{
+		selection: relaycommon.VideoBillingSelection{
+			EffectiveResolution:      "720p",
+			EffectiveDurationSeconds: 5,
+		},
+	}
+	adaptor := &retryVideoTaskSubmitTestAdaptor{&videoTaskSubmitTestAdaptor{base}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, adaptor)
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+		"client-model", "req-frozen", map[string]float64{"720p": 0.1},
+	)
+	require.NoError(t, err)
+	info.RequestId = "req-frozen"
+	info.TaskRelayInfo.BillingPlan = plan
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.1}}`))
+
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+
+	assert.Nil(t, result)
+	require.NotNil(t, taskErr)
+	require.NotNil(t, info.Billing)
+	frozenBilling := info.Billing
+	frozenFunding := info.BillingSource
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Equal(t, 250, state.preConsumedQuota)
+
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"client-model":{"720p":0.9}}`))
+	info.RequestId = "req-live-mutated"
+	result, taskErr = relayTaskSubmitWithDeps(c, info, deps)
+
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 250, result.Quota)
+	assert.Equal(t, 1, state.preConsumeCalls)
+	assert.Same(t, frozenBilling, info.Billing)
+	assert.Equal(t, service.BillingSourceWallet, frozenFunding)
+	assert.Equal(t, frozenFunding, info.BillingSource)
+	assert.Same(t, plan, info.TaskRelayInfo.BillingPlan)
+	assert.Equal(t, "req-frozen", info.TaskRelayInfo.BillingPlan.RequestID())
+	frozenPrice, ok := info.TaskRelayInfo.BillingPlan.ResolutionPrice("720p")
+	require.True(t, ok)
+	assert.Equal(t, 0.1, frozenPrice)
+	assert.Equal(t, 2, base.requestCalls)
 }
 
 func TestRelayTaskSubmitRejectsUnknownResolutionBeforePreConsume(t *testing.T) {
