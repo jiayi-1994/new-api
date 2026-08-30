@@ -172,6 +172,14 @@ func TestPricingExposesLegacyRatioVideoWithoutResolutionTable(t *testing.T) {
 }
 
 func TestPricingResolutionTableWinsOverRetainedLegacy(t *testing.T) {
+	// 保留一条旧版固定价格：非空分辨率表必须压过它，而不是被 GetModelPrice 抢先。
+	originalModelPrices := ratio_setting.ModelPrice2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"zz-video-resolution":0.4}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrices))
+		InvalidatePricingCache()
+	})
+
 	pricing := resolutionPricingForModel(t, "zz-video-resolution", map[string]float64{"720p": 0.1}, ratio_setting.TaskBillingModePerCall)
 	assert.Equal(t, 1, pricing.QuotaType)
 	assert.Equal(t, 0.1, pricing.ModelPrice)
