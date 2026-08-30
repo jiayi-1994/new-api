@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -166,6 +168,98 @@ func TestTaskBillingReservationRequestIDUsesFrozenPlanIdentity(t *testing.T) {
 	}
 
 	assert.Equal(t, "req-frozen", taskBillingReservationRequestID(info))
+}
+
+func resolutionPricesFromPublicPricing(t *testing.T, modelName string) map[string]float64 {
+	t.Helper()
+	model.InvalidatePricingCache()
+	for _, pricing := range model.GetPricing() {
+		if pricing.ModelName == modelName {
+			return pricing.ResolutionPrices
+		}
+	}
+	require.FailNow(t, "model missing from public pricing response")
+	return nil
+}
+
+// 切换渠道的实际能力（渠道类型）会改变分辨率计划的可路由性，
+// 但不得改动存储的分辨率表、冻结的计划快照或公开定价响应。
+func TestChannelCapabilityToggleChangesRoutingWithoutMutatingPricingState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	common.MemoryCacheEnabled = true
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		model.InvalidatePricingCache()
+	})
+
+	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"toggle-resolution-model":{"720p":0.1}}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+	})
+
+	priority := int64(1)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 993021, Type: constant.ChannelTypeKling, Key: "toggle-key", Name: "toggle-channel",
+		Status: common.ChannelStatusEnabled, Group: "default", Models: "toggle-resolution-model", Priority: &priority,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "toggle-resolution-model", ChannelId: 993021, Enabled: true, Priority: &priority,
+	}).Error)
+	model.InitChannelCache()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	plan, err := relay.PrepareTaskBillingPlan(c, "toggle-resolution-model", "req-capability-toggle")
+	require.NoError(t, err)
+	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, plan.Kind())
+	storedBefore := ratio_setting.VideoResolutionPrice2JSONString()
+	pricingBefore := resolutionPricesFromPublicPricing(t, "toggle-resolution-model")
+	require.Equal(t, map[string]float64{"720p": 0.1}, pricingBefore)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "toggle-resolution-model",
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+	newRetryParam := func() *service.RetryParam {
+		return &service.RetryParam{
+			Ctx:                 c,
+			TokenGroup:          "default",
+			ModelName:           info.OriginModelName,
+			RequestPath:         c.Request.URL.Path,
+			AllowedChannelTypes: relay.CompatibleTaskChannelTypes(plan.Kind()),
+			Retry:               common.GetPointer(0),
+		}
+	}
+
+	// 唯一渠道类型不具备分辨率计费能力：路由不可用
+	unavailable, channelErr := getChannel(c, info, newRetryParam())
+	assert.Nil(t, unavailable)
+	require.NotNil(t, channelErr)
+
+	// 切换该渠道到具备能力的类型：路由恢复可用
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 993021).
+		Update("type", constant.ChannelTypeSora).Error)
+	model.InitChannelCache()
+
+	selected, channelErr := getChannel(c, info, newRetryParam())
+	require.Nil(t, channelErr)
+	require.NotNil(t, selected)
+	assert.Equal(t, constant.ChannelTypeSora, selected.Type)
+
+	// 能力切换不改动定价状态
+	assert.Equal(t, storedBefore, ratio_setting.VideoResolutionPrice2JSONString())
+	frozenPrice, ok := plan.ResolutionPrice("720p")
+	require.True(t, ok)
+	assert.Equal(t, 0.1, frozenPrice)
+	assert.Equal(t, pricingBefore, resolutionPricesFromPublicPricing(t, "toggle-resolution-model"))
 }
 
 // 冻结为旧版的请求在持久化时刻即使已有匹配的在线分辨率表，

@@ -1098,7 +1098,9 @@ func TestStaleCASWriterConflictsAfterConcurrentLifecycleCommit(t *testing.T) {
 
 	stored := numericPricingDocument(t, storedPricingDocuments(t), "ModelPrice")
 	assert.Equal(t, 9.9, stored["owned"])
-	assert.NotContains(t, stored, "stale")
+	// CAS 载荷只有 owned 一个键：若它落库会抹掉其余模型的价格
+	assert.Equal(t, 2.7, stored["target"])
+	assert.Equal(t, 3.7, stored["unrelated"])
 }
 
 // CAS 原始写者先提交时，随后执行的生命周期命令必须基于锁定的当前文档重放，

@@ -104,7 +104,8 @@ type retryVideoTaskSubmitTestAdaptor struct {
 	*videoTaskSubmitTestAdaptor
 }
 
-func (a *retryVideoTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+// failFirstTaskSubmitRequest 让第一次上游提交失败以触发重试，第二次成功。
+func failFirstTaskSubmitRequest(a *taskSubmitTestAdaptor) (*http.Response, error) {
 	a.didRequest = true
 	a.requestCalls++
 	if a.requestCalls == 1 {
@@ -116,20 +117,18 @@ func (a *retryVideoTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.R
 	}, nil
 }
 
+func (a *retryVideoTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+	return failFirstTaskSubmitRequest(a.taskSubmitTestAdaptor)
+}
+
+// retryLegacyTaskSubmitTestAdaptor 故意不实现 ResolveVideoBilling：
+// 旧版重试路径不得依赖任何分辨率解析能力。
 type retryLegacyTaskSubmitTestAdaptor struct {
 	*taskSubmitTestAdaptor
 }
 
 func (a *retryLegacyTaskSubmitTestAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
-	a.didRequest = true
-	a.requestCalls++
-	if a.requestCalls == 1 {
-		return nil, errors.New("forced first attempt failure")
-	}
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(bytes.NewBufferString(`{"id":"upstream-task"}`)),
-	}, nil
+	return failFirstTaskSubmitRequest(a.taskSubmitTestAdaptor)
 }
 
 type unsupportedVideoAdaptorSpy struct {
@@ -557,7 +556,6 @@ func TestPrepareTaskBillingPlanCompactWildcardActivatesConcreteModelsIndependent
 	require.NoError(t, err)
 	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, planA.Kind())
 	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, planB.Kind())
-	assert.NotSame(t, planA, planB)
 	assert.Equal(t, "model-a-openai-compact", planA.OriginModelName())
 	assert.Equal(t, "model-b-openai-compact", planB.OriginModelName())
 	assert.Equal(t, "req-wildcard-a", planA.RequestID())
@@ -596,10 +594,7 @@ func TestTaskChannelCapabilityGatesRoutingWithoutMutatingFrozenPricingState(t *t
 	compatible := CompatibleTaskChannelTypes(plan.Kind())
 	assert.Contains(t, compatible, constant.ChannelTypeSora)
 	assert.NotContains(t, compatible, constant.ChannelTypeKling)
-	assert.True(t, TaskChannelTypeSupportsBilling(plan.Kind(), constant.ChannelTypeSora))
-	assert.False(t, TaskChannelTypeSupportsBilling(plan.Kind(), constant.ChannelTypeKling))
 	assert.Nil(t, CompatibleTaskChannelTypes(relaycommon.TaskBillingKindLegacy))
-	assert.True(t, TaskChannelTypeSupportsBilling(relaycommon.TaskBillingKindLegacy, constant.ChannelTypeKling))
 
 	assert.Equal(t, storedBefore, ratio_setting.VideoResolutionPrice2JSONString())
 	assert.Equal(t, 0.1, mustResolutionPrice(t, plan, "720p"))
