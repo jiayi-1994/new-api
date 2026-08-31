@@ -183,6 +183,7 @@ func videoURLFromTaskData(task *model.Task) string {
 // videoContentSource 是取视频内容的一个候选来源。候选按优先级排列：
 // 公开直链在前（匿名、允许 302），上游官方 /content 兜底（携带渠道凭据）。
 type videoContentSource struct {
+	kind          string
 	url           string
 	authHeaderKey string
 	authHeaderVal string
@@ -343,7 +344,7 @@ func VideoProxy(c *gin.Context) {
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 			return
 		}
-		sources = append(sources, videoContentSource{url: geminiURL, authHeaderKey: "x-goog-api-key", authHeaderVal: apiKey})
+		sources = append(sources, videoContentSource{kind: "gemini", url: geminiURL, authHeaderKey: "x-goog-api-key", authHeaderVal: apiKey})
 	case constant.ChannelTypeVertexAi:
 		vertexURL, err := getVertexVideoURL(channel, task)
 		if err != nil {
@@ -351,7 +352,7 @@ func VideoProxy(c *gin.Context) {
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 			return
 		}
-		sources = append(sources, videoContentSource{url: vertexURL})
+		sources = append(sources, videoContentSource{kind: "vertex", url: vertexURL})
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		// 部分 OpenAI 兼容中转不实现 /content，而是在任务 JSON 里直接返回视频直链
 		//（R2 预签名、OSS/MinIO 签名链、plcdn 式匿名 CDN 内容端点都见过）。
@@ -359,12 +360,12 @@ func VideoProxy(c *gin.Context) {
 		// 再按官方语义回退上游 /content 带渠道密钥兜底。
 		upstreamContentURL := fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 		if direct := videoURLFromTaskData(task); direct != "" && direct != upstreamContentURL {
-			sources = append(sources, videoContentSource{url: direct, allowRedirect: true})
+			sources = append(sources, videoContentSource{kind: "direct_result", url: direct, allowRedirect: true})
 		}
-		sources = append(sources, videoContentSource{url: upstreamContentURL, authHeaderKey: "Authorization", authHeaderVal: "Bearer " + channel.Key})
+		sources = append(sources, videoContentSource{kind: "upstream_content", url: upstreamContentURL, authHeaderKey: "Authorization", authHeaderVal: "Bearer " + channel.Key})
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
-		sources = append(sources, videoContentSource{url: task.GetResultURL(), allowRedirect: true})
+		sources = append(sources, videoContentSource{kind: "stored_result", url: task.GetResultURL(), allowRedirect: true})
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
@@ -372,13 +373,13 @@ func VideoProxy(c *gin.Context) {
 
 	// 逐候选尝试，任一成功即出片；全部失败按最后一次失败的性质报错。
 	failStatus := http.StatusBadGateway
-	attempted := false
+	attemptCount := 0
 	for i, source := range sources {
 		videoURL := strings.TrimSpace(source.url)
 		if videoURL == "" {
 			continue
 		}
-		attempted = true
+		attemptCount++
 		failStatus = http.StatusBadGateway
 		hasFallback := i < len(sources)-1
 
@@ -387,7 +388,7 @@ func VideoProxy(c *gin.Context) {
 			if err == nil {
 				return
 			}
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode video data for task %s", taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode video data for task %s: source=%s attempt=%d/%d", taskID, source.kind, i+1, len(sources)))
 			if committed {
 				// 响应已提交（写入中途失败），继续尝试只会往半截视频后追加脏数据。
 				return
@@ -397,9 +398,10 @@ func VideoProxy(c *gin.Context) {
 
 		if source.allowRedirect && isObjectStorageVideoURL(videoURL) {
 			if deadStatus := probeVideoDirectLink(ctx, client, videoURL); deadStatus > 0 {
-				logger.LogError(c.Request.Context(), fmt.Sprintf("Video direct link probe returned status %d for task %s", deadStatus, taskID))
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Video direct link probe failed for task %s: source=%s attempt=%d/%d status=%d", taskID, source.kind, i+1, len(sources), deadStatus))
 				continue
 			}
+			logger.LogInfo(c.Request.Context(), fmt.Sprintf("Video content redirected to object storage for task %s: source=%s attempt=%d/%d", taskID, source.kind, i+1, len(sources)))
 			c.Writer.Header().Set("Cache-Control", "private, no-store")
 			c.Redirect(http.StatusFound, videoURL)
 			return
@@ -413,22 +415,28 @@ func VideoProxy(c *gin.Context) {
 			validateErr = common.ValidateURLWithFetchSetting(videoURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain)
 		}
 		if validateErr != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content fetch blocked for task %s", taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content fetch blocked for task %s: source=%s attempt=%d/%d", taskID, source.kind, i+1, len(sources)))
 			failStatus = http.StatusForbidden
 			continue
 		}
 
 		resp, cleanup, err := fetchVideoContentAttempt(ctx, client, source, videoURL, hasFallback)
 		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video content for task %s", taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video content for task %s: source=%s attempt=%d/%d", taskID, source.kind, i+1, len(sources)))
 			continue
 		}
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 			resp.Body.Close()
 			cleanup()
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned status %d for task %s", resp.StatusCode, taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Video content upstream rejected for task %s: source=%s attempt=%d/%d status=%d content_type=%q content_length=%d content_range=%q",
+				taskID, source.kind, i+1, len(sources), resp.StatusCode, resp.Header.Get("Content-Type"), resp.ContentLength, resp.Header.Get("Content-Range"),
+			))
 			continue
+		}
+		if resp.StatusCode == http.StatusPartialContent && strings.TrimSpace(resp.Header.Get("Content-Range")) == "" {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Video content partial response missing Content-Range for task %s: source=%s attempt=%d/%d content_length=%d", taskID, source.kind, i+1, len(sources), resp.ContentLength))
 		}
 
 		// 先在临时 header 上做类型校验，失败时不污染真实响应头，还能继续尝试下一候选。
@@ -436,25 +444,31 @@ func VideoProxy(c *gin.Context) {
 		if err := copyVideoProxyHeaders(safeHeaders, resp.Header, videoURL); err != nil {
 			resp.Body.Close()
 			cleanup()
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned an unsafe content type for task %s", taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Video content upstream returned an unsafe content type for task %s: source=%s attempt=%d/%d status=%d content_type=%q", taskID, source.kind, i+1, len(sources), resp.StatusCode, resp.Header.Get("Content-Type")))
 			continue
 		}
 
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf(
+			"Video content upstream accepted for task %s: source=%s attempt=%d/%d status=%d content_type=%q content_length=%d content_range=%q",
+			taskID, source.kind, i+1, len(sources), resp.StatusCode, safeHeaders.Get("Content-Type"), resp.ContentLength, safeHeaders.Get("Content-Range"),
+		))
 		for key, values := range safeHeaders {
 			c.Writer.Header()[key] = values
 		}
 		c.Writer.Header().Set("Cache-Control", "private, no-store")
 		c.Writer.WriteHeader(resp.StatusCode)
 		if _, err = io.Copy(c.Writer, resp.Body); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content for task %s", taskID))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content for task %s: source=%s attempt=%d/%d status=%d", taskID, source.kind, i+1, len(sources), resp.StatusCode))
 		}
 		resp.Body.Close()
 		cleanup()
 		return
 	}
 
-	if !attempted {
+	if attemptCount == 0 {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video URL is empty for task %s", taskID))
+	} else {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("All video content sources failed for task %s: attempts=%d sources=%d final_status=%d", taskID, attemptCount, len(sources), failStatus))
 	}
 	videoProxyError(c, failStatus, "server_error", "Failed to fetch video content")
 }
