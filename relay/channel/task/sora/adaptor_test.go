@@ -51,6 +51,51 @@ func TestTaskAdaptorParseTaskResultMapsNonTerminalStatuses(t *testing.T) {
 	}
 }
 
+func TestTaskAdaptorParseTaskResultHandlesInlineFailureStatuses(t *testing.T) {
+	const upstreamReason = "For 肖像保护, Dreamina Seedance 2.5 只支持生成包含您自己的视频. 请换一张参考图, or create a video from text。"
+
+	tests := []struct {
+		name           string
+		body           string
+		expectedStatus model.TaskStatus
+		expectedReason string
+	}{
+		{
+			name:           "preserves inline upstream failure reason",
+			body:           `{"created_at":1788058748,"id":"0af9e835-fee9-4387-b429-6bd375ca841a","object":"","seconds":0,"status":"FAILED: ` + upstreamReason + `"}`,
+			expectedStatus: model.TaskStatusFailure,
+			expectedReason: upstreamReason,
+		},
+		{
+			name:           "accepts canceled prefix with surrounding whitespace",
+			body:           `{"status":" CANCELED : owner canceled the task "}`,
+			expectedStatus: model.TaskStatusFailure,
+			expectedReason: "owner canceled the task",
+		},
+		{
+			name:           "structured error keeps priority",
+			body:           `{"status":"FAILED: inline reason","error":{"message":"structured reason"}}`,
+			expectedStatus: model.TaskStatusFailure,
+			expectedReason: "structured reason",
+		},
+		{
+			name:           "unknown inline status remains unrecognized",
+			body:           `{"status":"PAUSED: waiting for review"}`,
+			expectedStatus: "",
+			expectedReason: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			taskInfo, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
+			require.NoError(t, err)
+			assert.Equal(t, string(test.expectedStatus), taskInfo.Status)
+			assert.Equal(t, test.expectedReason, taskInfo.Reason)
+		})
+	}
+}
+
 func TestParseTaskResultAcceptsNumericSeconds(t *testing.T) {
 	// some OpenAI-compatible relays send `"seconds": 15` as a number where the
 	// official API uses a string — polling must not get stuck on parse errors
