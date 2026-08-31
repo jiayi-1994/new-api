@@ -315,3 +315,24 @@ func TestProtectedFetchRoundTripperReusesTransportPerProxy(t *testing.T) {
 	require.True(t, direct.ForceAttemptHTTP2)
 	require.False(t, direct.DisableKeepAlives)
 }
+
+func TestCheckRedirectStripsAutoReferer(t *testing.T) {
+	fetchSetting := system_setting.GetFetchSetting()
+	original := *fetchSetting
+	t.Cleanup(func() {
+		*fetchSetting = original
+	})
+	fetchSetting.EnableSSRFProtection = false
+
+	via := []*http.Request{{URL: mustParseURL(t, "https://upstream.example/v1/videos/x/content?signature=secret")}}
+	for name, fn := range map[string]func(*http.Request, []*http.Request) error{
+		"checkRedirect":               checkRedirect,
+		"checkProtectedFetchRedirect": checkProtectedFetchRedirect,
+	} {
+		req, err := http.NewRequest(http.MethodGet, "https://cdn.example/video.mp4", nil)
+		require.NoError(t, err, name)
+		req.Header.Set("Referer", via[0].URL.String())
+		require.NoError(t, fn(req, via), name)
+		require.Empty(t, req.Header.Get("Referer"), name)
+	}
+}

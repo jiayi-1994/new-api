@@ -40,7 +40,15 @@ type proxyURLConfig struct {
 	cacheKey  string
 }
 
+// stripAutoReferer 移除 Go 跟随重定向时自动写入的 Referer：上一跳可能是带签名的
+// 上游地址（泄露给重定向目标），且部分 CDN 按 Referer 防盗链直接 403（豆包
+// tos-cn 视频直链实测），出站抓取一律不带。
+func stripAutoReferer(req *http.Request) {
+	req.Header.Del("Referer")
+}
+
 func checkRedirect(req *http.Request, via []*http.Request) error {
+	stripAutoReferer(req)
 	urlStr := req.URL.String()
 	if err := validateURLWithCurrentFetchSetting(urlStr, true); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
@@ -52,6 +60,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func checkProtectedFetchRedirect(req *http.Request, via []*http.Request) error {
+	stripAutoReferer(req)
 	urlStr := req.URL.String()
 	if err := ValidateSSRFProtectedFetchURL(urlStr); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
