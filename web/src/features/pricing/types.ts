@@ -56,6 +56,8 @@ export type PricingModel = {
   task_billing_mode?: string
   /** Per-second price per canonical output resolution; always charged per second */
   resolution_prices?: Record<string, number>
+  /** Additive per-second surcharge for input reference videos, keyed by output resolution */
+  input_video_prices?: Record<string, number>
   /** Raw expression describing dynamic / tiered billing */
   billing_expr?: string
   /** Pricing version returned by backend, useful for cache busting */

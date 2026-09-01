@@ -715,29 +715,61 @@ function PriceSection(props: {
           <SectionTitle>{t('Resolution prices')}</SectionTitle>
           <div className='space-y-1'>
             {getResolutionPriceEntries(props.model).map(
-              ([resolution, price]) => (
-                <div
-                  key={resolution}
-                  className='flex items-baseline justify-between'
-                >
-                  <span className='text-muted-foreground text-sm'>
-                    {resolution}
-                  </span>
-                  <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
-                    {formatFixedPrice(
-                      {
-                        ...props.model,
-                        resolution_prices: { [resolution]: price },
-                      },
-                      baseGroupKey,
-                      props.showRechargePrice,
-                      props.priceRate,
-                      props.usdExchangeRate,
-                      baseGroupRatioMap
+              ([resolution, price]) => {
+                const inputVideoPrice =
+                  props.model.input_video_prices?.[resolution]
+                const hasInputVideoPrice =
+                  typeof inputVideoPrice === 'number' &&
+                  Number.isFinite(inputVideoPrice) &&
+                  inputVideoPrice > 0
+                return (
+                  <div key={resolution}>
+                    <div className='flex items-baseline justify-between'>
+                      <span className='text-muted-foreground text-sm'>
+                        {resolution}
+                      </span>
+                      <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
+                        {formatFixedPrice(
+                          {
+                            ...props.model,
+                            resolution_prices: { [resolution]: price },
+                          },
+                          baseGroupKey,
+                          props.showRechargePrice,
+                          props.priceRate,
+                          props.usdExchangeRate,
+                          baseGroupRatioMap
+                        )}
+                      </span>
+                    </div>
+                    {hasInputVideoPrice && (
+                      <div className='flex items-baseline justify-between'>
+                        <span className='text-muted-foreground/70 text-xs'>
+                          {t('Reference video input')}
+                        </span>
+                        <span className='text-muted-foreground font-mono text-xs tabular-nums'>
+                          +
+                          {formatFixedPrice(
+                            {
+                              ...props.model,
+                              resolution_prices: {
+                                [resolution]: inputVideoPrice,
+                              },
+                            },
+                            baseGroupKey,
+                            props.showRechargePrice,
+                            props.priceRate,
+                            props.usdExchangeRate,
+                            baseGroupRatioMap
+                          )}
+                          {' / '}
+                          {t('second of input video')}
+                        </span>
+                      </div>
                     )}
-                  </span>
-                </div>
-              )
+                  </div>
+                )
+              }
             )}
           </div>
           <p className='text-muted-foreground mt-2 text-xs'>

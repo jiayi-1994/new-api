@@ -38,6 +38,8 @@ type Pricing struct {
 	// TaskBillingMode 是旧客户端兼容字段；分辨率定价始终派生为 per_second。
 	TaskBillingMode  string             `json:"task_billing_mode,omitempty"`
 	ResolutionPrices map[string]float64 `json:"resolution_prices,omitempty"`
+	// InputVideoPrices 是各输出分辨率下输入参考视频的每秒附加费（加法项）。
+	InputVideoPrices map[string]float64 `json:"input_video_prices,omitempty"`
 	PricingVersion   string             `json:"pricing_version,omitempty"`
 }
 
@@ -398,6 +400,9 @@ func updatePricing() {
 				pricing.ModelPrice = minimumPrice
 				pricing.QuotaType = 1
 				pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+				if inputPrices, hasInputPrices := ratio_setting.GetVideoInputSecondPrices(model); hasInputPrices {
+					pricing.InputVideoPrices = inputPrices
+				}
 			}
 		}
 		if !hasResolutionPrices {

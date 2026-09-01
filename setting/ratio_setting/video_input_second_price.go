@@ -46,6 +46,25 @@ func VideoInputSecondPrice2JSONString() string {
 	return string(data)
 }
 
+// GetVideoInputSecondPrices 返回模型的完整「分辨率 → 输入视频每秒附加费」表
+// （副本），供定价公示使用。模型名走与查单价相同的 compact 通配回退。
+func GetVideoInputSecondPrices(model string) (map[string]float64, bool) {
+	videoInputSecondPriceMu.RLock()
+	defer videoInputSecondPriceMu.RUnlock()
+	prices, ok := videoInputSecondPrices[model]
+	if !ok && strings.HasSuffix(model, CompactModelSuffix) {
+		prices, ok = videoInputSecondPrices[CompactWildcardModelKey]
+	}
+	if !ok || len(prices) == 0 {
+		return nil, false
+	}
+	clone := make(map[string]float64, len(prices))
+	for resolution, price := range prices {
+		clone[resolution] = price
+	}
+	return clone, true
+}
+
 // GetVideoInputSecondPrice 返回模型在给定输出分辨率下的输入视频每秒附加费。
 // 模型名走与分辨率价格相同的 compact 通配回退；该分辨率未配置视为无附加费。
 func GetVideoInputSecondPrice(model, resolution string) (float64, bool) {
