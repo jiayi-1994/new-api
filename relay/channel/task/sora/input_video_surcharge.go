@@ -2,6 +2,7 @@ package sora
 
 import (
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -38,12 +39,35 @@ func inputVideoUnresolved(err error) *dto.TaskError {
 	return service.TaskErrorWrapperLocal(err, "video_input_duration_unresolved", http.StatusBadRequest)
 }
 
+// maxInputReferenceVideos caps how many reference videos one request may
+// carry: each one costs outbound probe requests, so an unbounded list is an
+// amplification vector. Upstream providers accept at most 3; a small margin
+// keeps mixed dialects working.
+const maxInputReferenceVideos = 8
+
+// isVideoFilePart mirrors the forwarding path in BuildRequestBody, which
+// sniffs untyped uploads before sending them upstream: a video must not reach
+// the provider unbilled just because the client omitted its content type.
 func isVideoFilePart(fh *multipart.FileHeader) bool {
-	if strings.HasPrefix(strings.ToLower(fh.Header.Get("Content-Type")), "video/") {
+	contentType := strings.ToLower(fh.Header.Get("Content-Type"))
+	if strings.HasPrefix(contentType, "video/") {
 		return true
 	}
 	name := strings.ToLower(fh.Filename)
-	return strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") || strings.HasSuffix(name, ".m4v")
+	if strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") || strings.HasSuffix(name, ".m4v") {
+		return true
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		f, err := fh.Open()
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		return strings.HasPrefix(http.DetectContentType(head[:n]), "video/")
+	}
+	return false
 }
 
 // applyInputVideoSurcharge 在 normalize 成功后为 selection 附加输入视频秒数
@@ -65,7 +89,22 @@ func applyInputVideoSurcharge(c *gin.Context, info *relaycommon.RelayInfo, selec
 	}
 
 	total := 0
-	contentType := c.GetHeader("Content-Type")
+	videoCount := 0
+	// 每收一个视频立即累计并校验：数量上限防出站探测放大，总秒数上限在
+	// 循环内即断，不等全部探测完才拒。
+	accumulate := func(seconds int) *dto.TaskError {
+		videoCount++
+		if videoCount > maxInputReferenceVideos {
+			return inputVideoUnresolved(fmt.Errorf("at most %d input reference videos are allowed", maxInputReferenceVideos))
+		}
+		total += seconds
+		if total > relaycommon.MaxInputReferenceTotalSeconds {
+			return inputVideoUnresolved(fmt.Errorf("input reference videos total %d seconds, exceeding the %d second limit", total, relaycommon.MaxInputReferenceTotalSeconds))
+		}
+		return nil
+	}
+
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
 	switch {
 	case strings.HasPrefix(contentType, "application/json"):
 		storage, err := common.GetBodyStorage(c)
@@ -80,12 +119,18 @@ func applyInputVideoSurcharge(c *gin.Context, info *relaycommon.RelayInfo, selec
 		if err := common.Unmarshal(body, &bodyMap); err != nil {
 			return inputVideoUnresolved(err)
 		}
-		for _, videoURL := range collectReferenceVideoURLs(bodyMap) {
+		videoURLs := collectReferenceVideoURLs(bodyMap)
+		if len(videoURLs) > maxInputReferenceVideos {
+			return inputVideoUnresolved(fmt.Errorf("at most %d input reference videos are allowed", maxInputReferenceVideos))
+		}
+		for _, videoURL := range videoURLs {
 			seconds, err := probeVideoDurationSeconds(c.Request.Context(), videoURL)
 			if err != nil {
 				return inputVideoUnresolved(fmt.Errorf("failed to resolve input reference video duration for %q: %w", videoURL, err))
 			}
-			total += seconds
+			if taskErr := accumulate(seconds); taskErr != nil {
+				return taskErr
+			}
 		}
 	case strings.Contains(contentType, "multipart/form-data"):
 		formData, err := common.ParseMultipartFormReusable(c)
@@ -106,14 +151,13 @@ func applyInputVideoSurcharge(c *gin.Context, info *relaycommon.RelayInfo, selec
 				if err != nil {
 					return inputVideoUnresolved(fmt.Errorf("failed to resolve input reference video duration for %q: %w", fh.Filename, err))
 				}
-				total += seconds
+				if taskErr := accumulate(seconds); taskErr != nil {
+					return taskErr
+				}
 			}
 		}
 	}
 
-	if total > relaycommon.MaxInputReferenceTotalSeconds {
-		return inputVideoUnresolved(fmt.Errorf("input reference videos total %d seconds, exceeding the %d second limit", total, relaycommon.MaxInputReferenceTotalSeconds))
-	}
 	c.Set(inputVideoSurchargeCacheKey, total)
 	if total > 0 {
 		selection.InputVideoSeconds = total

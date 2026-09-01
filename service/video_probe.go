@@ -133,6 +133,11 @@ func roundProbedVideoSeconds(seconds float64) (int, error) {
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
 		return 0, fmt.Errorf("invalid probed video duration %v", seconds)
 	}
+	// 上限必须在 float→int 之前检查：超大 mvhd duration 转 int 会溢出为
+	// 负数，随后被"最少 1 秒"兜底洗白，绕过上限。
+	if seconds > float64(relaycommon.MaxInputReferenceVideoSeconds)+0.5 {
+		return 0, fmt.Errorf("input reference video duration %.0f exceeds the %d second limit", seconds, relaycommon.MaxInputReferenceVideoSeconds)
+	}
 	rounded := int(math.Round(seconds))
 	if rounded < 1 {
 		rounded = 1
