@@ -74,6 +74,7 @@ const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { flexRender, getCoreRowModel, useReactTable } =
   await import('@tanstack/react-table')
 const { useTaskLogsColumns } = await import('../columns/task-logs-columns')
+const { UsageLogsMobileList } = await import('../usage-logs-mobile-card')
 
 const userEvent = {
   setup() {
@@ -96,6 +97,9 @@ await i18n.use(initReactI18next).init({
         'Click to preview video': 'Click to preview video',
         'Click to preview audio': 'Click to preview audio',
         'Click to view full error message': 'Click to view full error message',
+        Model: 'Model',
+        Resolution: 'Resolution',
+        Result: 'Result',
       },
     },
   },
@@ -116,6 +120,26 @@ const baseTask: TaskLog = {
   fail_reason: '',
 }
 
+const taskWithVideoFields: TaskLog = {
+  ...baseTask,
+  id: 5,
+  user_id: 1,
+  username: 'root',
+  task_id: 'task_video_fields',
+  action: 'textGenerate',
+  channel_id: 1,
+  submit_time: 1788098510,
+  finish_time: 1788098535,
+  progress: '30%',
+  status: 'IN_PROGRESS',
+  properties: {
+    origin_model_name: 'videos-mini',
+  },
+  billing_details: {
+    resolution: '480p',
+  },
+}
+
 function TaskDetailsHarness(props: { log: TaskLog; isAdmin?: boolean }) {
   const columns = useTaskLogsColumns(props.isAdmin ?? false)
   const table = useReactTable({
@@ -132,15 +156,56 @@ function TaskDetailsHarness(props: { log: TaskLog; isAdmin?: boolean }) {
   return flexRender(cell.column.columnDef.cell, cell.getContext())
 }
 
+function DesktopTaskFieldsHarness(props: { log: TaskLog }) {
+  const columns = useTaskLogsColumns(false)
+  const table = useReactTable({
+    data: [props.log],
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  })
+  const row = table.getRowModel().rows[0]
+  const columnIds = table.getAllLeafColumns().map((column) => column.id)
+
+  return (
+    <>
+      <output data-testid='column-order'>{columnIds.join(',')}</output>
+      {['model', 'resolution'].map((columnId) => {
+        const cell = row
+          ?.getAllCells()
+          .find((candidate) => candidate.column.id === columnId)
+
+        return (
+          <div key={columnId} data-testid={`${columnId}-value`}>
+            {cell
+              ? flexRender(cell.column.columnDef.cell, cell.getContext())
+              : 'missing-column'}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+function MobileTaskFieldsHarness(props: { log: TaskLog }) {
+  const columns = useTaskLogsColumns(false)
+  const table = useReactTable({
+    data: [props.log],
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  })
+
+  return <UsageLogsMobileList table={table} logCategory='task' />
+}
+
+function renderWithI18n(element: React.ReactNode): ReturnType<typeof render> {
+  return render(<I18nextProvider i18n={i18n}>{element}</I18nextProvider>)
+}
+
 function renderDetails(
   log: TaskLog,
   isAdmin = false
 ): ReturnType<typeof render> {
-  return render(
-    <I18nextProvider i18n={i18n}>
-      <TaskDetailsHarness log={log} isAdmin={isAdmin} />
-    </I18nextProvider>
-  )
+  return renderWithI18n(<TaskDetailsHarness log={log} isAdmin={isAdmin} />)
 }
 
 describe('task video download link', () => {
@@ -358,5 +423,50 @@ describe('task video download link', () => {
     assert.ok(dialog.textContent?.includes('Generated Suno track'))
     assert.ok(dialog.querySelector('audio'))
     assert.equal(screen.queryByRole('link'), null)
+  })
+
+  test('shows nested model and resolution values after Task ID and before Duration', () => {
+    renderWithI18n(<DesktopTaskFieldsHarness log={taskWithVideoFields} />)
+
+    assert.equal(screen.getByTestId('model-value').textContent, 'videos-mini')
+    assert.equal(screen.getByTestId('resolution-value').textContent, '480p')
+
+    const columnOrder =
+      screen.getByTestId('column-order').textContent?.split(',') ?? []
+    assert.deepEqual(
+      columnOrder.slice(
+        columnOrder.indexOf('task_id'),
+        columnOrder.indexOf('duration') + 1
+      ),
+      ['task_id', 'model', 'resolution', 'duration']
+    )
+  })
+
+  test('shows a dash when model and resolution are missing', () => {
+    const taskWithoutFields: TaskLog = {
+      ...taskWithVideoFields,
+      properties: undefined,
+      billing_details: undefined,
+    }
+
+    renderWithI18n(<DesktopTaskFieldsHarness log={taskWithoutFields} />)
+
+    assert.equal(screen.getByTestId('model-value').textContent, '-')
+    assert.equal(screen.getByTestId('resolution-value').textContent, '-')
+  })
+
+  test('shows model and resolution on the mobile card before Result', () => {
+    const rendered = renderWithI18n(
+      <MobileTaskFieldsHarness log={taskWithVideoFields} />
+    )
+
+    assert.ok(screen.getByText('Model'))
+    assert.ok(screen.getByText('videos-mini'))
+    assert.ok(screen.getByText('Resolution'))
+    assert.ok(screen.getByText('480p'))
+
+    const content = rendered.container.textContent ?? ''
+    assert.ok(content.indexOf('Model') < content.indexOf('Result'))
+    assert.ok(content.indexOf('Resolution') < content.indexOf('Result'))
   })
 })

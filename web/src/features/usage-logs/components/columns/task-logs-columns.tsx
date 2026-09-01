@@ -225,6 +225,26 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       },
       meta: { mobileTitle: true },
     },
+    {
+      id: 'model',
+      header: t('Model'),
+      accessorFn: (row) => row.properties?.origin_model_name || '-',
+      cell: ({ row }) => (
+        <span className='text-muted-foreground truncate text-xs'>
+          {row.getValue('model') as string}
+        </span>
+      ),
+    },
+    {
+      id: 'resolution',
+      header: t('Resolution'),
+      accessorFn: (row) => row.billing_details?.resolution || '-',
+      cell: ({ row }) => (
+        <span className='text-muted-foreground truncate text-xs'>
+          {row.getValue('resolution') as string}
+        </span>
+      ),
+    },
     createDurationColumn<TaskLog>({
       submitTimeKey: 'submit_time',
       finishTimeKey: 'finish_time',

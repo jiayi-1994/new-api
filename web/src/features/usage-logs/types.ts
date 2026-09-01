@@ -297,6 +297,12 @@ export interface TaskLog {
   progress?: string
   progress_message_en?: string
   data?: unknown
+  properties?: {
+    origin_model_name?: string
+  }
+  billing_details?: {
+    resolution?: string
+  }
   fail_reason?: string
   result_url?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
