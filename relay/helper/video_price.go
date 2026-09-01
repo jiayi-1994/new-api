@@ -35,6 +35,8 @@ func BuildVideoResolutionPriceData(
 		groupRatioInfo.GroupRatio,
 		resolved.Selection.IndependentRatios,
 		quotaPerUnit,
+		resolved.Selection.InputVideoSeconds,
+		resolved.Selection.InputVideoPricePerSecond,
 	)
 	if err != nil {
 		return hosttypes.PriceData{}, nil, err

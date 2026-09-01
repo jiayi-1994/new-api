@@ -146,6 +146,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap[ratio_setting.VideoResolutionPriceOptionKey] = ratio_setting.VideoResolutionPrice2JSONString()
 	common.OptionMap["TaskBillingMode"] = ratio_setting.TaskBillingMode2JSONString()
+	common.OptionMap[ratio_setting.VideoInputSecondPriceOptionKey] = ratio_setting.VideoInputSecondPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
@@ -249,6 +250,8 @@ func validateOptionValue(key string, value string) error {
 		return operation_setting.ValidateToolPricesJSON(value)
 	case ratio_setting.VideoResolutionPriceOptionKey:
 		return ratio_setting.ValidateVideoResolutionPriceByJSONString(value)
+	case ratio_setting.VideoInputSecondPriceOptionKey:
+		return ratio_setting.ValidateVideoInputSecondPriceByJSONString(value)
 	}
 	return nil
 }
@@ -639,6 +642,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
 	case "TaskBillingMode":
 		err = ratio_setting.UpdateTaskBillingModeByJSONString(value)
+	case ratio_setting.VideoInputSecondPriceOptionKey:
+		err = ratio_setting.UpdateVideoInputSecondPriceByJSONString(value)
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "CreateCacheRatio":

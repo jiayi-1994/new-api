@@ -1182,7 +1182,7 @@ func TestResolutionSettlementUsesSnapshotAfterEveryLivePricingChange(t *testing.
 		EffectiveDurationSeconds: 4,
 	})
 
-	want, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, frozenQuotaPerUnit)
+	want, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, frozenQuotaPerUnit, 0, 0)
 	require.NoError(t, err)
 	assert.Equal(t, want, task.Quota)
 	assert.Equal(t, 1_000_000+(preConsumed-want), getUserQuota(t, userID))
@@ -1782,7 +1782,7 @@ func TestResolutionSettlementChargesPositiveDeltaToUnlimitedToken(t *testing.T) 
 	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("unlimited_quota", true).Error)
 	seedChannel(t, channelID)
 
-	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
 	require.NoError(t, err)
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"used_quota":    preConsumed,
@@ -1799,7 +1799,7 @@ func TestResolutionSettlementChargesPositiveDeltaToUnlimitedToken(t *testing.T) 
 		EffectiveDurationSeconds: 8,
 	}))
 
-	actualQuota, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 8, 1.25, map[string]float64{"video_input": 1.2}, 500)
+	actualQuota, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 8, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
 	require.NoError(t, err)
 	delta := actualQuota - preConsumed
 	assert.Equal(t, actualQuota, getTaskQuota(t, task.ID))

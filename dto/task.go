@@ -59,6 +59,8 @@ type TaskBillingDetails struct {
 	SubmittedDurationSeconds int                `json:"submitted_duration_seconds"`
 	EffectiveDurationSeconds int                `json:"effective_duration_seconds"`
 	IndependentRatios        map[string]float64 `json:"independent_ratios,omitempty"`
+	InputVideoSeconds        int                `json:"input_video_seconds,omitempty"`
+	InputVideoPricePerSecond float64            `json:"input_video_price_per_second,omitempty"`
 }
 
 type FetchReq struct {

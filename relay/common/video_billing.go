@@ -10,12 +10,28 @@ import (
 
 const videoInputRatio = "video_input"
 
+// MaxInputReferenceVideoSeconds caps a single probed input reference video.
+// MaxInputReferenceTotalSeconds caps the sum across all reference videos in
+// one request. Both bound a billing multiplier; out-of-range values must be
+// rejected at request validation, never silently clamped.
+const (
+	MaxInputReferenceVideoSeconds = 300
+	MaxInputReferenceTotalSeconds = 900
+)
+
 // VideoBillingSelection is the provider-resolved set of inputs that may
 // affect resolution-based video billing.
 type VideoBillingSelection struct {
 	EffectiveResolution      string
 	EffectiveDurationSeconds int
 	IndependentRatios        map[string]float64
+	// InputVideoSeconds is the gateway-probed total duration of input
+	// reference videos; InputVideoPricePerSecond is the surcharge price
+	// snapshot taken at submit time. Both are zero when no surcharge applies,
+	// and both must be positive together (an additive flat fee, never scaled
+	// by IndependentRatios).
+	InputVideoSeconds        int
+	InputVideoPricePerSecond float64
 }
 
 // ResolvedVideoBilling freezes the provider selection and its selected
@@ -44,15 +60,33 @@ func NewResolvedVideoBilling(selection VideoBillingSelection, selectedResolution
 	if err != nil {
 		return nil, err
 	}
+	if err := validateInputVideoSurcharge(selection.InputVideoSeconds, selection.InputVideoPricePerSecond); err != nil {
+		return nil, err
+	}
 
 	return &ResolvedVideoBilling{
 		Selection: VideoBillingSelection{
 			EffectiveResolution:      resolution,
 			EffectiveDurationSeconds: selection.EffectiveDurationSeconds,
 			IndependentRatios:        ratios,
+			InputVideoSeconds:        selection.InputVideoSeconds,
+			InputVideoPricePerSecond: selection.InputVideoPricePerSecond,
 		},
 		SelectedResolutionPrice: selectedResolutionPrice,
 	}, nil
+}
+
+// validateInputVideoSurcharge enforces that the probed seconds and the
+// per-second surcharge price are either both absent or both positive, with
+// seconds bounded because they are a billing multiplier.
+func validateInputVideoSurcharge(seconds int, pricePerSecond float64) error {
+	if seconds == 0 && pricePerSecond == 0 {
+		return nil
+	}
+	if seconds <= 0 || seconds > MaxInputReferenceTotalSeconds {
+		return fmt.Errorf("input video seconds must be between 1 and %d", MaxInputReferenceTotalSeconds)
+	}
+	return validatePositiveFinite("input video price per second", pricePerSecond)
 }
 
 // CalculateVideoResolutionQuota calculates a resolution price exactly once
@@ -70,6 +104,8 @@ func CalculateVideoResolutionQuota(
 		groupRatio,
 		independentRatios,
 		rootcommon.QuotaPerUnit,
+		0,
+		0,
 	)
 }
 
@@ -82,6 +118,8 @@ func CalculateVideoResolutionQuotaAtUnit(
 	groupRatio float64,
 	independentRatios map[string]float64,
 	quotaPerUnit float64,
+	inputVideoSeconds int,
+	inputVideoPricePerSecond float64,
 ) (int, *rootcommon.QuotaClamp, error) {
 	if err := validatePositiveFinite("resolution price", resolutionPrice); err != nil {
 		return 0, nil, err
@@ -93,6 +131,9 @@ func CalculateVideoResolutionQuotaAtUnit(
 		return 0, nil, err
 	}
 	if err := validatePositiveFinite("quota per unit", quotaPerUnit); err != nil {
+		return 0, nil, err
+	}
+	if err := validateInputVideoSurcharge(inputVideoSeconds, inputVideoPricePerSecond); err != nil {
 		return 0, nil, err
 	}
 
@@ -109,6 +150,10 @@ func CalculateVideoResolutionQuotaAtUnit(
 
 	quotaValue := resolutionPrice * quotaPerUnit * groupRatio * float64(durationSeconds)
 	quotaValue = priceData.ApplyOtherRatiosToFloat(quotaValue)
+	// Additive per-second surcharge for probed input reference videos. It is a
+	// constant per submission: independent ratios never scale it, and async
+	// settlement re-runs it with the same snapshot values.
+	quotaValue += inputVideoPricePerSecond * quotaPerUnit * groupRatio * float64(inputVideoSeconds)
 	quota, clamp := rootcommon.QuotaFromFloatChecked(quotaValue)
 	return quota, clamp, nil
 }

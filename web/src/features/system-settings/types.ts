@@ -306,6 +306,7 @@ export type BillingSettings = {
   'billing_setting.billing_expr': string
   TaskBillingMode: string
   VideoResolutionPrice: string
+  VideoInputSecondPrice: string
   'tool_price_setting.prices': string
   TopupGroupRatio: string
   GroupRatio: string

@@ -52,6 +52,7 @@ const defaultBillingSettings: BillingSettings = {
   'billing_setting.billing_expr': '{}',
   TaskBillingMode: '{}',
   VideoResolutionPrice: '{}',
+  VideoInputSecondPrice: '{}',
   'tool_price_setting.prices': '{}',
   TopupGroupRatio: '',
   GroupRatio: '',

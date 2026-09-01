@@ -128,6 +128,8 @@ func tasksToDto(tasks []*model.Task, fillUser bool) ([]*dto.TaskDto, error) {
 					SubmittedDurationSeconds: bc.EffectiveDurationSeconds,
 					EffectiveDurationSeconds: effectiveDuration,
 					IndependentRatios:        independentRatios,
+					InputVideoSeconds:        bc.InputVideoSeconds,
+					InputVideoPricePerSecond: bc.InputVideoPricePerSecond,
 				}
 			}
 		}

@@ -25,6 +25,7 @@ import { PaymentSettingsSection } from '../integrations/payment-settings-section
 import { RatioSettingsCard } from '../models/ratio-settings-card'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { VideoInputPriceSection } from './video-input-price-section'
 
 const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
@@ -113,6 +114,15 @@ const BILLING_SECTIONS = [
         groupDefaults={getGroupDefaults(settings)}
         toolPricesDefault={settings['tool_price_setting.prices']}
         visibleTabs={['models', 'unset-models', 'tool-prices', 'upstream-sync']}
+      />
+    ),
+  },
+  {
+    id: 'video-input-surcharge',
+    titleKey: 'Video Input Surcharge',
+    build: (settings: BillingSettings) => (
+      <VideoInputPriceSection
+        defaultValue={settings.VideoInputSecondPrice}
       />
     ),
   },

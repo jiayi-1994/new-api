@@ -390,6 +390,9 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 			}
 			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 		}
+		if taskErr := applyInputVideoSurcharge(c, info, &normalized.Selection); taskErr != nil {
+			return relaycommon.VideoBillingSelection{}, taskErr
+		}
 		c.Set(normalizedSoraVideoRequestKey, normalized)
 		return normalized.Selection, nil
 	}
@@ -681,7 +684,7 @@ func buildMegabyaiVideoPayload(bodyMap map[string]any) map[string]any {
 	if images := megabyaiReferenceURLs(bodyMap, "referenceImages", "reference_images", "images", "input_reference", "image"); len(images) > 0 {
 		payload["referenceImages"] = images
 	}
-	if videos := megabyaiReferenceURLs(bodyMap, "referenceVideos", "reference_videos", "videos", "video"); len(videos) > 0 {
+	if videos := collectReferenceVideoURLs(bodyMap); len(videos) > 0 {
 		payload["referenceVideos"] = videos
 	}
 	if audios := megabyaiReferenceURLs(bodyMap, "referenceAudios", "reference_audios", "audios", "audio"); len(audios) > 0 {

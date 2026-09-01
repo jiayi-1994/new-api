@@ -31,20 +31,20 @@ func TestCalculateVideoResolutionQuotaAtUnitUsesExplicitSnapshot(t *testing.T) {
 	rootcommon.QuotaPerUnit = 1_000
 	t.Cleanup(func() { rootcommon.QuotaPerUnit = originalQuotaPerUnit })
 
-	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500)
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
 
 	require.NoError(t, err)
 	assert.Nil(t, clamp)
 	assert.Equal(t, 300, quota)
 
-	quota, clamp, err = CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, nil, 0)
+	quota, clamp, err = CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, nil, 0, 0, 0)
 	assert.Error(t, err)
 	assert.Zero(t, quota)
 	assert.Nil(t, clamp)
 }
 
 func TestCalculateVideoResolutionQuotaAllowsZeroGroupRatio(t *testing.T) {
-	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 5, 0, nil, 500)
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 5, 0, nil, 500, 0, 0)
 	require.NoError(t, err)
 	assert.Zero(t, quota)
 	assert.Nil(t, clamp)

@@ -58,14 +58,19 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if !resolutionBilling {
 		other["model_price"] = info.PriceData.ModelPrice
 	} else if resolvedVideoBilling != nil {
+		videoBillingInfo := map[string]interface{}{
+			"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
+			"selected_price_per_second":  resolvedVideoBilling.SelectedResolutionPrice,
+			"submitted_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
+			"effective_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
+			"independent_ratios":         resolvedVideoBilling.Selection.IndependentRatios,
+		}
+		if resolvedVideoBilling.Selection.InputVideoSeconds > 0 {
+			videoBillingInfo["input_video_seconds"] = resolvedVideoBilling.Selection.InputVideoSeconds
+			videoBillingInfo["input_video_price_per_second"] = resolvedVideoBilling.Selection.InputVideoPricePerSecond
+		}
 		adminInfo := map[string]interface{}{
-			"video_resolution_billing": map[string]interface{}{
-				"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
-				"selected_price_per_second":  resolvedVideoBilling.SelectedResolutionPrice,
-				"submitted_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
-				"effective_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
-				"independent_ratios":         resolvedVideoBilling.Selection.IndependentRatios,
-			},
+			"video_resolution_billing": videoBillingInfo,
 		}
 		other["admin_info"] = adminInfo
 	}
@@ -212,6 +217,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				billingInfo["independent_ratios"] = bc.IndependentRatios
 				other["task_ratios"] = bc.IndependentRatios
 			}
+			if bc.InputVideoSeconds > 0 {
+				billingInfo["input_video_seconds"] = bc.InputVideoSeconds
+				billingInfo["input_video_price_per_second"] = bc.InputVideoPricePerSecond
+			}
 			other["admin_info"] = map[string]interface{}{
 				"video_resolution_billing": billingInfo,
 			}
@@ -264,6 +273,8 @@ func CalculateVideoResolutionSnapshotQuota(bc *model.TaskBillingContext, effecti
 		bc.GroupRatio,
 		bc.IndependentRatios,
 		bc.QuotaPerUnit,
+		bc.InputVideoSeconds,
+		bc.InputVideoPricePerSecond,
 	)
 }
 

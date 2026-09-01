@@ -692,6 +692,8 @@ func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.Ta
 			EffectiveDurationSeconds: validated.Selection.EffectiveDurationSeconds,
 			QuotaPerUnit:             validated.QuotaPerUnit,
 			IndependentRatios:        independentRatios,
+			InputVideoSeconds:        validated.Selection.InputVideoSeconds,
+			InputVideoPricePerSecond: validated.Selection.InputVideoPricePerSecond,
 		}
 	}
 	return &model.TaskBillingContext{
