@@ -54,8 +54,10 @@ type TaskDto struct {
 }
 
 type TaskBillingDetails struct {
-	BillingUnit              string             `json:"billing_unit"`
-	Resolution               string             `json:"resolution"`
+	BillingUnit string `json:"billing_unit"`
+	Resolution  string `json:"resolution"`
+	// SelectedPricePerSecond keeps its historical JSON key for log/API
+	// compatibility; when BillingUnit is per_call it holds the per-video price.
 	SelectedPricePerSecond   float64            `json:"selected_price_per_second"`
 	SubmittedDurationSeconds int                `json:"submitted_duration_seconds"`
 	EffectiveDurationSeconds int                `json:"effective_duration_seconds"`

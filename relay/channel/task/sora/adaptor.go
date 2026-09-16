@@ -406,12 +406,17 @@ func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.Rela
 		return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
 	}
 	if billing := originTask.PrivateData.BillingContext; billing != nil && billing.PricingKind == "video_resolution" {
+		// The remix is charged under the current frozen plan's unit, not the
+		// origin task's snapshot: pricing may have changed since the original.
+		if info.TaskRelayInfo == nil || info.TaskRelayInfo.BillingPlan == nil {
+			return relaycommon.VideoBillingSelection{}, soraVideoBillingNotSupported(info, "")
+		}
 		selection := relaycommon.VideoBillingSelection{
 			EffectiveResolution:      billing.EffectiveResolution,
 			EffectiveDurationSeconds: billing.EffectiveDurationSeconds,
 			IndependentRatios:        billing.IndependentRatios,
 		}
-		resolved, err := relaycommon.NewResolvedVideoBilling(selection, 1)
+		resolved, err := relaycommon.NewResolvedVideoBilling(selection, 1, info.TaskRelayInfo.BillingPlan.BillingUnit())
 		if err == nil {
 			return resolved.Selection, nil
 		}

@@ -28,9 +28,13 @@ func soraVideoBillingContext(t *testing.T, request relaycommon.TaskSubmitReq) (*
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httpRequest
 	c.Set("task_request", request)
+	// Remix resolution reads the billing unit from the frozen plan, so every
+	// resolver test runs under a per-second resolution plan.
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("sora-2", "req-sora-test", map[string]float64{"720p": 0.1, "1024p": 0.2, "1080p": 0.3, "2160p": 0.5}, "per_second")
+	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: request.Model,
-		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{BillingPlan: plan},
 		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
 	}
 	return c, info

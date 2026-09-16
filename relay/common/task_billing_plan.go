@@ -32,7 +32,7 @@ func NewLegacyTaskBillingPlan(model, requestID string) *TaskBillingPlan {
 }
 
 func NewVideoResolutionTaskBillingPlan(model, requestID string, prices map[string]float64, billingUnit string) (*TaskBillingPlan, error) {
-	if billingUnit != ratio_setting.TaskBillingModePerSecond && billingUnit != ratio_setting.TaskBillingModePerCall {
+	if !ratio_setting.IsValidVideoResolutionBillingUnit(billingUnit) {
 		return nil, fmt.Errorf("invalid video resolution billing unit %q", billingUnit)
 	}
 	if model == "" || requestID == "" || len(prices) == 0 {

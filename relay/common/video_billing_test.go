@@ -1,6 +1,7 @@
 package common
 
 import (
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"math"
 	"testing"
 
@@ -136,7 +137,7 @@ func TestNewResolvedVideoBillingDefensivelyClonesSelection(t *testing.T) {
 		IndependentRatios:        map[string]float64{"video_input": 1.2},
 	}
 
-	resolved, err := NewResolvedVideoBilling(selection, 0.18)
+	resolved, err := NewResolvedVideoBilling(selection, 0.18, ratio_setting.TaskBillingModePerCall)
 	require.NoError(t, err)
 
 	selection.EffectiveResolution = "720p"
@@ -146,6 +147,7 @@ func TestNewResolvedVideoBillingDefensivelyClonesSelection(t *testing.T) {
 	assert.Equal(t, "1080p", resolved.Selection.EffectiveResolution)
 	assert.Equal(t, map[string]float64{"video_input": 1.2}, resolved.Selection.IndependentRatios)
 	assert.Equal(t, 0.18, resolved.SelectedResolutionPrice)
+	assert.Equal(t, ratio_setting.TaskBillingModePerCall, resolved.BillingUnit)
 }
 
 func TestNewResolvedVideoBillingRejectsInvalidSelection(t *testing.T) {
@@ -153,6 +155,7 @@ func TestNewResolvedVideoBillingRejectsInvalidSelection(t *testing.T) {
 		name      string
 		selection VideoBillingSelection
 		price     float64
+		unit      string
 	}{
 		{name: "empty resolution", selection: VideoBillingSelection{EffectiveDurationSeconds: 1}, price: 0.1},
 		{name: "non canonical resolution", selection: VideoBillingSelection{EffectiveResolution: "1920x1080", EffectiveDurationSeconds: 1}, price: 0.1},
@@ -161,11 +164,20 @@ func TestNewResolvedVideoBillingRejectsInvalidSelection(t *testing.T) {
 		{name: "unknown ratio", selection: VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 1, IndependentRatios: map[string]float64{"size": 2}}, price: 0.1},
 		{name: "invalid ratio", selection: VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 1, IndependentRatios: map[string]float64{"video_input": math.NaN()}}, price: 0.1},
 		{name: "invalid selected price", selection: VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 1}, price: math.Inf(1)},
+		{name: "unknown billing unit", selection: VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 1}, price: 0.1, unit: "per_frame"},
+		{name: "empty billing unit", selection: VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 1}, price: 0.1, unit: "<empty>"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resolved, err := NewResolvedVideoBilling(tc.selection, tc.price)
+			unit := tc.unit
+			switch unit {
+			case "":
+				unit = ratio_setting.TaskBillingModePerSecond
+			case "<empty>":
+				unit = ""
+			}
+			resolved, err := NewResolvedVideoBilling(tc.selection, tc.price, unit)
 			assert.Error(t, err)
 			assert.Nil(t, resolved)
 		})

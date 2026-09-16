@@ -63,8 +63,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["model_price"] = info.PriceData.ModelPrice
 	} else if resolvedVideoBilling != nil {
 		videoBillingInfo := map[string]interface{}{
-			"billing_unit":               resolvedVideoBilling.BillingUnit,
-			"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
+			"billing_unit":         resolvedVideoBilling.BillingUnit,
+			"effective_resolution": resolvedVideoBilling.Selection.EffectiveResolution,
+			// key kept for historical log compatibility; per-video price when billing_unit is per_call
 			"selected_price_per_second":  resolvedVideoBilling.SelectedResolutionPrice,
 			"submitted_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
 			"effective_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,

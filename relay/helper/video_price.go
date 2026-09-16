@@ -21,17 +21,19 @@ func BuildVideoResolutionPriceData(
 	if c == nil || info == nil {
 		return hosttypes.PriceData{}, nil, fmt.Errorf("video billing requires relay context")
 	}
+	// The billing unit is read from the frozen plan, never defaulted: a missing
+	// or non-resolution plan is a programming error and must fail loudly
+	// instead of silently charging per second.
 	if info.TaskRelayInfo == nil || info.TaskRelayInfo.BillingPlan == nil || info.TaskRelayInfo.BillingPlan.Kind() != relaycommon.TaskBillingKindVideoResolution {
 		return hosttypes.PriceData{}, nil, fmt.Errorf("video billing requires a frozen resolution plan")
 	}
 
-	resolved, err := relaycommon.NewResolvedVideoBilling(selection, selectedResolutionPrice)
+	resolved, err := relaycommon.NewResolvedVideoBilling(selection, selectedResolutionPrice, info.TaskRelayInfo.BillingPlan.BillingUnit())
 	if err != nil {
 		return hosttypes.PriceData{}, nil, err
 	}
 	quotaPerUnit := common.QuotaPerUnit
 	resolved.QuotaPerUnit = quotaPerUnit
-	resolved.BillingUnit = info.TaskRelayInfo.BillingPlan.BillingUnit()
 	groupRatioInfo := HandleGroupRatio(c, info)
 	quota, clamp, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(
 		resolved.SelectedResolutionPrice,

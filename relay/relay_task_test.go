@@ -418,7 +418,7 @@ func TestRelayTaskSubmitLegacyPerSecondUsesEstimateThenSubmitAdjustment(t *testi
 func TestFrozenResolutionBillingRejectsUnitMismatch(t *testing.T) {
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("video", "req-unit", map[string]float64{"720p": 0.5}, "per_call")
 	require.NoError(t, err)
-	resolved, err := relaycommon.NewResolvedVideoBilling(relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}, 0.5)
+	resolved, err := relaycommon.NewResolvedVideoBilling(relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}, 0.5, "per_second")
 	require.NoError(t, err)
 	resolved.QuotaPerUnit = 1000
 	_, err = ValidateFrozenResolutionBilling(plan, resolved)

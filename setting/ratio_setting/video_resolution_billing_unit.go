@@ -12,6 +12,13 @@ const VideoResolutionBillingUnitOptionKey = "VideoResolutionBillingUnit"
 
 var videoResolutionBillingUnitMap = types.NewRWMap[string, string]()
 
+// IsValidVideoResolutionBillingUnit is the single membership check for the
+// resolution billing unit; every layer that accepts a unit re-validates
+// through it so an unknown value can never reach the quota calculator.
+func IsValidVideoResolutionBillingUnit(unit string) bool {
+	return unit == TaskBillingModePerSecond || unit == TaskBillingModePerCall
+}
+
 func ValidateVideoResolutionBillingUnitByJSONString(value string) error {
 	if err := common.ValidateJSONNoDuplicateKeys([]byte(value)); err != nil {
 		return err
@@ -27,7 +34,7 @@ func ValidateVideoResolutionBillingUnitByJSONString(value string) error {
 		if strings.TrimSpace(model) == "" {
 			return fmt.Errorf("video resolution billing unit model key must not be blank")
 		}
-		if unit != TaskBillingModePerSecond && unit != TaskBillingModePerCall {
+		if !IsValidVideoResolutionBillingUnit(unit) {
 			return fmt.Errorf("invalid video resolution billing unit %q for model %q", unit, model)
 		}
 	}

@@ -46,10 +46,13 @@ type ResolvedVideoBilling struct {
 
 // NewResolvedVideoBilling validates and defensively copies billing inputs so
 // later adapter mutations cannot alter the values used for charging.
-func NewResolvedVideoBilling(selection VideoBillingSelection, selectedResolutionPrice float64) (*ResolvedVideoBilling, error) {
+func NewResolvedVideoBilling(selection VideoBillingSelection, selectedResolutionPrice float64, billingUnit string) (*ResolvedVideoBilling, error) {
 	resolution, err := rootcommon.NormalizeVideoResolutionKey(selection.EffectiveResolution)
 	if err != nil {
 		return nil, err
+	}
+	if !ratio_setting.IsValidVideoResolutionBillingUnit(billingUnit) {
+		return nil, fmt.Errorf("invalid video resolution billing unit %q", billingUnit)
 	}
 	if err := validateVideoDuration(selection.EffectiveDurationSeconds); err != nil {
 		return nil, err
@@ -75,7 +78,7 @@ func NewResolvedVideoBilling(selection VideoBillingSelection, selectedResolution
 			InputVideoPricePerSecond: selection.InputVideoPricePerSecond,
 		},
 		SelectedResolutionPrice: selectedResolutionPrice,
-		BillingUnit:             ratio_setting.TaskBillingModePerSecond,
+		BillingUnit:             billingUnit,
 	}, nil
 }
 
@@ -126,7 +129,7 @@ func CalculateVideoResolutionQuotaAtUnit(
 	inputVideoPricePerSecond float64,
 	billingUnit string,
 ) (int, *rootcommon.QuotaClamp, error) {
-	if billingUnit != ratio_setting.TaskBillingModePerSecond && billingUnit != ratio_setting.TaskBillingModePerCall {
+	if !ratio_setting.IsValidVideoResolutionBillingUnit(billingUnit) {
 		return 0, nil, fmt.Errorf("invalid video resolution billing unit %q", billingUnit)
 	}
 	if err := validatePositiveFinite("resolution price", resolutionPrice); err != nil {

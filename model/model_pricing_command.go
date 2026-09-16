@@ -832,7 +832,7 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 		if selection.ResolutionBillingUnit != nil {
 			unit = *selection.ResolutionBillingUnit
 		}
-		if unit != ratio_setting.TaskBillingModePerSecond && unit != ratio_setting.TaskBillingModePerCall {
+		if !ratio_setting.IsValidVideoResolutionBillingUnit(unit) {
 			return pricingValidationErrorf("invalid video resolution billing unit %q", unit)
 		}
 		if len(selection.ResolutionPrices) == 0 {

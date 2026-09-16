@@ -44,7 +44,7 @@ func ValidateFrozenResolutionBilling(
 	if plan == nil || plan.Kind() != relaycommon.TaskBillingKindVideoResolution || resolved == nil {
 		return nil, errors.New("resolution billing plan is missing its resolved selection")
 	}
-	validated, err := relaycommon.NewResolvedVideoBilling(resolved.Selection, resolved.SelectedResolutionPrice)
+	validated, err := relaycommon.NewResolvedVideoBilling(resolved.Selection, resolved.SelectedResolutionPrice, resolved.BillingUnit)
 	if err != nil {
 		return nil, err
 	}
@@ -52,11 +52,10 @@ func ValidateFrozenResolutionBilling(
 		return nil, errors.New("resolution billing has an invalid quota unit")
 	}
 	frozenPrice, ok := plan.ResolutionPrice(validated.Selection.EffectiveResolution)
-	if !ok || frozenPrice != validated.SelectedResolutionPrice || resolved.BillingUnit != plan.BillingUnit() {
+	if !ok || frozenPrice != validated.SelectedResolutionPrice || validated.BillingUnit != plan.BillingUnit() {
 		return nil, errors.New("resolved billing does not match the frozen resolution tier")
 	}
 	validated.QuotaPerUnit = resolved.QuotaPerUnit
-	validated.BillingUnit = resolved.BillingUnit
 	return validated, nil
 }
 
@@ -268,7 +267,7 @@ func relayTaskSubmitWithDeps(c *gin.Context, info *relaycommon.RelayInfo, deps r
 			return nil, taskErr
 		}
 
-		validated, err := relaycommon.NewResolvedVideoBilling(selection, 1)
+		validated, err := relaycommon.NewResolvedVideoBilling(selection, 1, plan.BillingUnit())
 		if err != nil {
 			resolution := "unknown"
 			if canonical, normalizeErr := common.NormalizeVideoResolutionKey(selection.EffectiveResolution); normalizeErr == nil {
