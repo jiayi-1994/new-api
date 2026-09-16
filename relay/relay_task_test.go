@@ -415,10 +415,41 @@ func TestRelayTaskSubmitLegacyPerSecondUsesEstimateThenSubmitAdjustment(t *testi
 	assert.Equal(t, map[string]float64{"seconds": 4, "size": 5}, info.PriceData.OtherRatios())
 }
 
+func TestFrozenResolutionBillingRejectsUnitMismatch(t *testing.T) {
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("video", "req-unit", map[string]float64{"720p": 0.5}, "per_call")
+	require.NoError(t, err)
+	resolved, err := relaycommon.NewResolvedVideoBilling(relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}, 0.5)
+	require.NoError(t, err)
+	resolved.QuotaPerUnit = 1000
+	_, err = ValidateFrozenResolutionBilling(plan, resolved)
+	require.ErrorContains(t, err, "does not match the frozen resolution tier")
+	resolved.BillingUnit = "per_call"
+	validated, err := ValidateFrozenResolutionBilling(plan, resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "per_call", validated.BillingUnit)
+}
+
+func TestRelayTaskSubmitPerCallUsesFrozenUnitAfterLiveChange(t *testing.T) {
+	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 10}}
+	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-unit", map[string]float64{"720p": 0.5}, "per_call")
+	require.NoError(t, err)
+	info.TaskRelayInfo.BillingPlan = plan
+	original := ratio_setting.VideoResolutionBillingUnit2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(original)) })
+	require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(`{"client-model":"per_second"}`))
+	result, taskErr := relayTaskSubmitWithDeps(c, info, deps)
+	require.Nil(t, taskErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 250, state.preConsumedQuota)
+	assert.Equal(t, 250, result.Quota)
+	assert.Equal(t, "per_call", info.ResolvedVideoBilling.BillingUnit)
+}
+
 func TestRelayTaskSubmitResolutionPlanUsesFrozenTableAfterLiveRemoval(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "720p", EffectiveDurationSeconds: 5}}
 	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
-	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1})
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1}, "per_second")
 	require.NoError(t, err)
 	info.TaskRelayInfo.BillingPlan = plan
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{}`))
@@ -434,7 +465,7 @@ func TestRelayTaskSubmitResolutionPlanUsesFrozenTableAfterLiveRemoval(t *testing
 func TestRelayTaskSubmitResolutionPlanDoesNotFallbackForMissingTier(t *testing.T) {
 	base := &taskSubmitTestAdaptor{selection: relaycommon.VideoBillingSelection{EffectiveResolution: "1080p", EffectiveDurationSeconds: 5}}
 	c, info, deps, state := taskSubmitVideoTestContext(t, &videoTaskSubmitTestAdaptor{base})
-	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1})
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", map[string]float64{"720p": 0.1}, "per_second")
 	require.NoError(t, err)
 	info.TaskRelayInfo.BillingPlan = plan
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"client-model":0.2}`))
@@ -458,6 +489,7 @@ func TestRelayTaskSubmitRetryKeepsFrozenPlanFundingAndRequestIdentity(t *testing
 	c, info, deps, state := taskSubmitVideoTestContext(t, adaptor)
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"client-model", "req-frozen", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	info.RequestId = "req-frozen"

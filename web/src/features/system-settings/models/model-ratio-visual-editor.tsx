@@ -83,6 +83,7 @@ type ModelRatioVisualEditorProps = {
   savedBillingMode: string
   savedBillingExpr: string
   savedTaskBillingMode: string
+  savedVideoResolutionBillingUnit: string
   savedVideoResolutionPrice: string
   modelPrice: string
   modelRatio: string
@@ -95,6 +96,7 @@ type ModelRatioVisualEditorProps = {
   billingMode: string
   billingExpr: string
   taskBillingMode: string
+  videoResolutionBillingUnit: string
   videoResolutionPrice: string
   candidateModelNames?: string[]
   candidateModelsLoading?: boolean
@@ -126,6 +128,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     savedTaskBillingMode,
+    savedVideoResolutionBillingUnit,
     savedVideoResolutionPrice,
     modelPrice,
     modelRatio,
@@ -138,6 +141,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     billingMode,
     billingExpr,
     taskBillingMode,
+    videoResolutionBillingUnit,
     videoResolutionPrice,
     candidateModelNames,
     candidateModelsLoading,
@@ -214,6 +218,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode: savedBillingMode,
       billingExpr: savedBillingExpr,
       taskBillingMode: savedTaskBillingMode,
+      videoResolutionBillingUnit: savedVideoResolutionBillingUnit,
       videoResolutionPrice: savedVideoResolutionPrice,
     })
     const draftRows = buildModelSnapshots({
@@ -228,6 +233,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionBillingUnit,
       videoResolutionPrice,
     })
 
@@ -273,6 +279,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     savedTaskBillingMode,
+    savedVideoResolutionBillingUnit,
     savedVideoResolutionPrice,
     modelPrice,
     modelRatio,
@@ -285,6 +292,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     billingMode,
     billingExpr,
     taskBillingMode,
+    videoResolutionBillingUnit,
     videoResolutionPrice,
   ])
 
@@ -339,6 +347,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         billingExpr: editableModel.billingExpr,
         requestRuleExpr: editableModel.requestRuleExpr,
         taskBillingMode: editableModel.taskBillingMode,
+        resolutionBillingUnit: editableModel.resolutionBillingUnit,
         resolutionPrices: editableModel.resolutionPrices,
       })
       setEditorOpen(true)
@@ -383,6 +392,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           'billing_setting.billing_mode': billingMode,
           'billing_setting.billing_expr': billingExpr,
           TaskBillingMode: taskBillingMode,
+          VideoResolutionBillingUnit: videoResolutionBillingUnit,
           VideoResolutionPrice: videoResolutionPrice,
         }),
         { kind: 'delete', name }
@@ -411,6 +421,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionBillingUnit,
       videoResolutionPrice,
       onChange,
       editData,
@@ -476,6 +487,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           'billing_setting.billing_mode': billingMode,
           'billing_setting.billing_expr': billingExpr,
           TaskBillingMode: taskBillingMode,
+          VideoResolutionBillingUnit: videoResolutionBillingUnit,
           VideoResolutionPrice: videoResolutionPrice,
         }),
         {
@@ -510,6 +522,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingMode,
       billingExpr,
       taskBillingMode,
+      videoResolutionBillingUnit,
       videoResolutionPrice,
       onChange,
     ]
@@ -750,6 +763,8 @@ export const ModelRatioVisualEditor = memo(
       prevProps.savedBillingMode === nextProps.savedBillingMode &&
       prevProps.savedBillingExpr === nextProps.savedBillingExpr &&
       prevProps.savedTaskBillingMode === nextProps.savedTaskBillingMode &&
+      prevProps.savedVideoResolutionBillingUnit ===
+        nextProps.savedVideoResolutionBillingUnit &&
       prevProps.savedVideoResolutionPrice ===
         nextProps.savedVideoResolutionPrice &&
       prevProps.modelPrice === nextProps.modelPrice &&
@@ -763,6 +778,8 @@ export const ModelRatioVisualEditor = memo(
       prevProps.billingMode === nextProps.billingMode &&
       prevProps.billingExpr === nextProps.billingExpr &&
       prevProps.taskBillingMode === nextProps.taskBillingMode &&
+      prevProps.videoResolutionBillingUnit ===
+        nextProps.videoResolutionBillingUnit &&
       prevProps.videoResolutionPrice === nextProps.videoResolutionPrice &&
       prevProps.candidateModelNames === nextProps.candidateModelNames &&
       prevProps.candidateModelsLoading === nextProps.candidateModelsLoading &&

@@ -111,7 +111,7 @@ func makeTaskBillingPlan(modelName, requestID string, isSuno bool, prices map[st
 	if isSuno || len(prices) == 0 {
 		return relaycommon.NewLegacyTaskBillingPlan(modelName, requestID), nil
 	}
-	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(modelName, requestID, prices)
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(modelName, requestID, prices, ratio_setting.GetVideoResolutionBillingUnit(modelName))
 	if err != nil {
 		return nil, fmt.Errorf("prepare video resolution billing plan: %w", err)
 	}

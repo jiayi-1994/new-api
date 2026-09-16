@@ -773,7 +773,9 @@ function PriceSection(props: {
             )}
           </div>
           <p className='text-muted-foreground mt-2 text-xs'>
-            {t('Prices shown per second')}
+            {isPerSecondBilledModel(props.model)
+              ? t('Prices shown per second')
+              : t('Prices shown per video')}
           </p>
         </section>
       )

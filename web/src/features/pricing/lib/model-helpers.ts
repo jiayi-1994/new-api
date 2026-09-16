@@ -109,7 +109,7 @@ export function isTokenBasedModel(model: PricingModel): boolean {
 }
 
 /**
- * Per-second resolution prices sorted by resolution, ignoring any non-positive
+ * Resolution prices sorted by resolution, ignoring any non-positive
  * or non-finite value the backend may still carry for legacy configurations.
  */
 export function getResolutionPriceEntries(
@@ -134,16 +134,12 @@ export function getMinimumResolutionPrice(model: PricingModel): number | null {
   return prices.length === 0 ? null : Math.min(...prices)
 }
 
-/**
- * Resolution-priced models are always charged per second, regardless of any
- * stale legacy task_billing_mode still stored for the same model.
- */
 export function isResolutionPricedModel(model: PricingModel): boolean {
   return getResolutionPriceEntries(model).length > 0
 }
 
 export function isPerSecondBilledModel(model: PricingModel): boolean {
-  return (
-    isResolutionPricedModel(model) || model.task_billing_mode === 'per_second'
-  )
+  return isResolutionPricedModel(model)
+    ? model.task_billing_mode !== 'per_call'
+    : model.task_billing_mode === 'per_second'
 }

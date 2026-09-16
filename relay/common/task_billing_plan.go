@@ -5,6 +5,7 @@ import (
 	"math"
 
 	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 type TaskBillingKind uint8
@@ -19,6 +20,7 @@ type TaskBillingPlan struct {
 	originModelName  string
 	requestID        string
 	resolutionPrices map[string]float64
+	billingUnit      string
 }
 
 func NewLegacyTaskBillingPlan(model, requestID string) *TaskBillingPlan {
@@ -29,7 +31,10 @@ func NewLegacyTaskBillingPlan(model, requestID string) *TaskBillingPlan {
 	}
 }
 
-func NewVideoResolutionTaskBillingPlan(model, requestID string, prices map[string]float64) (*TaskBillingPlan, error) {
+func NewVideoResolutionTaskBillingPlan(model, requestID string, prices map[string]float64, billingUnit string) (*TaskBillingPlan, error) {
+	if billingUnit != ratio_setting.TaskBillingModePerSecond && billingUnit != ratio_setting.TaskBillingModePerCall {
+		return nil, fmt.Errorf("invalid video resolution billing unit %q", billingUnit)
+	}
 	if model == "" || requestID == "" || len(prices) == 0 {
 		return nil, fmt.Errorf("video resolution billing requires model, request identity, and prices")
 	}
@@ -48,11 +53,16 @@ func NewVideoResolutionTaskBillingPlan(model, requestID string, prices map[strin
 		originModelName:  model,
 		requestID:        requestID,
 		resolutionPrices: clone,
+		billingUnit:      billingUnit,
 	}, nil
 }
 
 func (plan *TaskBillingPlan) Kind() TaskBillingKind {
 	return plan.kind
+}
+
+func (plan *TaskBillingPlan) BillingUnit() string {
+	return plan.billingUnit
 }
 
 func (plan *TaskBillingPlan) OriginModelName() string {

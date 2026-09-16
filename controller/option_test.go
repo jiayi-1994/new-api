@@ -532,7 +532,7 @@ func TestPricingCommandRouteBulkCASCommitsChangedDocumentsOnce(t *testing.T) {
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.True(t, response.Success)
 	assert.True(t, response.Committed)
-	assert.Len(t, response.Data, 12)
+	assert.Len(t, response.Data, len(pricingDocumentsForControllerModel("unused")))
 	assert.JSONEq(t, `{"bulk-current":9,"untouched":2.5}`, response.Data["ModelPrice"])
 	assert.JSONEq(t, `{"bulk-current":"per_second","untouched":"per_second"}`, response.Data["TaskBillingMode"])
 	for key, oldValue := range expected {

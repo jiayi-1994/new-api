@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
@@ -130,8 +131,9 @@ type TaskBillingContext struct {
 	OriginModelName          string             `json:"origin_model_name,omitempty"`            // 模型名称，必须为OriginModelName
 	PerCallBilling           bool               `json:"per_call_billing,omitempty"`             // 按次计费：跳过轮询阶段的差额结算
 	PricingKind              string             `json:"pricing_kind,omitempty"`                 // video_resolution 表示按分辨率快照计费
+	BillingUnit              string             `json:"billing_unit,omitempty"`                 // 空值兼容旧任务，按秒计费
 	EffectiveResolution      string             `json:"effective_resolution,omitempty"`         // 上游实际使用的 canonical 分辨率
-	SelectedResolutionPrice  float64            `json:"selected_resolution_price,omitempty"`    // 选中的每秒分辨率价格
+	SelectedResolutionPrice  float64            `json:"selected_resolution_price,omitempty"`    // 所选分辨率在 BillingUnit 下的单价
 	EffectiveDurationSeconds int                `json:"effective_duration_seconds,omitempty"`   // 提交时用于计费的有效时长
 	SettledDurationSeconds   int                `json:"settled_duration_seconds,omitempty"`     // 上游完成时确认的有效时长
 	QuotaPerUnit             float64            `json:"quota_per_unit,omitempty"`               // 提交时的额度换算基准
@@ -143,6 +145,15 @@ type TaskBillingContext struct {
 	SettlementPreConsumed    int                `json:"settlement_pre_consumed,omitempty"`      // 可靠发布所需的原始预扣额度
 	SettlementActualQuota    int                `json:"settlement_actual_quota,omitempty"`      // 可靠发布所需的最终额度
 	SettlementQuotaClamp     *common.QuotaClamp `json:"settlement_quota_clamp,omitempty"`       // 可靠发布所需的饱和审计标记
+}
+
+// VideoResolutionBillingUnit preserves per-second billing for tasks submitted
+// before billing units were included in the persisted snapshot.
+func (bc *TaskBillingContext) VideoResolutionBillingUnit() string {
+	if bc.BillingUnit == "" {
+		return ratio_setting.TaskBillingModePerSecond
+	}
+	return bc.BillingUnit
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

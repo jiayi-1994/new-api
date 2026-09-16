@@ -18,6 +18,7 @@ var modelPricingOptionKeys = []string{
 	"AudioCompletionRatio", "AudioRatio", "CacheRatio", "CompletionRatio",
 	"CreateCacheRatio", "ImageRatio", "ModelPrice", "ModelRatio",
 	"TaskBillingMode", ratio_setting.VideoResolutionPriceOptionKey,
+	ratio_setting.VideoResolutionBillingUnitOptionKey,
 	"billing_setting.billing_expr", "billing_setting.billing_mode",
 }
 
@@ -27,6 +28,7 @@ var modelPricingNumericOptionKeys = []string{
 }
 
 var modelPricingStringOptionKeys = []string{
+	ratio_setting.VideoResolutionBillingUnitOptionKey,
 	"TaskBillingMode", "billing_setting.billing_expr", "billing_setting.billing_mode",
 }
 
@@ -70,18 +72,19 @@ const (
 )
 
 type ModelPricingSelection struct {
-	Mode                 PricingMode        `json:"mode"`
-	ModelPrice           *float64           `json:"price,omitempty"`
-	ModelRatio           *float64           `json:"ratio,omitempty"`
-	CacheRatio           *float64           `json:"cache_ratio,omitempty"`
-	CreateCacheRatio     *float64           `json:"create_cache_ratio,omitempty"`
-	CompletionRatio      *float64           `json:"completion_ratio,omitempty"`
-	ImageRatio           *float64           `json:"image_ratio,omitempty"`
-	AudioRatio           *float64           `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio *float64           `json:"audio_completion_ratio,omitempty"`
-	BillingExpr          *string            `json:"billing_expr,omitempty"`
-	TaskBillingMode      *string            `json:"task_billing_mode,omitempty"`
-	ResolutionPrices     map[string]float64 `json:"resolution_prices,omitempty"`
+	Mode                  PricingMode        `json:"mode"`
+	ModelPrice            *float64           `json:"price,omitempty"`
+	ModelRatio            *float64           `json:"ratio,omitempty"`
+	CacheRatio            *float64           `json:"cache_ratio,omitempty"`
+	CreateCacheRatio      *float64           `json:"create_cache_ratio,omitempty"`
+	CompletionRatio       *float64           `json:"completion_ratio,omitempty"`
+	ImageRatio            *float64           `json:"image_ratio,omitempty"`
+	AudioRatio            *float64           `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio  *float64           `json:"audio_completion_ratio,omitempty"`
+	BillingExpr           *string            `json:"billing_expr,omitempty"`
+	TaskBillingMode       *string            `json:"task_billing_mode,omitempty"`
+	ResolutionPrices      map[string]float64 `json:"resolution_prices,omitempty"`
+	ResolutionBillingUnit *string            `json:"resolution_billing_unit,omitempty"`
 }
 
 type ModelRowMutation struct {
@@ -182,6 +185,8 @@ func currentPricingOptionDefaults() map[string]string {
 			values[key] = ratio_setting.ModelRatio2JSONString()
 		case "TaskBillingMode":
 			values[key] = ratio_setting.TaskBillingMode2JSONString()
+		case ratio_setting.VideoResolutionBillingUnitOptionKey:
+			values[key] = ratio_setting.VideoResolutionBillingUnit2JSONString()
 		case ratio_setting.VideoResolutionPriceOptionKey:
 			values[key] = ratio_setting.VideoResolutionPrice2JSONString()
 		default:
@@ -329,6 +334,14 @@ func parsePricingDocumentsWithMode(values map[string]string, strict bool) (*Pric
 		documents.Strings[key] = make(map[string]string)
 		if _, bad := documents.InvalidRawDocuments[key]; bad {
 			continue
+		}
+		if key == ratio_setting.VideoResolutionBillingUnitOptionKey {
+			if err := ratio_setting.ValidateVideoResolutionBillingUnitByJSONString(values[key]); err != nil {
+				if err := quarantine(key, err); err != nil {
+					return nil, err
+				}
+				continue
+			}
 		}
 		var document map[string]string
 		if err := common.Unmarshal([]byte(values[key]), &document); err != nil {
@@ -629,6 +642,7 @@ func pricingPublicationSteps(current, final map[string]string) ([]pricingPublica
 		{Key: "CreateCacheRatio", Value: final["CreateCacheRatio"]},
 		{Key: "ImageRatio", Value: final["ImageRatio"]},
 		{Key: "TaskBillingMode", Value: final["TaskBillingMode"]},
+		{Key: ratio_setting.VideoResolutionBillingUnitOptionKey, Value: final[ratio_setting.VideoResolutionBillingUnitOptionKey]},
 		{
 			BillingMode: current["billing_setting.billing_mode"],
 			BillingExpr: stagedExpression,
@@ -814,6 +828,13 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 	}
 
 	if selection.Mode == PricingModeVideoResolution {
+		unit := ratio_setting.TaskBillingModePerSecond
+		if selection.ResolutionBillingUnit != nil {
+			unit = *selection.ResolutionBillingUnit
+		}
+		if unit != ratio_setting.TaskBillingModePerSecond && unit != ratio_setting.TaskBillingModePerCall {
+			return pricingValidationErrorf("invalid video resolution billing unit %q", unit)
+		}
 		if len(selection.ResolutionPrices) == 0 {
 			return pricingValidationErrorf("video resolution pricing requires at least one resolution")
 		}
@@ -822,6 +843,10 @@ func applyPricingSelection(documents *PricingDocuments, target string, selection
 			prices[resolution] = price
 		}
 		documents.ResolutionPrice[target] = prices
+		delete(documents.Strings[ratio_setting.VideoResolutionBillingUnitOptionKey], target)
+		if unit == ratio_setting.TaskBillingModePerCall {
+			documents.Strings[ratio_setting.VideoResolutionBillingUnitOptionKey][target] = unit
+		}
 		return nil
 	}
 

@@ -25,17 +25,19 @@ func setupModelMetaControllerTest(t *testing.T) *gorm.DB {
 	originalLogDB := model.LOG_DB
 	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
 	originalModes := ratio_setting.TaskBillingMode2JSONString()
+	originalResolutionUnits := ratio_setting.VideoResolutionBillingUnit2JSONString()
 	originalBillingModes, originalBillingExpressions := billing_setting.PricingDocumentsJSON()
 	originalProtectedValues := map[string]string{
-		"AudioCompletionRatio": ratio_setting.AudioCompletionRatio2JSONString(),
-		"AudioRatio":           ratio_setting.AudioRatio2JSONString(),
-		"CacheRatio":           ratio_setting.CacheRatio2JSONString(),
-		"CompletionRatio":      ratio_setting.CompletionRatio2JSONString(),
-		"CreateCacheRatio":     ratio_setting.CreateCacheRatio2JSONString(),
-		"ImageRatio":           ratio_setting.ImageRatio2JSONString(),
-		"ModelPrice":           ratio_setting.ModelPrice2JSONString(),
-		"ModelRatio":           ratio_setting.ModelRatio2JSONString(),
-		"TaskBillingMode":      originalModes,
+		"AudioCompletionRatio":       ratio_setting.AudioCompletionRatio2JSONString(),
+		"AudioRatio":                 ratio_setting.AudioRatio2JSONString(),
+		"CacheRatio":                 ratio_setting.CacheRatio2JSONString(),
+		"CompletionRatio":            ratio_setting.CompletionRatio2JSONString(),
+		"CreateCacheRatio":           ratio_setting.CreateCacheRatio2JSONString(),
+		"ImageRatio":                 ratio_setting.ImageRatio2JSONString(),
+		"ModelPrice":                 ratio_setting.ModelPrice2JSONString(),
+		"ModelRatio":                 ratio_setting.ModelRatio2JSONString(),
+		"TaskBillingMode":            originalModes,
+		"VideoResolutionBillingUnit": originalResolutionUnits,
 		ratio_setting.VideoResolutionPriceOptionKey: originalPrices,
 		"billing_setting.billing_expr":              originalBillingExpressions,
 		"billing_setting.billing_mode":              originalBillingModes,
@@ -62,6 +64,7 @@ func setupModelMetaControllerTest(t *testing.T) *gorm.DB {
 		model.LOG_DB = originalLogDB
 		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
 		require.NoError(t, ratio_setting.UpdateTaskBillingModeByJSONString(originalModes))
+		require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(originalResolutionUnits))
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = originalOptionMap
 		common.OptionMapRWMutex.Unlock()
@@ -78,15 +81,16 @@ func setupModelMetaControllerTest(t *testing.T) *gorm.DB {
 func pricingDocumentsForControllerModel(source string) map[string]string {
 	numeric := fmt.Sprintf(`{"%s":1.25,"untouched":2.5}`, source)
 	return map[string]string{
-		"AudioCompletionRatio": numeric,
-		"AudioRatio":           numeric,
-		"CacheRatio":           numeric,
-		"CompletionRatio":      numeric,
-		"CreateCacheRatio":     numeric,
-		"ImageRatio":           numeric,
-		"ModelPrice":           numeric,
-		"ModelRatio":           numeric,
-		"TaskBillingMode":      fmt.Sprintf(`{"%s":"per_call","untouched":"per_second"}`, source),
+		"AudioCompletionRatio":       numeric,
+		"AudioRatio":                 numeric,
+		"CacheRatio":                 numeric,
+		"CompletionRatio":            numeric,
+		"CreateCacheRatio":           numeric,
+		"ImageRatio":                 numeric,
+		"ModelPrice":                 numeric,
+		"ModelRatio":                 numeric,
+		"VideoResolutionBillingUnit": fmt.Sprintf(`{"%s":"per_call","untouched":"per_second"}`, source),
+		"TaskBillingMode":            fmt.Sprintf(`{"%s":"per_call","untouched":"per_second"}`, source),
 		ratio_setting.VideoResolutionPriceOptionKey: fmt.Sprintf(`{"%s":{"720p":0.1},"untouched":{"1080p":0.2}}`, source),
 		"billing_setting.billing_expr":              fmt.Sprintf(`{"%s":"tier(\"base\", p * 1 + c * 2)","untouched":"tier(\"base\", p * 3 + c * 4)"}`, source),
 		"billing_setting.billing_mode":              fmt.Sprintf(`{"%s":"tiered_expr","untouched":"tiered_expr"}`, source),

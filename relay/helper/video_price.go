@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// BuildVideoResolutionPriceData constructs the direct per-second price data
+// BuildVideoResolutionPriceData constructs the direct resolution price data
 // used by video task pre-consume and settlement. Legacy TaskBillingMode is
 // intentionally not consulted on this pricing path.
 func BuildVideoResolutionPriceData(
@@ -21,6 +21,9 @@ func BuildVideoResolutionPriceData(
 	if c == nil || info == nil {
 		return hosttypes.PriceData{}, nil, fmt.Errorf("video billing requires relay context")
 	}
+	if info.TaskRelayInfo == nil || info.TaskRelayInfo.BillingPlan == nil || info.TaskRelayInfo.BillingPlan.Kind() != relaycommon.TaskBillingKindVideoResolution {
+		return hosttypes.PriceData{}, nil, fmt.Errorf("video billing requires a frozen resolution plan")
+	}
 
 	resolved, err := relaycommon.NewResolvedVideoBilling(selection, selectedResolutionPrice)
 	if err != nil {
@@ -28,6 +31,7 @@ func BuildVideoResolutionPriceData(
 	}
 	quotaPerUnit := common.QuotaPerUnit
 	resolved.QuotaPerUnit = quotaPerUnit
+	resolved.BillingUnit = info.TaskRelayInfo.BillingPlan.BillingUnit()
 	groupRatioInfo := HandleGroupRatio(c, info)
 	quota, clamp, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(
 		resolved.SelectedResolutionPrice,
@@ -37,6 +41,7 @@ func BuildVideoResolutionPriceData(
 		quotaPerUnit,
 		resolved.Selection.InputVideoSeconds,
 		resolved.Selection.InputVideoPricePerSecond,
+		resolved.BillingUnit,
 	)
 	if err != nil {
 		return hosttypes.PriceData{}, nil, err
@@ -52,9 +57,6 @@ func BuildVideoResolutionPriceData(
 		priceData.AddOtherRatio(name, ratio)
 	}
 
-	if info.TaskRelayInfo == nil {
-		info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
-	}
 	info.ResolvedVideoBilling = resolved
 	return priceData, clamp, nil
 }

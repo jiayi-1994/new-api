@@ -687,6 +687,7 @@ func taskBillingContextFromRelayInfo(relayInfo *relaycommon.RelayInfo) *model.Ta
 			GroupRatio:               relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			OriginModelName:          relayInfo.OriginModelName,
 			PricingKind:              model.TaskPricingKindVideoResolution,
+			BillingUnit:              validated.BillingUnit,
 			EffectiveResolution:      validated.Selection.EffectiveResolution,
 			SelectedResolutionPrice:  validated.SelectedResolutionPrice,
 			EffectiveDurationSeconds: validated.Selection.EffectiveDurationSeconds,

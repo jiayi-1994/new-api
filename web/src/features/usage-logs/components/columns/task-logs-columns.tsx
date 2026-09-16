@@ -242,6 +242,15 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       cell: ({ row }) => (
         <span className='text-muted-foreground truncate text-xs'>
           {row.getValue('resolution') as string}
+          {row.original.billing_details?.resolution && (
+            <>
+              {' '}
+              ·{' '}
+              {row.original.billing_details.billing_unit === 'per_call'
+                ? t('Per request')
+                : t('Per second')}
+            </>
+          )}
         </span>
       ),
     },

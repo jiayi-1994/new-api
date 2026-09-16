@@ -35,7 +35,7 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	// TaskBillingMode 是旧客户端兼容字段；分辨率定价始终派生为 per_second。
+	// TaskBillingMode 是兼容字段；分辨率定价从独立的分辨率计费单位派生。
 	TaskBillingMode  string             `json:"task_billing_mode,omitempty"`
 	ResolutionPrices map[string]float64 `json:"resolution_prices,omitempty"`
 	// InputVideoPrices 是各输出分辨率下输入参考视频的每秒附加费（加法项）。
@@ -399,7 +399,7 @@ func updatePricing() {
 				pricing.ResolutionPrices = resolutionPrices
 				pricing.ModelPrice = minimumPrice
 				pricing.QuotaType = 1
-				pricing.TaskBillingMode = ratio_setting.TaskBillingModePerSecond
+				pricing.TaskBillingMode = ratio_setting.GetVideoResolutionBillingUnit(model)
 				if inputPrices, hasInputPrices := ratio_setting.GetVideoInputSecondPrices(model); hasInputPrices {
 					pricing.InputVideoPrices = inputPrices
 				}

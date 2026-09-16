@@ -55,6 +55,7 @@ const { VideoResolutionPriceEditor } =
 const { validateVideoResolutionPriceRows } =
   await import('../video-resolution-pricing')
 const { ModelPricingEditorPanel } = await import('../model-pricing-sheet')
+const { getByRole } = await import('@testing-library/react')
 
 type Row = { id: number; resolution: string; price: string }
 
@@ -185,6 +186,43 @@ const rowError = (container: HTMLElement, id: number) =>
     ?.querySelector('[role="alert"]')?.textContent
 
 describe('video resolution price editor', () => {
+  test('selecting per video updates price labels and the saved resolution unit', async () => {
+    const view = await renderPricingPanel({
+      name: 'video',
+      billingMode: 'video_resolution',
+      resolutionPrices: { '720p': 0.5 },
+      taskBillingMode: 'per_second',
+    })
+    try {
+      const select = getByRole(view.container, 'combobox', {
+        name: 'Resolution billing unit',
+      })
+      await act(async () => select.click())
+      await act(async () =>
+        getByRole(document.body, 'option', {
+          name: 'Per video (fixed per task)',
+        }).click()
+      )
+      assert.ok(
+        getByRole(view.container, 'textbox', {
+          name: 'USD price per video: 720p',
+        })
+      )
+      const saved = await view.commitDraft()
+      assert.ok(saved && typeof saved === 'object')
+      assert.equal(
+        'resolutionBillingUnit' in saved && saved.resolutionBillingUnit,
+        'per_call'
+      )
+      assert.equal(
+        'taskBillingMode' in saved && saved.taskBillingMode,
+        'per_second'
+      )
+    } finally {
+      await view.cleanup()
+    }
+  })
+
   after(() => {
     domWindow.close()
   })
@@ -274,6 +312,7 @@ describe('video resolution price editor', () => {
     })
 
     assert.deepEqual(await view.commitDraft(), {
+      resolutionBillingUnit: 'per_second',
       name: 'video',
       billingMode: 'video_resolution',
       price: '0.3',

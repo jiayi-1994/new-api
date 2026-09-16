@@ -87,6 +87,7 @@ const rawDocuments = {
   'billing_setting.billing_mode': '{}',
   'billing_setting.billing_expr': '{}',
   TaskBillingMode: '{}',
+  VideoResolutionBillingUnit: '{}',
   VideoResolutionPrice: '{}',
 }
 
@@ -118,6 +119,7 @@ function modelDefaultsFromDocuments(
     BillingMode: documents['billing_setting.billing_mode'],
     BillingExpr: documents['billing_setting.billing_expr'],
     TaskBillingMode: documents.TaskBillingMode,
+    VideoResolutionBillingUnit: documents.VideoResolutionBillingUnit,
     VideoResolutionPrice: documents.VideoResolutionPrice,
   }
 }

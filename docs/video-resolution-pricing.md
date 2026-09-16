@@ -1,20 +1,20 @@
 # Video resolution pricing — operator guide
 
-Video tasks are billed **per second**, from a price chosen by the model and the
+Resolution-priced video tasks are billed **per second by default**, or **per video**
+when configured, from a price chosen by the model and the
 **effective output resolution** of the request. There is no fallback: if the
 resolution a request resolves to has no configured price, the request fails with
 HTTP 400 `video_resolution_not_supported` **before** any quota is pre-consumed
 and before anything is sent upstream.
 
-That strictness is deliberate — it makes a misconfiguration fail loudly instead
-of silently billing at the wrong rate — but it means **an existing video model
-stops working the moment you upgrade, until you configure its prices**.
+This validation applies when a model has a resolution price table. Models without
+a table retain their existing pricing behavior.
 
 ## Configuring prices
 
 Set the `VideoResolutionPrice` option (System Settings → Model Pricing → the
 `Video resolution` tab, or the raw JSON field). It is a nested map of
-`model → resolution → USD price per second`:
+`model → resolution → USD price`:
 
 ```json
 {
@@ -23,9 +23,28 @@ Set the `VideoResolutionPrice` option (System Settings → Model Pricing → the
 }
 ```
 
-`VideoResolutionPrice` is completely independent of the legacy
-`TaskBillingMode` option. Resolution pricing is always per-second; it never
-reads `TaskBillingMode`, and saving it never writes one.
+Select **Resolution billing unit → Per video (fixed per task)** in either the
+model pricing editor or the model drawer to charge the selected tier once per
+video. The independent `VideoResolutionBillingUnit` option stores this choice:
+
+```json
+{
+  "wan2.7-t2v": "per_call"
+}
+```
+
+With `{"720p": 0.5, "1080p": 1}` and `per_call`, a 5-second and a
+10-second 720p video each cost $0.50; a 1080p video costs $1.00, before group
+and independent multipliers. Missing units default to `per_second`.
+Input reference video surcharges remain an additive price per input second.
+
+The unit and selected price are frozen when submitting a task. Changing live
+settings does not change settlement of a running task. Old task snapshots without
+`billing_unit` continue to settle per second. Per-video tasks still validate
+duration and complete the normal reservation and settlement lifecycle.
+
+Resolution pricing never reads the legacy `TaskBillingMode` option, and saving
+resolution prices preserves legacy pricing for later restoration.
 
 ### Key format vs. provider validity — read this before configuring
 
@@ -134,5 +153,6 @@ Also watch for these; both mean a charge needed manual attention:
 4. Deploy, then send one request per model at its default resolution and
    confirm it is not rejected.
 5. Check the consumption log: a resolution-priced task records
-   `admin_info.video_resolution_billing` with the selected tier, the per-second
-   price and the duration used.
+   `admin_info.video_resolution_billing` with the selected tier, `billing_unit`,
+   price and duration. The historical `selected_price_per_second` field name is
+   retained for compatibility; use `billing_unit` to interpret its value.

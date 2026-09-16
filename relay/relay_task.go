@@ -52,10 +52,11 @@ func ValidateFrozenResolutionBilling(
 		return nil, errors.New("resolution billing has an invalid quota unit")
 	}
 	frozenPrice, ok := plan.ResolutionPrice(validated.Selection.EffectiveResolution)
-	if !ok || frozenPrice != validated.SelectedResolutionPrice {
+	if !ok || frozenPrice != validated.SelectedResolutionPrice || resolved.BillingUnit != plan.BillingUnit() {
 		return nil, errors.New("resolved billing does not match the frozen resolution tier")
 	}
 	validated.QuotaPerUnit = resolved.QuotaPerUnit
+	validated.BillingUnit = resolved.BillingUnit
 	return validated, nil
 }
 

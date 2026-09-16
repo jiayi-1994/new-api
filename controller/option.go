@@ -23,6 +23,7 @@ import (
 var completionRatioMetaOptionKeys = []string{
 	"ModelPrice",
 	ratio_setting.VideoResolutionPriceOptionKey,
+	ratio_setting.VideoResolutionBillingUnitOptionKey,
 	"ModelRatio",
 	"CompletionRatio",
 	"CacheRatio",

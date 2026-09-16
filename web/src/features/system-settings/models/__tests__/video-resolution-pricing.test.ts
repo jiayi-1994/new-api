@@ -23,6 +23,7 @@ import {
   buildModelSnapshots,
   getPriceDetail,
   getPriceSummary,
+  getSnapshotSignature,
   isBasePricingUnset,
   isTaskPerCallBilling,
 } from '../model-pricing-snapshots'
@@ -48,6 +49,7 @@ const snapshotInput = (
     billingExpr: '{}',
     taskBillingMode: '{}',
     videoResolutionPrice: '{}',
+    videoResolutionBillingUnit: '{}',
     ...overrides,
   })
 
@@ -117,6 +119,29 @@ describe('video resolution price rows', () => {
 })
 
 describe('model pricing snapshots', () => {
+  test('per-video snapshots use the resolution unit in summaries and change detection', () => {
+    const perSecond = snapshotInput({
+      videoResolutionPrice: '{"video":{"720p":0.5}}',
+    })[0]
+    const perCall = snapshotInput({
+      videoResolutionPrice: '{"video":{"720p":0.5}}',
+      videoResolutionBillingUnit: '{"video":"per_call"}',
+    })[0]
+    assert.equal(isTaskPerCallBilling(perCall), true)
+    assert.equal(
+      getPriceSummary(perCall, (key) => key),
+      'From $0.5 / request'
+    )
+    assert.match(
+      getPriceDetail(perCall, (key) => key),
+      /Prices shown per video/
+    )
+    assert.notEqual(
+      getSnapshotSignature(perCall),
+      getSnapshotSignature(perSecond)
+    )
+  })
+
   test('builds video resolution snapshot without ModelPrice', () => {
     const snapshots = snapshotInput({
       videoResolutionPrice: '{"sora-2":{"720p":0.1,"1024p":0.2}}',

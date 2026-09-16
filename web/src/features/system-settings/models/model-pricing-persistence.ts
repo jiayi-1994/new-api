@@ -41,6 +41,7 @@ export const PRICING_DOCUMENT_KEYS = [
   'ModelPrice',
   'ModelRatio',
   'TaskBillingMode',
+  'VideoResolutionBillingUnit',
   'VideoResolutionPrice',
   'billing_setting.billing_expr',
   'billing_setting.billing_mode',
@@ -60,6 +61,7 @@ export type PricingDocuments = {
   'billing_setting.billing_mode': Record<string, string>
   'billing_setting.billing_expr': Record<string, string>
   TaskBillingMode: Record<string, string>
+  VideoResolutionBillingUnit: Record<string, string>
   VideoResolutionPrice: Record<string, VideoResolutionPriceMap>
 }
 
@@ -76,6 +78,7 @@ export type ModelPricingSelection = {
   billing_expr?: string
   task_billing_mode?: string
   resolution_prices?: VideoResolutionPriceMap
+  resolution_billing_unit?: 'per_second' | 'per_call'
 }
 
 export type ModelPricingMutation =
@@ -130,6 +133,7 @@ const stringDocumentKeys = [
   'billing_setting.billing_mode',
   'billing_setting.billing_expr',
   'TaskBillingMode',
+  'VideoResolutionBillingUnit',
 ] as const
 
 function numberOrUndefined(value?: string): number | undefined {
@@ -179,6 +183,7 @@ export function buildModelPricingSelection(
         ? { task_billing_mode: data.taskBillingMode }
         : {}),
       resolution_prices: sanitizeVideoResolutionPriceMap(data.resolutionPrices),
+      resolution_billing_unit: data.resolutionBillingUnit ?? 'per_second',
     }
   }
   if (data.billingMode === 'tiered_expr') {
@@ -250,6 +255,10 @@ export function parsePricingDocuments(
       raw['billing_setting.billing_expr'],
       { fallback: {}, silent: true }
     ),
+    VideoResolutionBillingUnit: safeJsonParse(raw.VideoResolutionBillingUnit, {
+      fallback: {},
+      silent: true,
+    }),
     TaskBillingMode: safeJsonParse(raw.TaskBillingMode, {
       fallback: {},
       silent: true,
@@ -283,6 +292,11 @@ export function serializePricingDocuments(
     ),
     'billing_setting.billing_expr': JSON.stringify(
       documents['billing_setting.billing_expr'],
+      null,
+      2
+    ),
+    VideoResolutionBillingUnit: JSON.stringify(
+      documents.VideoResolutionBillingUnit,
       null,
       2
     ),
@@ -351,6 +365,10 @@ function applySelection(
       )
     }
     documents.VideoResolutionPrice[name] = prices
+    delete documents.VideoResolutionBillingUnit[name]
+    if (selection.resolution_billing_unit === 'per_call') {
+      documents.VideoResolutionBillingUnit[name] = 'per_call'
+    }
     return
   }
 

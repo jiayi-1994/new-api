@@ -704,6 +704,7 @@ func truncateBase64(s string) string {
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo, fromStatuses ...model.TaskStatus) bool {
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingKind == model.TaskPricingKindVideoResolution {
+		reason := "video resolution " + bc.VideoResolutionBillingUnit() + " settlement"
 		fromStatus := task.Status
 		if len(fromStatuses) > 0 {
 			fromStatus = fromStatuses[0]
@@ -716,7 +717,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 				ctx,
 				task,
 				bc.SettlementActualQuota,
-				"video resolution per-second settlement",
+				reason,
 				bc.SettlementQuotaClamp,
 				fromStatus,
 			)
@@ -738,7 +739,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		if taskResult.EffectiveDurationSeconds > 0 {
 			bc.SettledDurationSeconds = effectiveDuration
 		}
-		if !RecalculateResolutionTaskQuota(ctx, task, actualQuota, "video resolution per-second settlement", clamp, fromStatus) {
+		if !RecalculateResolutionTaskQuota(ctx, task, actualQuota, reason, clamp, fromStatus) {
 			bc.SettledDurationSeconds = previousSettledDuration
 			return false
 		}

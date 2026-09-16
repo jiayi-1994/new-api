@@ -197,6 +197,41 @@ func seedPollingTask(t *testing.T, channelID int, publicID string, upstreamID st
 	return task
 }
 
+func TestResolutionPerCallPollingCompletesWithoutChargingLongerOutput(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 119, 119
+	seedUser(t, userID, 1_000_000)
+	seedTaskPollingChannel(t, channelID, true)
+	bc := resolutionBillingContext(2)
+	bc.BillingUnit = "per_call"
+	bc.QuotaPerUnit = 1000
+	bc.InputVideoSeconds = 4
+	bc.InputVideoPricePerSecond = 0.25
+	const preConsumed = 1400 // output 0.1 × 1.2 × 1.25 + input 4 × 0.25 × 1.25
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_resolution_per_call"
+	task.Platform = constant.TaskPlatform("kling")
+	task.Action = constant.TaskActionGenerate
+	task.Status = model.TaskStatusInProgress
+	task.PrivateData.BillingContext = bc
+	require.NoError(t, model.DB.Create(task).Error)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	adaptor := &resolutionSuccessPollingAdaptor{}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &channel, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	require.NotNil(t, reloaded.PrivateData.BillingContext)
+	assert.Equal(t, preConsumed, reloaded.Quota)
+	assert.Equal(t, 1_000_000, getUserQuota(t, userID))
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), reloaded.Status)
+	assert.True(t, reloaded.PrivateData.BillingContext.SettlementCompleted)
+	assert.False(t, reloaded.PrivateData.BillingContext.SettlementPending)
+	assert.Equal(t, 4, reloaded.PrivateData.BillingContext.SettledDurationSeconds)
+	assert.Equal(t, "per_call", reloaded.PrivateData.BillingContext.BillingUnit)
+	assert.Zero(t, adaptor.adjustCalls)
+}
+
 func TestResolutionPricedTaskPollingSettlesPerSecondDifference(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 120, 120

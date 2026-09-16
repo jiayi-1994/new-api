@@ -265,12 +265,14 @@ function pricingDraftSignature(
   mode: PricingMode,
   fields: PricingFields,
   taskBillingMode: string,
-  resolutionPrices: Record<string, number>
+  resolutionPrices: Record<string, number>,
+  resolutionBillingUnit: 'per_second' | 'per_call'
 ): string {
   return JSON.stringify({
     mode,
     fields,
     taskBillingMode,
+    resolutionBillingUnit,
     resolutionPrices: sanitizeVideoResolutionPriceMap(resolutionPrices),
   })
 }
@@ -298,6 +300,9 @@ export function ModelMutateDrawer({
   const [pricingSubMode, setPricingSubMode] = useState<PricingSubMode>('ratio')
   // '' 表示未显式配置，走系统默认（按秒）
   const [taskBillingMode, setTaskBillingMode] = useState('')
+  const [resolutionBillingUnit, setResolutionBillingUnit] = useState<
+    'per_second' | 'per_call'
+  >('per_second')
   const [resolutionRows, setResolutionRows] = useState<
     VideoResolutionPriceRow[]
   >([])
@@ -374,6 +379,7 @@ export function ModelMutateDrawer({
       'billing_setting.billing_expr': '{}',
       TaskBillingMode: '{}',
       VideoResolutionPrice: '{}',
+      VideoResolutionBillingUnit: '{}',
       'tool_price_setting.prices': '{}',
       TopupGroupRatio: '',
       GroupRatio: '',
@@ -482,6 +488,14 @@ export function ModelMutateDrawer({
         model.model_name
       )
       setTaskBillingMode(savedTaskBillingMode)
+      const savedResolutionBillingUnit =
+        safeJsonParse<Record<string, string>>(
+          modelSettingsRef.current?.VideoResolutionBillingUnit,
+          { fallback: {}, silent: true }
+        )[model.model_name] === 'per_call'
+          ? 'per_call'
+          : 'per_second'
+      setResolutionBillingUnit(savedResolutionBillingUnit)
       const savedResolutionPrices = parseVideoResolutionPriceOption(
         modelSettingsRef.current?.VideoResolutionPrice
       )[model.model_name]
@@ -494,7 +508,8 @@ export function ModelMutateDrawer({
         loadedMode,
         pricing.fields,
         savedTaskBillingMode,
-        savedResolutionPrices || {}
+        savedResolutionPrices || {},
+        savedResolutionBillingUnit
       )
       form.reset({
         id: model.id,
@@ -524,6 +539,14 @@ export function ModelMutateDrawer({
         modelName
       )
       setTaskBillingMode(savedTaskBillingMode)
+      const savedResolutionBillingUnit =
+        safeJsonParse<Record<string, string>>(
+          modelSettingsRef.current?.VideoResolutionBillingUnit,
+          { fallback: {}, silent: true }
+        )[modelName] === 'per_call'
+          ? 'per_call'
+          : 'per_second'
+      setResolutionBillingUnit(savedResolutionBillingUnit)
       const savedResolutionPrices = parseVideoResolutionPriceOption(
         modelSettingsRef.current?.VideoResolutionPrice
       )[modelName]
@@ -536,7 +559,8 @@ export function ModelMutateDrawer({
         loadedMode,
         pricing.fields,
         savedTaskBillingMode,
-        savedResolutionPrices || {}
+        savedResolutionPrices || {},
+        savedResolutionBillingUnit
       )
       form.reset({
         model_name: modelName,
@@ -575,7 +599,8 @@ export function ModelMutateDrawer({
         pricingMode,
         draftPricingFields,
         taskBillingMode,
-        draftResolutionPrices
+        draftResolutionPrices,
+        resolutionBillingUnit
       )
       const pricingTouched =
         canManagePricing &&
@@ -680,6 +705,7 @@ export function ModelMutateDrawer({
               ? {
                   mode: 'video_resolution',
                   resolution_prices: draftResolutionPrices,
+                  resolution_billing_unit: resolutionBillingUnit,
                 }
               : buildModelPricingSelection({
                   name: submittedModelName,
@@ -757,6 +783,7 @@ export function ModelMutateDrawer({
       onOpenChange,
       pricingMode,
       taskBillingMode,
+      resolutionBillingUnit,
       resolutionValidation,
       canManagePricing,
       modelData,
@@ -1070,6 +1097,8 @@ export function ModelMutateDrawer({
 
                 {pricingMode === 'video_resolution' ? (
                   <VideoResolutionPriceEditor
+                    billingUnit={resolutionBillingUnit}
+                    onBillingUnitChange={setResolutionBillingUnit}
                     rows={resolutionRows}
                     errorsByRowId={resolutionValidation.errorsByRowId}
                     disabled={isSubmitting}

@@ -132,6 +132,7 @@ const createModelSchema = (t: Translate) =>
     BillingMode: createJsonStringField(t),
     BillingExpr: createJsonStringField(t),
     TaskBillingMode: createJsonStringField(t),
+    VideoResolutionBillingUnit: createJsonStringField(t),
     VideoResolutionPrice: createJsonStringField(t),
   })
 
@@ -183,6 +184,7 @@ function modelPricingDocuments(
     'billing_setting.billing_mode': values.BillingMode,
     'billing_setting.billing_expr': values.BillingExpr,
     TaskBillingMode: values.TaskBillingMode,
+    VideoResolutionBillingUnit: values.VideoResolutionBillingUnit,
     VideoResolutionPrice: values.VideoResolutionPrice,
   }
 }
@@ -204,6 +206,7 @@ function modelFormValuesFromDocuments(
     BillingMode: documents['billing_setting.billing_mode'],
     BillingExpr: documents['billing_setting.billing_expr'],
     TaskBillingMode: documents.TaskBillingMode,
+    VideoResolutionBillingUnit: documents.VideoResolutionBillingUnit,
     VideoResolutionPrice: documents.VideoResolutionPrice,
   }
 }
@@ -238,6 +241,9 @@ function formatModelFormValuesForEditing(
     BillingMode: formatJsonForTextarea(values.BillingMode),
     BillingExpr: formatJsonForTextarea(values.BillingExpr),
     TaskBillingMode: formatJsonForTextarea(values.TaskBillingMode),
+    VideoResolutionBillingUnit: formatJsonForTextarea(
+      values.VideoResolutionBillingUnit
+    ),
     VideoResolutionPrice: formatJsonForTextarea(values.VideoResolutionPrice),
   }
 }
@@ -290,6 +296,9 @@ export function RatioSettingsCard({
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     TaskBillingMode: normalizeJsonString(modelDefaults.TaskBillingMode),
+    VideoResolutionBillingUnit: normalizeJsonString(
+      modelDefaults.VideoResolutionBillingUnit
+    ),
     VideoResolutionPrice: normalizeJsonString(
       modelDefaults.VideoResolutionPrice
     ),
@@ -363,6 +372,9 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
       TaskBillingMode: normalizeJsonString(modelDefaults.TaskBillingMode),
+      VideoResolutionBillingUnit: normalizeJsonString(
+        modelDefaults.VideoResolutionBillingUnit
+      ),
       VideoResolutionPrice: normalizeJsonString(
         modelDefaults.VideoResolutionPrice
       ),
@@ -474,8 +486,7 @@ export function RatioSettingsCard({
             // error.message 只是笼统的状态码描述
             pricingFailureMessage = axios.isAxiosError(error)
               ? ((error.response?.data as { message?: string } | undefined)
-                  ?.message ??
-                error.message)
+                  ?.message ?? error.message)
               : t('Failed to update setting')
           }
         }

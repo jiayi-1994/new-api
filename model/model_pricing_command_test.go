@@ -28,10 +28,35 @@ func pricingCommandFixture() map[string]string {
 		"ModelPrice":           `{"owned":1.7,"target":2.7,"unrelated":3.7}`,
 		"ModelRatio":           `{"owned":1.8,"target":2.8,"unrelated":3.8}`,
 		"TaskBillingMode":      `{"owned":"per_call","target":"per_second","unrelated":"per_call"}`,
-		ratio_setting.VideoResolutionPriceOptionKey: `{"owned":{"720p":0.1},"target":{"1080p":0.2},"unrelated":{"4k":0.3}}`,
-		"billing_setting.billing_expr":              `{"owned":"tier(\"owned\", p * 1)","unrelated":"tier(\"unrelated\", p * 3)"}`,
-		"billing_setting.billing_mode":              `{"owned":"tiered_expr","target":"ratio","unrelated":"tiered_expr"}`,
+		ratio_setting.VideoResolutionBillingUnitOptionKey: `{"owned":"per_call","target":"per_second","unrelated":"per_call"}`,
+		ratio_setting.VideoResolutionPriceOptionKey:       `{"owned":{"720p":0.1},"target":{"1080p":0.2},"unrelated":{"4k":0.3}}`,
+		"billing_setting.billing_expr":                    `{"owned":"tier(\"owned\", p * 1)","unrelated":"tier(\"unrelated\", p * 3)"}`,
+		"billing_setting.billing_mode":                    `{"owned":"tiered_expr","target":"ratio","unrelated":"tiered_expr"}`,
 	}
+}
+
+func TestPricingCommandResolutionUnitPersistsPublishesAndDefaults(t *testing.T) {
+	setupPricingCommandTest(t)
+	seedPricingDocuments(t, pricingCommandFixture())
+	unit := "per_call"
+	selection := &ModelPricingSelection{Mode: PricingModeVideoResolution, ResolutionPrices: map[string]float64{"720p": 0.5}, ResolutionBillingUnit: &unit}
+	command := ModelPricingCommand{Kind: PricingCommandSave, TargetName: "owned", Selection: selection}
+	_, err := ExecuteModelPricingCommand(command)
+	require.NoError(t, err)
+	assert.Equal(t, "per_call", stringPricingDocument(t, storedPricingDocuments(t), ratio_setting.VideoResolutionBillingUnitOptionKey)["owned"])
+	assert.Equal(t, "per_call", ratio_setting.GetVideoResolutionBillingUnit("owned"))
+	assert.Equal(t, "per_call", ratio_setting.GetTaskBillingModeMap()["owned"])
+
+	unit = "per_token"
+	_, err = ExecuteModelPricingCommand(command)
+	require.Error(t, err)
+	assert.Equal(t, "per_call", ratio_setting.GetVideoResolutionBillingUnit("owned"))
+
+	unit = "per_second"
+	_, err = ExecuteModelPricingCommand(command)
+	require.NoError(t, err)
+	assert.NotContains(t, stringPricingDocument(t, storedPricingDocuments(t), ratio_setting.VideoResolutionBillingUnitOptionKey), "owned")
+	assert.Equal(t, "per_second", ratio_setting.GetVideoResolutionBillingUnit("owned"))
 }
 
 func setupPricingCommandTest(t *testing.T) {
@@ -414,7 +439,7 @@ func TestExecuteModelPricingCommandResolutionSavePreservesLegacy(t *testing.T) {
 
 	stored := storedPricingDocuments(t)
 	for _, key := range modelPricingOptionKeys {
-		if key == ratio_setting.VideoResolutionPriceOptionKey {
+		if key == ratio_setting.VideoResolutionPriceOptionKey || key == ratio_setting.VideoResolutionBillingUnitOptionKey {
 			continue
 		}
 		assert.JSONEq(t, fixture[key], stored[key], key)
@@ -553,7 +578,7 @@ func TestExecuteModelPricingCommandDeleteRemovesEveryEntry(t *testing.T) {
 	for _, key := range modelPricingOptionKeys {
 		if key == ratio_setting.VideoResolutionPriceOptionKey {
 			assert.NotContains(t, resolutionPricingDocument(t, stored), "owned", key)
-		} else if key == "TaskBillingMode" || key == "billing_setting.billing_expr" || key == "billing_setting.billing_mode" {
+		} else if key == "TaskBillingMode" || key == ratio_setting.VideoResolutionBillingUnitOptionKey || key == "billing_setting.billing_expr" || key == "billing_setting.billing_mode" {
 			assert.NotContains(t, stringPricingDocument(t, stored, key), "owned", key)
 		} else {
 			assert.NotContains(t, numericPricingDocument(t, stored, key), "owned", key)

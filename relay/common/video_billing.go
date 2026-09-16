@@ -5,6 +5,7 @@ import (
 	"math"
 
 	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 )
 
@@ -35,11 +36,12 @@ type VideoBillingSelection struct {
 }
 
 // ResolvedVideoBilling freezes the provider selection and its selected
-// per-second price for pre-consume, settlement, and audit snapshots.
+// price and billing unit for pre-consume, settlement, and audit snapshots.
 type ResolvedVideoBilling struct {
 	Selection               VideoBillingSelection
 	SelectedResolutionPrice float64
 	QuotaPerUnit            float64
+	BillingUnit             string
 }
 
 // NewResolvedVideoBilling validates and defensively copies billing inputs so
@@ -73,6 +75,7 @@ func NewResolvedVideoBilling(selection VideoBillingSelection, selectedResolution
 			InputVideoPricePerSecond: selection.InputVideoPricePerSecond,
 		},
 		SelectedResolutionPrice: selectedResolutionPrice,
+		BillingUnit:             ratio_setting.TaskBillingModePerSecond,
 	}, nil
 }
 
@@ -106,6 +109,7 @@ func CalculateVideoResolutionQuota(
 		rootcommon.QuotaPerUnit,
 		0,
 		0,
+		ratio_setting.TaskBillingModePerSecond,
 	)
 }
 
@@ -120,7 +124,11 @@ func CalculateVideoResolutionQuotaAtUnit(
 	quotaPerUnit float64,
 	inputVideoSeconds int,
 	inputVideoPricePerSecond float64,
+	billingUnit string,
 ) (int, *rootcommon.QuotaClamp, error) {
+	if billingUnit != ratio_setting.TaskBillingModePerSecond && billingUnit != ratio_setting.TaskBillingModePerCall {
+		return 0, nil, fmt.Errorf("invalid video resolution billing unit %q", billingUnit)
+	}
 	if err := validatePositiveFinite("resolution price", resolutionPrice); err != nil {
 		return 0, nil, err
 	}
@@ -148,7 +156,11 @@ func CalculateVideoResolutionQuotaAtUnit(
 		priceData.AddOtherRatio(name, ratio)
 	}
 
-	quotaValue := resolutionPrice * quotaPerUnit * groupRatio * float64(durationSeconds)
+	units := float64(durationSeconds)
+	if billingUnit == ratio_setting.TaskBillingModePerCall {
+		units = 1
+	}
+	quotaValue := resolutionPrice * quotaPerUnit * groupRatio * units
 	quotaValue = priceData.ApplyOtherRatiosToFloat(quotaValue)
 	// Additive per-second surcharge for probed input reference videos. It is a
 	// constant per submission: independent ratios never scale it, and async

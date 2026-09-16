@@ -242,6 +242,18 @@ func TestPricingLegacySummaryUsesMinimumResolutionPrice(t *testing.T) {
 	assert.Equal(t, 1, pricing.QuotaType)
 }
 
+func TestPricingResolutionModelReportsPerCallUnit(t *testing.T) {
+	original := ratio_setting.VideoResolutionBillingUnit2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(original))
+		InvalidatePricingCache()
+	})
+	require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(`{"zz-video-per-call":"per_call"}`))
+	pricing := resolutionPricingForModel(t, "zz-video-per-call", map[string]float64{"720p": 0.5, "1080p": 1}, "per_second")
+	assert.Equal(t, "per_call", pricing.TaskBillingMode)
+	assert.Equal(t, 0.5, pricing.ModelPrice)
+}
+
 func TestPricingResolutionModelReportsDerivedPerSecondUnit(t *testing.T) {
 	pricing := resolutionPricingForModel(t, "zz-video-resolution-unit", map[string]float64{"720p": 0.1}, "")
 	assert.Equal(t, ratio_setting.TaskBillingModePerSecond, pricing.TaskBillingMode)

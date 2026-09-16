@@ -9,7 +9,7 @@ import (
 
 func TestVideoResolutionTaskBillingPlanClonesPrices(t *testing.T) {
 	prices := map[string]float64{"720p": 0.1}
-	plan, err := NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", prices)
+	plan, err := NewVideoResolutionTaskBillingPlan("client-model", "req-frozen", prices, "per_second")
 	require.NoError(t, err)
 	prices["720p"] = 9
 

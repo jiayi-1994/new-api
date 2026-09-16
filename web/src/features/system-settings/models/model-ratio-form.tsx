@@ -60,6 +60,7 @@ type ModelFormValues = {
   BillingMode: string
   BillingExpr: string
   TaskBillingMode: string
+  VideoResolutionBillingUnit: string
   VideoResolutionPrice: string
 }
 
@@ -84,6 +85,7 @@ type ModelJsonFieldName =
   | 'AudioRatio'
   | 'AudioCompletionRatio'
   | 'TaskBillingMode'
+  | 'VideoResolutionBillingUnit'
   | 'VideoResolutionPrice'
 
 const modelJsonFields: Array<{
@@ -142,10 +144,16 @@ const modelJsonFields: Array<{
       'JSON map of model → per_second or per_call. Controls whether the fixed price of a video task is multiplied by its duration.',
   },
   {
+    name: 'VideoResolutionBillingUnit',
+    labelKey: 'Resolution billing unit',
+    descriptionKey:
+      'JSON map of model → per_second or per_call for resolution-priced video models. Missing means per second. Input reference video surcharges remain per second.',
+  },
+  {
     name: 'VideoResolutionPrice',
     labelKey: 'Resolution prices',
     descriptionKey:
-      'JSON map of model → resolution → USD price per second. Resolution prices are always charged per second.',
+      'JSON map of model → resolution → USD price. The resolution billing unit determines whether prices apply per second or per video.',
   },
 ]
 
@@ -295,6 +303,9 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
               savedTaskBillingMode={savedValues.TaskBillingMode}
+              savedVideoResolutionBillingUnit={
+                savedValues.VideoResolutionBillingUnit
+              }
               savedVideoResolutionPrice={savedValues.VideoResolutionPrice}
               modelPrice={form.watch('ModelPrice')}
               modelRatio={form.watch('ModelRatio')}
@@ -307,6 +318,9 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
               taskBillingMode={form.watch('TaskBillingMode')}
+              videoResolutionBillingUnit={form.watch(
+                'VideoResolutionBillingUnit'
+              )}
               videoResolutionPrice={form.watch('VideoResolutionPrice')}
               candidateModelNames={
                 isUnsetVariant ? enabledModelsQuery.data?.data : undefined

@@ -123,6 +123,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool) ([]*dto.TaskDto, error) {
 					effectiveDuration = bc.EffectiveDurationSeconds
 				}
 				result[i].BillingDetails = &dto.TaskBillingDetails{
+					BillingUnit:              bc.VideoResolutionBillingUnit(),
 					Resolution:               bc.EffectiveResolution,
 					SelectedPricePerSecond:   bc.SelectedResolutionPrice,
 					SubmittedDurationSeconds: bc.EffectiveDurationSeconds,

@@ -40,6 +40,7 @@ const getModelDefaults = (settings: BillingSettings) => ({
   BillingMode: settings['billing_setting.billing_mode'],
   BillingExpr: settings['billing_setting.billing_expr'],
   TaskBillingMode: settings.TaskBillingMode,
+  VideoResolutionBillingUnit: settings.VideoResolutionBillingUnit,
   VideoResolutionPrice: settings.VideoResolutionPrice,
 })
 
@@ -121,9 +122,7 @@ const BILLING_SECTIONS = [
     id: 'video-input-surcharge',
     titleKey: 'Video Input Surcharge',
     build: (settings: BillingSettings) => (
-      <VideoInputPriceSection
-        defaultValue={settings.VideoInputSecondPrice}
-      />
+      <VideoInputPriceSection defaultValue={settings.VideoInputSecondPrice} />
     ),
   },
   {

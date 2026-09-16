@@ -72,8 +72,9 @@ export type ModelRatioData = {
   requestRuleExpr?: string
   /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
   taskBillingMode?: string
-  /** 按分辨率的每秒单价；存在时是活跃价格源，旧配置仍保留用于移除后恢复 */
+  /** 按分辨率的单价；存在时是活跃价格源，旧配置仍保留用于移除后恢复 */
   resolutionPrices?: VideoResolutionPriceMap
+  resolutionBillingUnit?: 'per_second' | 'per_call'
 }
 
 export type PreviewRow = {
@@ -240,7 +241,8 @@ export function buildPreviewRows(
   laneEnabled: Record<LaneKey, boolean>,
   t: (key: string) => string,
   taskPerCallBilling = false,
-  resolutionPrices: VideoResolutionPriceMap = {}
+  resolutionPrices: VideoResolutionPriceMap = {},
+  resolutionBillingUnit: 'per_second' | 'per_call' = 'per_second'
 ): PreviewRow[] {
   if (mode === 'video_resolution') {
     const entries = Object.entries(
@@ -262,7 +264,10 @@ export function buildPreviewRows(
       {
         key: 'unit',
         label: t('Video task billing unit'),
-        value: t('Per second (× duration)'),
+        value:
+          resolutionBillingUnit === 'per_call'
+            ? t('Per video (fixed per task)')
+            : t('Per second (× duration)'),
       },
     ]
   }

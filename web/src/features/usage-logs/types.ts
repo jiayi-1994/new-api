@@ -301,6 +301,7 @@ export interface TaskLog {
     origin_model_name?: string
   }
   billing_details?: {
+    billing_unit?: 'per_second' | 'per_call'
     resolution?: string
   }
   fail_reason?: string

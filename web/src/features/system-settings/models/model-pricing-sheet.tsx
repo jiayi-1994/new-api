@@ -183,6 +183,9 @@ export const ModelPricingEditorPanel = forwardRef<
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
   // '' 表示未显式配置，走系统默认（按秒）
   const [taskBillingMode, setTaskBillingMode] = useState('')
+  const [resolutionBillingUnit, setResolutionBillingUnit] = useState<
+    'per_second' | 'per_call'
+  >('per_second')
   const [resolutionRows, setResolutionRows] = useState<
     VideoResolutionPriceRow[]
   >([])
@@ -223,6 +226,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
       setTaskBillingMode(editData.taskBillingMode || '')
+      setResolutionBillingUnit(editData.resolutionBillingUnit ?? 'per_second')
       setResolutionRows(videoResolutionPriceRows(editData.resolutionPrices))
     } else {
       form.reset({
@@ -240,6 +244,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setBillingExpr('')
       setRequestRuleExpr('')
       setTaskBillingMode('')
+      setResolutionBillingUnit('per_second')
       setResolutionRows([])
     }
 
@@ -396,7 +401,8 @@ export const ModelPricingEditorPanel = forwardRef<
         laneEnabled,
         t,
         taskBillingMode === TASK_BILLING_PER_CALL,
-        resolutionValidation.prices ?? {}
+        resolutionValidation.prices ?? {},
+        resolutionBillingUnit
       ),
     [
       billingExpr,
@@ -408,6 +414,7 @@ export const ModelPricingEditorPanel = forwardRef<
       resolutionValidation,
       t,
       taskBillingMode,
+      resolutionBillingUnit,
       watchedValues,
     ]
   )
@@ -568,6 +575,7 @@ export const ModelPricingEditorPanel = forwardRef<
         data.billingExpr = billingExpr
         data.requestRuleExpr = requestRuleExpr
         data.taskBillingMode = taskBillingMode
+        data.resolutionBillingUnit = resolutionBillingUnit
         data.resolutionPrices = resolutionValidation.prices ?? {}
       }
 
@@ -585,6 +593,7 @@ export const ModelPricingEditorPanel = forwardRef<
       requestRuleExpr,
       resolutionValidation,
       taskBillingMode,
+      resolutionBillingUnit,
     ]
   )
 
@@ -806,6 +815,8 @@ export const ModelPricingEditorPanel = forwardRef<
 
                   <TabsContent value='video_resolution' className='pt-0'>
                     <VideoResolutionPriceEditor
+                      billingUnit={resolutionBillingUnit}
+                      onBillingUnitChange={setResolutionBillingUnit}
                       rows={resolutionRows}
                       errorsByRowId={resolutionValidation.errorsByRowId}
                       disabled={isSaving}

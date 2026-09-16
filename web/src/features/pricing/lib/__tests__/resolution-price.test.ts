@@ -85,13 +85,13 @@ describe('resolution price helpers', () => {
     assert.equal(isPerSecondBilledModel(model), false)
   })
 
-  test('ignores a stale per_call task mode for resolution-priced models', () => {
+  test('uses the published per_call unit for resolution-priced models', () => {
     const model = pricingModel({
       task_billing_mode: 'per_call',
       resolution_prices: { '720p': 0.1 },
     })
 
-    assert.equal(isPerSecondBilledModel(model), true)
+    assert.equal(isPerSecondBilledModel(model), false)
   })
 
   // 没有分辨率表的旧版视频模型继续走历史价格与 task_billing_mode，

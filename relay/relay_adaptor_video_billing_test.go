@@ -37,10 +37,13 @@ func TestCompatibleTaskChannelTypesAreDerivedFromResolverInterface(t *testing.T)
 func TestPrepareTaskBillingPlanFreezesResolutionPlanBeforeChannelSelection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalPrices := ratio_setting.VideoResolutionPrice2JSONString()
+	originalUnits := ratio_setting.VideoResolutionBillingUnit2JSONString()
 	t.Cleanup(func() {
 		require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(originalPrices))
+		require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(originalUnits))
 	})
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"resolver-model":{"720p":0.1}}`))
+	require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(`{"resolver-model":"per_call"}`))
 
 	c, _ := gin.CreateTestContext(nil)
 	c.Set(common.RequestIdKey, "request-frozen")
@@ -49,12 +52,15 @@ func TestPrepareTaskBillingPlanFreezesResolutionPlanBeforeChannelSelection(t *te
 	require.Equal(t, relaycommon.TaskBillingKindVideoResolution, plan.Kind())
 	assert.Equal(t, "resolver-model", plan.OriginModelName())
 	assert.Equal(t, "request-frozen", plan.RequestID())
+	assert.Equal(t, "per_call", plan.BillingUnit())
 	assert.Equal(t, 0.1, mustResolutionPrice(t, plan, "720p"))
 
 	require.NoError(t, ratio_setting.UpdateVideoResolutionPriceByJSONString(`{"resolver-model":{"720p":9}}`))
+	require.NoError(t, ratio_setting.UpdateVideoResolutionBillingUnitByJSONString(`{}`))
 	secondPlan, err := PrepareTaskBillingPlan(c, "resolver-model", "other-request")
 	require.NoError(t, err)
 	assert.Same(t, plan, secondPlan)
+	assert.Equal(t, "per_call", secondPlan.BillingUnit())
 	assert.Equal(t, 0.1, mustResolutionPrice(t, plan, "720p"))
 }
 

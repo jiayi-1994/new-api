@@ -9,6 +9,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVideoResolutionPerCallQuotaIgnoresOutputDurationAndAddsInputSeconds(t *testing.T) {
+	for _, duration := range []int{5, 10} {
+		for _, tc := range []struct {
+			price        float64
+			inputSeconds int
+			inputPrice   float64
+			want         int
+		}{
+			{price: 0.5, want: 1500},
+			{price: 1, want: 3000},
+			{price: 0.5, inputSeconds: 4, inputPrice: 0.25, want: 3000},
+		} {
+			quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(tc.price, duration, 1.5, map[string]float64{"video_input": 2}, 1000, tc.inputSeconds, tc.inputPrice, "per_call")
+			require.NoError(t, err)
+			assert.Nil(t, clamp)
+			assert.Equal(t, tc.want, quota)
+		}
+	}
+}
+
+func TestVideoResolutionPerCallStillValidatesDurationAndAuditsSaturation(t *testing.T) {
+	for _, duration := range []int{-1, 0, MaxTaskDurationSeconds + 1} {
+		_, _, err := CalculateVideoResolutionQuotaAtUnit(0.5, duration, 1, nil, 1000, 0, 0, "per_call")
+		require.Error(t, err)
+	}
+	for _, unit := range []string{"", "per_token"} {
+		_, _, err := CalculateVideoResolutionQuotaAtUnit(0.5, 5, 1, nil, 1000, 0, 0, unit)
+		require.Error(t, err)
+	}
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(math.MaxFloat64, 5, 1, nil, 1000, 0, 0, "per_call")
+	require.NoError(t, err)
+	require.NotNil(t, clamp)
+	assert.Equal(t, rootcommon.MaxQuota, quota)
+}
+
 func TestCalculateVideoResolutionQuotaAlwaysMultipliesDurationOnce(t *testing.T) {
 	originalQuotaPerUnit := rootcommon.QuotaPerUnit
 	rootcommon.QuotaPerUnit = 500
@@ -31,20 +66,20 @@ func TestCalculateVideoResolutionQuotaAtUnitUsesExplicitSnapshot(t *testing.T) {
 	rootcommon.QuotaPerUnit = 1_000
 	t.Cleanup(func() { rootcommon.QuotaPerUnit = originalQuotaPerUnit })
 
-	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0, "per_second")
 
 	require.NoError(t, err)
 	assert.Nil(t, clamp)
 	assert.Equal(t, 300, quota)
 
-	quota, clamp, err = CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, nil, 0, 0, 0)
+	quota, clamp, err = CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, nil, 0, 0, 0, "per_second")
 	assert.Error(t, err)
 	assert.Zero(t, quota)
 	assert.Nil(t, clamp)
 }
 
 func TestCalculateVideoResolutionQuotaAllowsZeroGroupRatio(t *testing.T) {
-	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 5, 0, nil, 500, 0, 0)
+	quota, clamp, err := CalculateVideoResolutionQuotaAtUnit(0.1, 5, 0, nil, 500, 0, 0, "per_second")
 	require.NoError(t, err)
 	assert.Zero(t, quota)
 	assert.Nil(t, clamp)

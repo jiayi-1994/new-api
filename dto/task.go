@@ -54,6 +54,7 @@ type TaskDto struct {
 }
 
 type TaskBillingDetails struct {
+	BillingUnit              string             `json:"billing_unit"`
 	Resolution               string             `json:"resolution"`
 	SelectedPricePerSecond   float64            `json:"selected_price_per_second"`
 	SubmittedDurationSeconds int                `json:"submitted_duration_seconds"`

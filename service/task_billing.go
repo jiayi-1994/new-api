@@ -34,7 +34,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	otherRatios := info.PriceData.OtherRatios()
 	if resolvedVideoBilling != nil {
 		otherRatios = resolvedVideoBilling.Selection.IndependentRatios
-		logContent = fmt.Sprintf("%s，按秒计费（%s）", logContent, resolvedVideoBilling.Selection.EffectiveResolution)
+		unitLabel := "按秒计费"
+		if resolvedVideoBilling.BillingUnit == ratio_setting.TaskBillingModePerCall {
+			unitLabel = "按条计费"
+		}
+		logContent = fmt.Sprintf("%s，%s（%s）", logContent, unitLabel, resolvedVideoBilling.Selection.EffectiveResolution)
 	}
 	if len(otherRatios) > 0 {
 		var contents []string
@@ -59,6 +63,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["model_price"] = info.PriceData.ModelPrice
 	} else if resolvedVideoBilling != nil {
 		videoBillingInfo := map[string]interface{}{
+			"billing_unit":               resolvedVideoBilling.BillingUnit,
 			"effective_resolution":       resolvedVideoBilling.Selection.EffectiveResolution,
 			"selected_price_per_second":  resolvedVideoBilling.SelectedResolutionPrice,
 			"submitted_duration_seconds": resolvedVideoBilling.Selection.EffectiveDurationSeconds,
@@ -208,6 +213,7 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				effectiveDuration = bc.EffectiveDurationSeconds
 			}
 			billingInfo := map[string]interface{}{
+				"billing_unit":               bc.VideoResolutionBillingUnit(),
 				"effective_resolution":       bc.EffectiveResolution,
 				"selected_price_per_second":  bc.SelectedResolutionPrice,
 				"submitted_duration_seconds": bc.EffectiveDurationSeconds,
@@ -258,7 +264,7 @@ func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData 
 }
 
 // CalculateVideoResolutionSnapshotQuota recalculates a video task exclusively
-// from its frozen per-second resolution billing snapshot.
+// from its frozen resolution price and billing unit snapshot.
 func CalculateVideoResolutionSnapshotQuota(bc *model.TaskBillingContext, effectiveDurationSeconds int) (int, *common.QuotaClamp, error) {
 	if bc == nil || bc.PricingKind != model.TaskPricingKindVideoResolution {
 		return 0, nil, fmt.Errorf("video resolution billing snapshot is missing")
@@ -275,6 +281,7 @@ func CalculateVideoResolutionSnapshotQuota(bc *model.TaskBillingContext, effecti
 		bc.QuotaPerUnit,
 		bc.InputVideoSeconds,
 		bc.InputVideoPricePerSecond,
+		bc.VideoResolutionBillingUnit(),
 	)
 }
 

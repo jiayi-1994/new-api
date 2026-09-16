@@ -27,63 +27,75 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestResolutionPricingAdminLogIncludesPerSecondSelection(t *testing.T) {
-	truncate(t)
-	gin.SetMode(gin.TestMode)
-	seedUser(t, 90, 1_000_000)
-	seedChannel(t, 90)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
-	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
-		"video-model", "req-resolution-admin-log", map[string]float64{"1080p": 0.18},
-	)
-	require.NoError(t, err)
+func TestResolutionPricingAdminLogIncludesSelectedUnit(t *testing.T) {
+	for _, unit := range []string{"per_second", "per_call"} {
+		t.Run(unit, func(t *testing.T) {
+			truncate(t)
+			gin.SetMode(gin.TestMode)
+			seedUser(t, 90, 1_000_000)
+			seedChannel(t, 90)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+				"video-model", "req-resolution-admin-log", map[string]float64{"1080p": 0.18},
+				unit,
+			)
+			require.NoError(t, err)
 
-	info := &relaycommon.RelayInfo{
-		UserId:          90,
-		OriginModelName: "video-model",
-		UsingGroup:      "default",
-		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 90},
-		PriceData: types.PriceData{
-			ModelPrice: 0.18,
-			Quota:      900,
-			UsePrice:   true,
-			GroupRatioInfo: types.GroupRatioInfo{
-				GroupRatio: 1.25,
-			},
-		},
-		TaskRelayInfo: &relaycommon.TaskRelayInfo{
-			BillingPlan: billingPlan,
-			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
-				Selection: relaycommon.VideoBillingSelection{
-					EffectiveResolution:      "1080p",
-					EffectiveDurationSeconds: 8,
-					IndependentRatios:        map[string]float64{"video_input": 1.2},
+			info := &relaycommon.RelayInfo{
+				UserId:          90,
+				OriginModelName: "video-model",
+				UsingGroup:      "default",
+				ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 90},
+				PriceData: types.PriceData{
+					ModelPrice: 0.18,
+					Quota:      900,
+					UsePrice:   true,
+					GroupRatioInfo: types.GroupRatioInfo{
+						GroupRatio: 1.25,
+					},
 				},
-				SelectedResolutionPrice: 0.18,
-			},
-		},
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{
+					BillingPlan: billingPlan,
+					ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+						BillingUnit: unit,
+						Selection: relaycommon.VideoBillingSelection{
+							EffectiveResolution:      "1080p",
+							EffectiveDurationSeconds: 8,
+							IndependentRatios:        map[string]float64{"video_input": 1.2},
+						},
+						SelectedResolutionPrice: 0.18,
+					},
+				},
+			}
+
+			LogTaskConsumption(c, info)
+
+			log := getLastLog(t)
+			require.NotNil(t, log)
+			var other map[string]any
+			require.NoError(t, common.Unmarshal([]byte(log.Other), &other))
+			assert.NotContains(t, other, "task_per_call_billing")
+			assert.NotContains(t, other, "model_price")
+			assert.Equal(t, map[string]any{"video_input": 1.2}, other["task_ratios"])
+			adminInfo, ok := other["admin_info"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, map[string]any{
+				"effective_resolution":       "1080p",
+				"billing_unit":               unit,
+				"selected_price_per_second":  0.18,
+				"submitted_duration_seconds": float64(8),
+				"effective_duration_seconds": float64(8),
+				"independent_ratios":         map[string]any{"video_input": 1.2},
+			}, adminInfo["video_resolution_billing"])
+			if unit == "per_call" {
+				assert.Contains(t, log.Content, "按条计费（1080p）")
+			} else {
+				assert.Contains(t, log.Content, "按秒计费（1080p）")
+			}
+		})
 	}
-
-	LogTaskConsumption(c, info)
-
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	var other map[string]any
-	require.NoError(t, common.Unmarshal([]byte(log.Other), &other))
-	assert.NotContains(t, other, "task_per_call_billing")
-	assert.NotContains(t, other, "model_price")
-	assert.Equal(t, map[string]any{"video_input": 1.2}, other["task_ratios"])
-	adminInfo, ok := other["admin_info"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, map[string]any{
-		"effective_resolution":       "1080p",
-		"selected_price_per_second":  0.18,
-		"submitted_duration_seconds": float64(8),
-		"effective_duration_seconds": float64(8),
-		"independent_ratios":         map[string]any{"video_input": 1.2},
-	}, adminInfo["video_resolution_billing"])
 }
 
 func TestLegacyPlanConsumptionIgnoresStaleResolvedVideoBilling(t *testing.T) {
@@ -110,6 +122,7 @@ func TestLegacyPlanConsumptionIgnoresStaleResolvedVideoBilling(t *testing.T) {
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
 			BillingPlan: relaycommon.NewLegacyTaskBillingPlan("legacy-video", "req-legacy-log"),
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				BillingUnit: "per_second",
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
 					EffectiveDurationSeconds: 8,
@@ -143,6 +156,7 @@ func TestResolutionPricingUserLogOmitsAdminPricingFields(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
 	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "req-resolution-user-log", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
@@ -159,6 +173,7 @@ func TestResolutionPricingUserLogOmitsAdminPricingFields(t *testing.T) {
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
 			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				BillingUnit: "per_second",
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "720p",
 					EffectiveDurationSeconds: 5,
@@ -1182,7 +1197,7 @@ func TestResolutionSettlementUsesSnapshotAfterEveryLivePricingChange(t *testing.
 		EffectiveDurationSeconds: 4,
 	})
 
-	want, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, frozenQuotaPerUnit, 0, 0)
+	want, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, frozenQuotaPerUnit, 0, 0, "per_second")
 	require.NoError(t, err)
 	assert.Equal(t, want, task.Quota)
 	assert.Equal(t, 1_000_000+(preConsumed-want), getUserQuota(t, userID))
@@ -1242,6 +1257,7 @@ func TestResolutionPreConsumePersistsDurablyWhenBatchingEnabled(t *testing.T) {
 	seedToken(t, tokenID, userID, "sk-resolution-durable-preconsume", tokenQuota)
 	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "resolution-durable-preconsume", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 
@@ -1285,6 +1301,7 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 	require.NoError(t, err)
 	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "resolution-base-stats", map[string]float64{"1080p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
@@ -1305,6 +1322,7 @@ func TestResolutionSubmissionPersistsBaseStatsBeforeBatchFlush(t *testing.T) {
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
 			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				BillingUnit: "per_second",
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
 					EffectiveDurationSeconds: 8,
@@ -1352,6 +1370,7 @@ func resolutionSubmitRelayInfo(t *testing.T, requestId string, userID, tokenID, 
 	t.Helper()
 	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", requestId, map[string]float64{"1080p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	return &relaycommon.RelayInfo{
@@ -1370,6 +1389,7 @@ func resolutionSubmitRelayInfo(t *testing.T, requestId string, userID, tokenID, 
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
 			BillingPlan: billingPlan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				BillingUnit: "per_second",
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "1080p",
 					EffectiveDurationSeconds: 8,
@@ -1645,6 +1665,7 @@ func TestResolutionRoundedZeroSubscriptionDoesNotReserveSyntheticTokenQuota(t *t
 	require.NoError(t, model.DB.Create(subscription).Error)
 	billingPlan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "request-resolution-zero-subscription", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 
@@ -1782,7 +1803,7 @@ func TestResolutionSettlementChargesPositiveDeltaToUnlimitedToken(t *testing.T) 
 	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("unlimited_quota", true).Error)
 	seedChannel(t, channelID)
 
-	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
+	preConsumed, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 4, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0, "per_second")
 	require.NoError(t, err)
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"used_quota":    preConsumed,
@@ -1799,7 +1820,7 @@ func TestResolutionSettlementChargesPositiveDeltaToUnlimitedToken(t *testing.T) 
 		EffectiveDurationSeconds: 8,
 	}))
 
-	actualQuota, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 8, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0)
+	actualQuota, _, err := relaycommon.CalculateVideoResolutionQuotaAtUnit(0.1, 8, 1.25, map[string]float64{"video_input": 1.2}, 500, 0, 0, "per_second")
 	require.NoError(t, err)
 	delta := actualQuota - preConsumed
 	assert.Equal(t, actualQuota, getTaskQuota(t, task.ID))
@@ -2325,6 +2346,7 @@ func TestResolutionSettlementAuditsQuotaSaturation(t *testing.T) {
 	assert.Contains(t, adminInfo, "quota_saturation")
 	assert.Equal(t, map[string]any{
 		"effective_resolution":       "1080p",
+		"billing_unit":               "per_second",
 		"selected_price_per_second":  1e10,
 		"submitted_duration_seconds": float64(1),
 		"effective_duration_seconds": float64(1),

@@ -14,6 +14,7 @@ import (
 func TestUsesResolutionReservationLedgerReadsFrozenKind(t *testing.T) {
 	resolution, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video", "req-resolution", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	legacy := relaycommon.NewLegacyTaskBillingPlan("video", "req-legacy")
@@ -35,6 +36,7 @@ func TestNewBillingSessionUsesFrozenResolutionKindAndRequestIdentity(t *testing.
 	seedUser(t, userID, 10_000)
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video", "req-frozen", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{

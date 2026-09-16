@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Plus, Trash2 } from 'lucide-react'
+import { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,14 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from '@/components/ui/input-group'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 import type {
   VideoResolutionPriceRow,
@@ -43,6 +52,8 @@ export type VideoResolutionPriceEditorProps = {
   rows: VideoResolutionPriceRow[]
   errorsByRowId: Record<number, VideoResolutionPriceRowErrors>
   disabled?: boolean
+  billingUnit?: 'per_second' | 'per_call'
+  onBillingUnitChange?: (unit: 'per_second' | 'per_call') => void
   onChange: (rows: VideoResolutionPriceRow[]) => void
 }
 
@@ -61,6 +72,15 @@ export function VideoResolutionPriceEditor(
   props: VideoResolutionPriceEditorProps
 ) {
   const { t } = useTranslation()
+  const unitId = useId()
+  const perVideo = props.billingUnit === 'per_call'
+  const priceUnitLabel = perVideo
+    ? t('USD price per video')
+    : t('USD price per second')
+  const unitOptions = [
+    { value: 'per_second', label: t('Per second (× duration)') },
+    { value: 'per_call', label: t('Per video (fixed per task)') },
+  ]
 
   const updateRow = (
     id: number,
@@ -86,6 +106,36 @@ export function VideoResolutionPriceEditor(
 
   return (
     <FieldGroup className='gap-4'>
+      {props.onBillingUnitChange && (
+        <Field>
+          <FieldLabel htmlFor={unitId}>
+            {t('Resolution billing unit')}
+          </FieldLabel>
+          <Select
+            items={unitOptions}
+            value={props.billingUnit ?? 'per_second'}
+            disabled={props.disabled}
+            onValueChange={(value) => {
+              if (value === 'per_second' || value === 'per_call') {
+                props.onBillingUnitChange?.(value)
+              }
+            }}
+          >
+            <SelectTrigger id={unitId} className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {unitOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
       {props.rows.length === 0 ? (
         <FieldDescription>
           {t('No resolution prices configured')}
@@ -96,7 +146,7 @@ export function VideoResolutionPriceEditor(
         const errors = props.errorsByRowId[row.id]
         // row.id 是稳定身份而非位置，删行后会跳号，所以朗读用的序号取索引
         const resolutionLabel = `${t('Resolution')} ${index + 1}`
-        const priceLabel = `${t('USD price per second')}: ${row.resolution || resolutionLabel}`
+        const priceLabel = `${priceUnitLabel}: ${row.resolution || resolutionLabel}`
         const resolutionErrorId = `video-resolution-${row.id}-error`
         const priceErrorId = `video-resolution-price-${row.id}-error`
         return (
@@ -131,7 +181,7 @@ export function VideoResolutionPriceEditor(
 
             <Field data-invalid={Boolean(errors?.price)}>
               <FieldLabel htmlFor={`video-resolution-price-${row.id}`}>
-                {t('USD price per second')}
+                {priceUnitLabel}
               </FieldLabel>
               <InputGroup>
                 <InputGroupAddon>$</InputGroupAddon>
@@ -149,7 +199,7 @@ export function VideoResolutionPriceEditor(
                   }
                 />
                 <InputGroupAddon align='inline-end'>
-                  {t('second')}
+                  {perVideo ? t('request') : t('second')}
                 </InputGroupAddon>
               </InputGroup>
               {errors?.price ? (
@@ -188,7 +238,7 @@ export function VideoResolutionPriceEditor(
       </div>
 
       <FieldDescription>
-        {t('Resolution prices are always charged per second.')}
+        {perVideo ? t('Prices shown per video') : t('Prices shown per second')}
       </FieldDescription>
     </FieldGroup>
   )

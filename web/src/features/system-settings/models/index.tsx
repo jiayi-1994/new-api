@@ -55,6 +55,7 @@ const defaultModelSettings: ModelSettings = {
   'billing_setting.billing_mode': '{}',
   'billing_setting.billing_expr': '{}',
   TaskBillingMode: '{}',
+  VideoResolutionBillingUnit: '{}',
   VideoResolutionPrice: '{}',
   'tool_price_setting.prices': '{}',
   TopupGroupRatio: '',

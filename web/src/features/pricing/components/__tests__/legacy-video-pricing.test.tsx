@@ -107,6 +107,17 @@ function renderModelCard(model: PricingModel): HTMLElement {
 // 旧版视频模型（有 model_price/task_billing_mode、无分辨率表）必须继续展示
 // 历史价格与计费单位，而不是被强制标记为“Unsupported”。
 describe('legacy video pricing card', () => {
+  test('resolution per-video pricing shows its minimum tier per request', () => {
+    const model = legacyVideoModel({
+      task_billing_mode: 'per_call',
+      resolution_prices: { '720p': 0.5, '1080p': 1 },
+    })
+    const text = renderModelCard(model).textContent ?? ''
+    assert.ok(text.includes('$0.5'))
+    assert.ok(text.includes('/ request'))
+    assert.equal(text.includes('/ second'), false)
+  })
+
   test('renders the legacy per-call price instead of an unsupported state', () => {
     const model = legacyVideoModel({ task_billing_mode: 'per_call' })
     const container = renderModelCard(model)

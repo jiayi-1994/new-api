@@ -209,6 +209,21 @@ function renderDetails(
 }
 
 describe('task video download link', () => {
+  test('shows the frozen per-video unit in desktop and mobile resolution fields', () => {
+    const log: TaskLog = {
+      ...taskWithVideoFields,
+      billing_details: { resolution: '720p', billing_unit: 'per_call' },
+    }
+    const desktop = renderWithI18n(<DesktopTaskFieldsHarness log={log} />)
+    assert.equal(
+      screen.getByTestId('resolution-value').textContent,
+      '720p · Per request'
+    )
+    desktop.unmount()
+    renderWithI18n(<MobileTaskFieldsHarness log={log} />)
+    assert.ok(screen.getByText('720p · Per request'))
+  })
+
   afterEach(() => cleanup())
 
   after(() => {
@@ -429,7 +444,10 @@ describe('task video download link', () => {
     renderWithI18n(<DesktopTaskFieldsHarness log={taskWithVideoFields} />)
 
     assert.equal(screen.getByTestId('model-value').textContent, 'videos-mini')
-    assert.equal(screen.getByTestId('resolution-value').textContent, '480p')
+    assert.equal(
+      screen.getByTestId('resolution-value').textContent,
+      '480p · Per second'
+    )
 
     const columnOrder =
       screen.getByTestId('column-order').textContent?.split(',') ?? []
@@ -463,7 +481,7 @@ describe('task video download link', () => {
     assert.ok(screen.getByText('Model'))
     assert.ok(screen.getByText('videos-mini'))
     assert.ok(screen.getByText('Resolution'))
-    assert.ok(screen.getByText('480p'))
+    assert.ok(screen.getByText('480p · Per second'))
 
     const content = rendered.container.textContent ?? ''
     assert.ok(content.indexOf('Model') < content.indexOf('Result'))

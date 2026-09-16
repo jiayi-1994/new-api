@@ -39,6 +39,7 @@ export type ModelPricingSnapshotInput = {
   billingExpr: string
   taskBillingMode: string
   videoResolutionPrice: string
+  videoResolutionBillingUnit: string
 }
 
 export type ModelPricingSnapshot = {
@@ -56,8 +57,9 @@ export type ModelPricingSnapshot = {
   requestRuleExpr?: string
   /** 任务（视频）计费单位：'per_call' 按条，缺省为 'per_second' 按秒 */
   taskBillingMode?: string
-  /** 按分辨率的每秒单价；存在时该模型走 video_resolution 计费 */
+  /** 按分辨率的单价；存在时该模型走 video_resolution 计费 */
   resolutionPrices?: VideoResolutionPriceMap
+  resolutionBillingUnit?: 'per_second' | 'per_call'
   hasConflict: boolean
 }
 
@@ -65,8 +67,9 @@ export const TASK_BILLING_PER_CALL = 'per_call'
 export const TASK_BILLING_PER_SECOND = 'per_second'
 
 export const isTaskPerCallBilling = (snapshot?: ModelPricingSnapshot) =>
-  snapshot?.billingMode !== 'video_resolution' &&
-  snapshot?.taskBillingMode === TASK_BILLING_PER_CALL
+  snapshot?.billingMode === 'video_resolution'
+    ? snapshot.resolutionBillingUnit === TASK_BILLING_PER_CALL
+    : snapshot?.taskBillingMode === TASK_BILLING_PER_CALL
 
 export type ModelRow = ModelPricingSnapshot & {
   saved?: ModelPricingSnapshot
@@ -142,7 +145,7 @@ export const getPriceSummary = (
     const entries = getResolutionPriceEntries(row)
     if (entries.length === 0) return t('No resolution prices configured')
     const minimum = Math.min(...entries.map(([, price]) => price))
-    return `${t('From')} $${formatPricingNumber(minimum)} / ${t('second')}`
+    return `${t('From')} $${formatPricingNumber(minimum)} / ${isTaskPerCallBilling(row) ? t('request') : t('second')}`
   }
   if (row.billingMode === 'per-request') {
     return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
@@ -177,7 +180,7 @@ export const getPriceDetail = (
   if (row.billingMode === 'video_resolution') {
     const entries = getResolutionPriceEntries(row)
     if (entries.length === 0) return t('No resolution prices configured')
-    return `${entries.map(([resolution]) => resolution).join(' · ')} · ${t('Prices shown per second')}`
+    return `${entries.map(([resolution]) => resolution).join(' · ')} · ${isTaskPerCallBilling(row) ? t('Prices shown per video') : t('Prices shown per second')}`
   }
   if (row.billingMode === 'per-request') {
     return t('Fixed request price')
@@ -213,6 +216,7 @@ export const buildModelSnapshots = ({
   billingExpr,
   taskBillingMode,
   videoResolutionPrice,
+  videoResolutionBillingUnit,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
   const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
     fallback: {},
@@ -258,6 +262,10 @@ export const buildModelSnapshots = ({
     taskBillingMode,
     { fallback: {}, context: 'task billing mode' }
   )
+  const resolutionBillingUnits = safeJsonParse<Record<string, string>>(
+    videoResolutionBillingUnit,
+    { fallback: {}, silent: true }
+  )
   const resolutionPriceMap =
     parseVideoResolutionPriceOption(videoResolutionPrice)
 
@@ -274,6 +282,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(billingExprMap),
     ...Object.keys(taskBillingModeMap),
     ...Object.keys(resolutionPriceMap),
+    ...Object.keys(resolutionBillingUnits),
   ])
 
   return [...modelNames].map((name) => {
@@ -309,6 +318,10 @@ export const buildModelSnapshots = ({
         audioCompletionRatio: audioCompletion,
         taskBillingMode: taskMode,
         resolutionPrices,
+        resolutionBillingUnit:
+          resolutionBillingUnits[name] === 'per_call'
+            ? 'per_call'
+            : 'per_second',
         hasConflict: false,
       }
     }
@@ -372,6 +385,7 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
     taskBillingMode: snapshot.taskBillingMode || '',
+    resolutionBillingUnit: snapshot.resolutionBillingUnit || 'per_second',
     resolutionPrices: snapshot.resolutionPrices
       ? JSON.stringify(sortVideoResolutionPriceMap(snapshot.resolutionPrices))
       : '',

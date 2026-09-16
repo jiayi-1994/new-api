@@ -31,11 +31,13 @@ func videoPriceTestContext(t *testing.T) (*gin.Context, *relaycommon.RelayInfo) 
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set("group", "default")
+	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan("video-test-model", "req-test", map[string]float64{"1080p": 0.1}, "per_second")
+	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "video-test-model",
 		UserGroup:       "default",
 		UsingGroup:      "default",
-		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{BillingPlan: plan},
 	}
 	return c, info
 }

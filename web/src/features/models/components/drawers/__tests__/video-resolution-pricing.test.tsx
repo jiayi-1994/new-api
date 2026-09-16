@@ -61,6 +61,7 @@ reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { getByRole } = await import('@testing-library/react')
 const { api } = await import('@/lib/api')
 const { ROLE } = await import('@/lib/roles')
 const { useAuthStore } = await import('@/stores/auth-store')
@@ -109,6 +110,7 @@ const pricingOptions = [
   { key: 'billing_setting.billing_mode', value: '{}' },
   { key: 'billing_setting.billing_expr', value: '{}' },
   { key: 'TaskBillingMode', value: '{"video":"per_call"}' },
+  { key: 'VideoResolutionBillingUnit', value: '{}' },
   { key: 'VideoResolutionPrice', value: '{"video":{"720p":0.1}}' },
 ]
 
@@ -251,6 +253,38 @@ after(() => {
 // 抽屉保存分辨率价格时的契约：只发一条 VideoResolutionPrice 更新，且与后端
 // Model.Update 的事务搬迁结果收敛到同一个文档。
 describe('model drawer video resolution persistence', () => {
+  test('changing only the resolution billing unit submits per_call with the existing tiers', async () => {
+    const view = await renderDrawer()
+    try {
+      await act(async () =>
+        getByRole(document.body, 'combobox', {
+          name: 'Resolution billing unit',
+        }).click()
+      )
+      await act(async () =>
+        getByRole(document.body, 'option', {
+          name: 'Per video (fixed per task)',
+        }).click()
+      )
+      assert.ok(
+        getByRole(document.body, 'textbox', {
+          name: 'USD price per video: 720p',
+        })
+      )
+      const button = submitButton()
+      assert.ok(button)
+      await act(async () => button.click())
+      assert.equal(putCalls.length, 1)
+      assert.deepEqual((putCalls[0].body as { pricing?: unknown }).pricing, {
+        mode: 'video_resolution',
+        resolution_prices: { '720p': 0.1 },
+        resolution_billing_unit: 'per_call',
+      })
+    } finally {
+      await view.cleanup()
+    }
+  })
+
   test('an invalid row yields no prices, so the caller must not treat it as empty', () => {
     // 这是抽屉里那条保存前置校验保护的不变量：校验失败返回 null，而 null 一旦被
     // 当成 {} 就会把整张价格表删掉。
@@ -284,6 +318,7 @@ describe('model drawer video resolution persistence', () => {
     assert.equal(putCalls[0].url, '/api/models/')
     assert.deepEqual((putCalls[0].body as { pricing?: unknown }).pricing, {
       mode: 'video_resolution',
+      resolution_billing_unit: 'per_second',
       resolution_prices: { '720p': 0.2 },
     })
     assert.equal(
@@ -466,8 +501,9 @@ describe('model drawer video resolution persistence', () => {
     }
     const view = await renderDrawer()
     try {
-      const ratioInput =
-        document.querySelector<HTMLInputElement>('input[name="ratio"]')
+      const ratioInput = document.querySelector<HTMLInputElement>(
+        'input[name="ratio"]'
+      )
       assert.ok(ratioInput)
       await act(async () => {
         changeInputValue(ratioInput, '2')

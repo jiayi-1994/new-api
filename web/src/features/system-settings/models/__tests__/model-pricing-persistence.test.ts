@@ -23,6 +23,8 @@ import {
   applyModelPricingMutation,
   buildModelPricingSelection,
   buildPricingDocumentReplacement,
+  parsePricingDocuments,
+  serializePricingDocuments,
   type PricingDocuments,
 } from '../model-pricing-persistence'
 
@@ -45,11 +47,54 @@ function documentsFixture(): PricingDocuments {
       target: 'target-expression',
     },
     TaskBillingMode: { source: 'per_call', target: 'per_second' },
+    VideoResolutionBillingUnit: {},
     VideoResolutionPrice: { target: { '4k': 9 } },
   }
 }
 
 describe('model pricing persistence', () => {
+  test('resolution billing unit roundtrips and follows copy, rename and delete', () => {
+    const selection = buildModelPricingSelection({
+      name: 'source',
+      billingMode: 'video_resolution',
+      resolutionPrices: { '720p': 0.5, '1080p': 1 },
+      resolutionBillingUnit: 'per_call',
+    })
+    assert.equal(selection.resolution_billing_unit, 'per_call')
+    let documents = applyModelPricingMutation(documentsFixture(), {
+      kind: 'save',
+      name: 'source',
+      selection,
+    })
+    documents = parsePricingDocuments(serializePricingDocuments(documents))
+    assert.equal(documents.VideoResolutionBillingUnit.source, 'per_call')
+    documents = applyModelPricingMutation(documents, {
+      kind: 'copy',
+      sourceName: 'source',
+      targetName: 'copy',
+    })
+    assert.equal(documents.VideoResolutionBillingUnit.copy, 'per_call')
+    documents = applyModelPricingMutation(documents, {
+      kind: 'rename',
+      sourceName: 'copy',
+      targetName: 'renamed',
+    })
+    assert.equal(documents.VideoResolutionBillingUnit.copy, undefined)
+    assert.equal(documents.VideoResolutionBillingUnit.renamed, 'per_call')
+    documents = applyModelPricingMutation(documents, {
+      kind: 'delete',
+      name: 'renamed',
+    })
+    assert.equal(documents.VideoResolutionBillingUnit.renamed, undefined)
+    documents = applyModelPricingMutation(documents, {
+      kind: 'save',
+      name: 'source',
+      selection: { ...selection, resolution_billing_unit: 'per_second' },
+    })
+    assert.equal(documents.VideoResolutionBillingUnit.source, undefined)
+    assert.equal(documents.TaskBillingMode.source, 'per_call')
+  })
+
   test('resolution save retains the complete legacy snapshot', () => {
     const result = applyModelPricingMutation(documentsFixture(), {
       kind: 'save',
@@ -242,6 +287,7 @@ describe('model pricing persistence', () => {
       audio_completion_ratio: 5,
       billing_expr: '(tier("base", p)) * if(r.size > 1, 2, 1)',
       task_billing_mode: 'per_call',
+      resolution_billing_unit: 'per_second',
       resolution_prices: { '720p': 0.1 },
     })
   })

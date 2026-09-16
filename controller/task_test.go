@@ -64,6 +64,7 @@ func TestLegacyFrozenPlanWithStaleResolvedBillingUsesWalletAndPersistsWithoutRes
 			TaskRelayInfo: &relaycommon.TaskRelayInfo{
 				BillingPlan: relaycommon.NewLegacyTaskBillingPlan("legacy-video", requestID+"-frozen"),
 				ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+					BillingUnit: "per_second",
 					Selection: relaycommon.VideoBillingSelection{
 						EffectiveResolution:      "1080p",
 						EffectiveDurationSeconds: 8,
@@ -111,6 +112,7 @@ func TestLegacyFrozenPlanWithStaleResolvedBillingUsesWalletAndPersistsWithoutRes
 func TestTaskBillingContextResolutionPlanRequiresResolvedSelection(t *testing.T) {
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "req-resolution", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 
@@ -127,6 +129,7 @@ func TestTaskBillingContextResolutionPlanRequiresResolvedSelection(t *testing.T)
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{
 			BillingPlan: plan,
 			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+				BillingUnit: "per_second",
 				Selection: relaycommon.VideoBillingSelection{
 					EffectiveResolution:      "720p",
 					EffectiveDurationSeconds: 5,
@@ -160,6 +163,7 @@ func TestTaskBillingContextLegacyFixedPerSecondRemainsPerSecond(t *testing.T) {
 func TestTaskBillingReservationRequestIDUsesFrozenPlanIdentity(t *testing.T) {
 	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
 		"video-model", "req-frozen", map[string]float64{"720p": 0.1},
+		"per_second",
 	)
 	require.NoError(t, err)
 	info := &relaycommon.RelayInfo{
@@ -299,48 +303,56 @@ func TestLegacyBillingContextIgnoresLiveResolutionTableAddedAfterFreeze(t *testi
 	assert.Empty(t, taskBillingReservationRequestID(info))
 }
 
-func TestResolutionSnapshotOmitsBillingUnitAndLegacyPerCallFlag(t *testing.T) {
-	plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
-		"video-model", "req-resolution-snapshot", map[string]float64{"1080p": 0.18},
-	)
-	require.NoError(t, err)
-	info := &relaycommon.RelayInfo{
-		OriginModelName: "video-model",
-		PriceData: hosttypes.PriceData{
-			ModelPrice: 0.18,
-			UsePrice:   true,
-			GroupRatioInfo: hosttypes.GroupRatioInfo{
-				GroupRatio: 1.25,
-			},
-		},
-		TaskRelayInfo: &relaycommon.TaskRelayInfo{
-			BillingPlan: plan,
-			ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
-				Selection: relaycommon.VideoBillingSelection{
-					EffectiveResolution:      "1080p",
-					EffectiveDurationSeconds: 8,
-					IndependentRatios:        map[string]float64{"video_input": 1.2},
+func TestResolutionSnapshotPersistsBillingUnitWithoutLegacyPerCallFlag(t *testing.T) {
+	for _, unit := range []string{"per_second", "per_call"} {
+		t.Run(unit, func(t *testing.T) {
+			plan, err := relaycommon.NewVideoResolutionTaskBillingPlan(
+				"video-model", "req-resolution-snapshot", map[string]float64{"1080p": 0.18},
+				unit,
+			)
+			require.NoError(t, err)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "video-model",
+				PriceData: hosttypes.PriceData{
+					ModelPrice: 0.18,
+					UsePrice:   true,
+					GroupRatioInfo: hosttypes.GroupRatioInfo{
+						GroupRatio: 1.25,
+					},
 				},
-				SelectedResolutionPrice: 0.18,
-				QuotaPerUnit:            321_000,
-			},
-		},
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{
+					BillingPlan: plan,
+					ResolvedVideoBilling: &relaycommon.ResolvedVideoBilling{
+						BillingUnit: unit,
+						Selection: relaycommon.VideoBillingSelection{
+							EffectiveResolution:      "1080p",
+							EffectiveDurationSeconds: 8,
+							IndependentRatios:        map[string]float64{"video_input": 1.2},
+						},
+						SelectedResolutionPrice: 0.18,
+						QuotaPerUnit:            321_000,
+					},
+				},
+			}
+
+			context := taskBillingContextFromRelayInfo(info)
+			require.NotNil(t, context)
+			assert.Equal(t, "video_resolution", context.PricingKind)
+			assert.False(t, context.PerCallBilling)
+			assert.Equal(t, "1080p", context.EffectiveResolution)
+			assert.Equal(t, 0.18, context.SelectedResolutionPrice)
+			assert.Equal(t, 8, context.EffectiveDurationSeconds)
+			assert.Equal(t, 321_000.0, context.QuotaPerUnit)
+			assert.Equal(t, map[string]float64{"video_input": 1.2}, context.IndependentRatios)
+			assert.Empty(t, context.OtherRatios)
+
+			raw, err := common.Marshal(context)
+			require.NoError(t, err)
+			var persisted model.TaskBillingContext
+			require.NoError(t, common.Unmarshal(raw, &persisted))
+			assert.Equal(t, unit, persisted.BillingUnit)
+		})
 	}
-
-	context := taskBillingContextFromRelayInfo(info)
-	require.NotNil(t, context)
-	assert.Equal(t, "video_resolution", context.PricingKind)
-	assert.False(t, context.PerCallBilling)
-	assert.Equal(t, "1080p", context.EffectiveResolution)
-	assert.Equal(t, 0.18, context.SelectedResolutionPrice)
-	assert.Equal(t, 8, context.EffectiveDurationSeconds)
-	assert.Equal(t, 321_000.0, context.QuotaPerUnit)
-	assert.Equal(t, map[string]float64{"video_input": 1.2}, context.IndependentRatios)
-	assert.Empty(t, context.OtherRatios)
-
-	raw, err := common.Marshal(context)
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "billing_unit")
 }
 
 func TestResolutionPricingAdminTaskIncludesBillingDetailsAndUserTaskOmitsThem(t *testing.T) {
