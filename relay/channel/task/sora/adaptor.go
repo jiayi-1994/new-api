@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
@@ -698,6 +699,37 @@ func buildMegabyaiVideoPayload(bodyMap map[string]any) map[string]any {
 	return payload
 }
 
+func logSoraVideoUpstreamParams(c *gin.Context, info *relaycommon.RelayInfo, payload map[string]any, format string) {
+	if !common.DebugEnabled || c.Request.Method != http.MethodPost || c.Request.URL.Path != "/v1/videos" {
+		return
+	}
+	params := map[string]any{"format": format, "channel_id": info.ChannelId}
+	for _, name := range []string{"model", "duration", "seconds", "size", "ratio", "resolution", "aspect_ratio"} {
+		value, exists := payload[name]
+		if !exists {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.Contains(typed, "://") || strings.Contains(strings.ToLower(typed), "token=") {
+				params[name] = "[redacted]"
+			} else if len(typed) > 128 {
+				params[name] = typed[:128] + "..."
+			} else {
+				params[name] = typed
+			}
+		case int, float64, bool:
+			params[name] = typed
+		default:
+			params[name] = fmt.Sprintf("[%T]", value)
+		}
+	}
+	encoded, err := common.Marshal(params)
+	if err == nil {
+		logger.LogDebug(c, "video_create_upstream %s", encoded)
+	}
+}
+
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -758,7 +790,14 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			} else if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
 				wrapDashScopeVideoPayload(bodyMap)
 			}
+			format := "openai"
+			if isMegabyai {
+				format = "megabyai"
+			} else if info.ChannelSetting.VideoPayloadFormat == "dashscope" {
+				format = "dashscope"
+			}
 			if newBody, err := common.Marshal(bodyMap); err == nil {
+				logSoraVideoUpstreamParams(c, info, bodyMap, format)
 				return bytes.NewReader(newBody), nil
 			}
 		}
@@ -822,6 +861,30 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 		writer.Close()
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+		if common.DebugEnabled {
+			outbound := map[string]any{"model": info.UpstreamModelName}
+			for _, name := range []string{"duration", "seconds", "size", "ratio", "resolution", "aspect_ratio"} {
+				if values := formData.Value[name]; len(values) > 0 {
+					outbound[name] = values[0]
+				}
+			}
+			if info.Action == constant.TaskActionRemix {
+				delete(outbound, "duration")
+				delete(outbound, "seconds")
+				delete(outbound, "size")
+				delete(outbound, "resolution")
+			} else if hasNormalizedVideoSelection {
+				delete(outbound, "duration")
+				outbound["seconds"] = normalized.Request.Seconds
+				outbound["resolution"] = normalized.Selection.EffectiveResolution
+				if normalized.Request.Size != "" {
+					outbound["size"] = normalized.Request.Size
+				} else {
+					delete(outbound, "size")
+				}
+			}
+			logSoraVideoUpstreamParams(c, info, outbound, "multipart")
+		}
 		return &buf, nil
 	}
 

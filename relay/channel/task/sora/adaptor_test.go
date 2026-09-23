@@ -1,6 +1,7 @@
 package sora
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,43 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestBuildRequestBodyDebugLogShowsUpstreamResolutionWithoutReferenceURLs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDebug := common.DebugEnabled
+	common.DebugEnabled = true
+	t.Cleanup(func() { common.DebugEnabled = previousDebug })
+	var output bytes.Buffer
+	previousWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &output
+	t.Cleanup(func() { gin.DefaultErrorWriter = previousWriter })
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(
+		`{"model":"videos-standard","prompt":"private prompt","duration":15,"ratio":"16:9","resolution":"1080p","referenceImages":["https://cdn.example.com/image.png?sig=private-signature"]}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = request
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:   &relaycommon.ChannelMeta{UpstreamModelName: "videos-standard"},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+	adaptor := &TaskAdaptor{baseURL: "https://megabyai.cc"}
+
+	body, err := adaptor.BuildRequestBody(c, info)
+	require.NoError(t, err)
+	forwarded, err := io.ReadAll(body)
+	require.NoError(t, err)
+	assert.Contains(t, string(forwarded), `"referenceImages"`)
+
+	logged := output.String()
+	assert.Contains(t, logged, "video_create_upstream")
+	assert.Contains(t, logged, `"resolution":"1080p"`)
+	assert.Contains(t, logged, `"duration":15`)
+	assert.Contains(t, logged, `"ratio":"16:9"`)
+	assert.NotContains(t, logged, "private prompt")
+	assert.NotContains(t, logged, "private-signature")
+}
 
 func TestTaskAdaptorParseTaskResultMapsNonTerminalStatuses(t *testing.T) {
 	tests := []struct {
