@@ -17,11 +17,15 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 		S3SecretKey:         "secret-key",
 		S3Prefix:            "tasks/v1/",
 		S3PresignTTLSeconds: 900,
+		RetentionDays:       DefaultTaskArtifactStoreRetentionDays,
+		SyncIntervalSeconds: DefaultTaskArtifactStoreSyncIntervalSecs,
 	}
 	require.NoError(t, ValidateTaskArtifactStoreConfig(valid))
 	require.NoError(t, ValidateTaskArtifactStoreConfig(TaskArtifactStoreConfig{
 		Mode:                TaskArtifactStoreModeUpstream,
 		S3PresignTTLSeconds: DefaultTaskArtifactStorePresignTTLSeconds,
+		RetentionDays:       DefaultTaskArtifactStoreRetentionDays,
+		SyncIntervalSeconds: DefaultTaskArtifactStoreSyncIntervalSecs,
 	}))
 
 	tests := []struct {
@@ -54,7 +58,7 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 	}
 }
 
-func TestLoadTaskArtifactStoreConfigFallsBackToUpstream(t *testing.T) {
+func TestLoadTaskArtifactStoreConfigModes(t *testing.T) {
 	t.Setenv(TaskArtifactStoreModeEnv, "filesystem")
 	t.Setenv(TaskArtifactStoreS3PresignTTLEnv, "900")
 	config := LoadTaskArtifactStoreConfig()
@@ -70,7 +74,18 @@ func TestLoadTaskArtifactStoreConfigFallsBackToUpstream(t *testing.T) {
 	t.Setenv(TaskArtifactStoreS3PresignTTLEnv, "600")
 	config = LoadTaskArtifactStoreConfig()
 
-	assert.Equal(t, TaskArtifactStoreModeUpstream, config.Mode)
+	assert.Equal(t, TaskArtifactStoreModeS3, config.Mode)
 	assert.Equal(t, "https://objects.example.com", config.S3Endpoint)
 	assert.Equal(t, 600, config.S3PresignTTLSeconds)
+	assert.Equal(t, DefaultTaskArtifactStoreRetentionDays, config.RetentionDays)
+	assert.Equal(t, DefaultTaskArtifactStoreSyncIntervalSecs, config.SyncIntervalSeconds)
+
+	t.Setenv(TaskArtifactStoreS3BucketEnv, "")
+	config = LoadTaskArtifactStoreConfig()
+	assert.Equal(t, TaskArtifactStoreModeUpstream, config.Mode)
+
+	t.Setenv(TaskArtifactStoreS3BucketEnv, "task-artifacts")
+	t.Setenv(TaskArtifactStoreRetentionEnv, "0")
+	config = LoadTaskArtifactStoreConfig()
+	assert.Equal(t, TaskArtifactStoreModeUpstream, config.Mode)
 }

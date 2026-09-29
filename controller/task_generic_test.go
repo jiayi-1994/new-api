@@ -985,3 +985,101 @@ func TestSelfTaskMediaURLGuard(t *testing.T) {
 	assert.True(t, isTaskMediaFallbackLoop(remoteURL.String(), "task-1"))
 	assert.False(t, isTaskMediaFallbackLoop(remoteURL.String(), "task-2"))
 }
+
+func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	allowPrivateTaskMediaTest(t)
+	previousMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemoryCache })
+
+	var upstreamHits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		if r.URL.Path == "/missing.mp4" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("video-bytes"))
+	}))
+	defer upstream.Close()
+
+	var storedKey, storedBody string
+	bucketServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		body, _ := io.ReadAll(r.Body)
+		storedKey, storedBody = r.URL.Path, string(body)
+		assert.Equal(t, "video/mp4", r.Header.Get("Content-Type"))
+		w.Header().Set("ETag", `"etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer bucketServer.Close()
+	restore := service.ConfigureTaskArtifactStore(system_setting.TaskArtifactStoreConfig{
+		Mode: system_setting.TaskArtifactStoreModeS3, S3Endpoint: bucketServer.URL, S3Bucket: "artifacts",
+		S3Region: "us-east-1", S3AccessKey: "ak", S3SecretKey: "sk", S3Prefix: "tasks/v1",
+		S3PresignTTLSeconds: 600, S3PathStyle: true, RetentionDays: 30, SyncIntervalSeconds: 60,
+	})
+	t.Cleanup(restore)
+	require.True(t, service.GetTaskArtifactStore().Enabled())
+
+	task.FinishTime = time.Now().Unix()
+	task.PrivateData.ResultURL = upstream.URL + "/result.mp4"
+	require.NoError(t, model.DB.Save(task).Error)
+
+	summary := runTaskArtifactSyncOnce(context.Background())
+	assert.Equal(t, taskArtifactSyncSummary{Scanned: 1, Stored: 1}, summary)
+	assert.Equal(t, "/artifacts/tasks/v1/task_generic/video.mp4", storedKey)
+	assert.Equal(t, "video-bytes", storedBody)
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.NotNil(t, stored.PrivateData.StoredArtifact)
+	assert.Equal(t, "tasks/v1/task_generic/video.mp4", stored.PrivateData.StoredArtifact.ObjectKey)
+	assert.Equal(t, int64(len("video-bytes")), stored.PrivateData.StoredArtifact.Size)
+
+	// A second pass is a no-op: nothing is fetched or uploaded again.
+	upstreamHits = 0
+	assert.Equal(t, taskArtifactSyncSummary{Scanned: 1}, runTaskArtifactSyncOnce(context.Background()))
+	assert.Equal(t, 0, upstreamHits)
+
+	requestVideo := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Set(middleware.TaskArtifactAccessContextKey, true)
+		c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID+"/content", nil)
+		VideoProxy(c)
+		return recorder
+	}
+
+	recorder := requestVideo()
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimPrefix(bucketServer.URL, "http://"), location.Host)
+	assert.Equal(t, "/artifacts/tasks/v1/task_generic/video.mp4", location.Path)
+	assert.NotEmpty(t, location.Query().Get("X-Amz-Signature"))
+	assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+
+	// Past retention the stored copy is ignored and the upstream path is used.
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).
+		Update("finish_time", time.Now().Add(-31*24*time.Hour).Unix()).Error)
+	recorder = requestVideo()
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "video-bytes", recorder.Body.String())
+
+	// Unreachable results are retried up to the attempt cap, then left alone.
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"finish_time":  time.Now().Unix(),
+		"private_data": model.TaskPrivateData{ResultURL: upstream.URL + "/missing.mp4"},
+	}).Error)
+	upstreamHits = 0
+	for range model.MaxTaskArtifactStoreAttempts + 1 {
+		runTaskArtifactSyncOnce(context.Background())
+	}
+	assert.Equal(t, model.MaxTaskArtifactStoreAttempts, upstreamHits)
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	assert.Nil(t, stored.PrivateData.StoredArtifact)
+	assert.Equal(t, model.MaxTaskArtifactStoreAttempts, stored.PrivateData.StoreAttempts)
+}

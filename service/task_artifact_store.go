@@ -11,18 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// StoredArtifactRef describes a persisted artifact object. No reference is
-// produced until a concrete storage backend is implemented.
-type StoredArtifactRef struct {
-	Backend   string
-	Bucket    string
-	ObjectKey string
-	MimeType  string
-	Size      int64
-}
+// StoredArtifactRef describes a persisted artifact object. It is the same
+// value the task row keeps in TaskPrivateData.StoredArtifact.
+type StoredArtifactRef = model.StoredTaskArtifact
 
 // TaskArtifactStore is the persistence boundary for generated artifact bytes.
 // types.TaskArtifact is re-exported by relay/channel as channel.TaskArtifact.
+// Resolve returns nil when the task has no usable stored copy (never stored,
+// different artifact, or past retention). Persist only uploads; the caller
+// records the returned ref on the task. Serve must not write a response when
+// it returns an error so callers can fall back to the upstream path.
 type TaskArtifactStore interface {
 	Enabled() bool
 	Resolve(task *model.Task, artifactKey string) (*StoredArtifactRef, error)
@@ -50,14 +48,37 @@ func (disabledArtifactStore) Serve(*gin.Context, *model.Task, *StoredArtifactRef
 	return ErrTaskArtifactStoreDisabled
 }
 
-var taskArtifactStore TaskArtifactStore = &disabledArtifactStore{}
+var (
+	taskArtifactStore       TaskArtifactStore = &disabledArtifactStore{}
+	taskArtifactStoreConfig system_setting.TaskArtifactStoreConfig
+)
 
 func init() {
-	_ = system_setting.LoadTaskArtifactStoreConfig()
+	ConfigureTaskArtifactStore(system_setting.LoadTaskArtifactStoreConfig())
 }
 
-// GetTaskArtifactStore returns the process-wide artifact storage backend. This
-// release always returns the disabled implementation.
+// ConfigureTaskArtifactStore installs the backend selected by config and
+// returns a function that restores the previous backend.
+func ConfigureTaskArtifactStore(config system_setting.TaskArtifactStoreConfig) (restore func()) {
+	previousStore, previousConfig := taskArtifactStore, taskArtifactStoreConfig
+	taskArtifactStoreConfig = config
+	if config.Mode == system_setting.TaskArtifactStoreModeS3 {
+		taskArtifactStore = newS3ArtifactStore(config)
+	} else {
+		taskArtifactStore = &disabledArtifactStore{}
+	}
+	return func() {
+		taskArtifactStore, taskArtifactStoreConfig = previousStore, previousConfig
+	}
+}
+
+// GetTaskArtifactStore returns the process-wide artifact storage backend.
 func GetTaskArtifactStore() TaskArtifactStore {
 	return taskArtifactStore
+}
+
+// GetTaskArtifactStoreConfig returns the validated startup configuration the
+// store was built from.
+func GetTaskArtifactStoreConfig() system_setting.TaskArtifactStoreConfig {
+	return taskArtifactStoreConfig
 }

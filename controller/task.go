@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
@@ -365,8 +366,10 @@ func TaskArtifactContent(c *gin.Context) {
 	}
 	artifactStore := service.GetTaskArtifactStore()
 	if ref, resolveErr := artifactStore.Resolve(task, artifactKey); resolveErr == nil && ref != nil {
-		_ = artifactStore.Serve(c, task, ref)
-		return
+		if serveErr := artifactStore.Serve(c, task, ref); serveErr == nil {
+			return
+		}
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Failed to serve stored artifact for task %s, falling back to upstream", task.TaskID))
 	}
 
 	adaptor, err := initTaskArtifactAdaptor(task)

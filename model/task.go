@@ -136,6 +136,26 @@ type TaskPrivateData struct {
 	// and every retrieval surface treats the task as not found. The zero
 	// value keeps historical rows retained and retrievable.
 	ResultDiscarded bool `json:"result_discarded,omitempty"`
+	// StoredArtifact records the copy of the result the artifact store keeps.
+	// nil means the task is still served from the upstream URL.
+	StoredArtifact *StoredTaskArtifact `json:"stored_artifact,omitempty"`
+	// StoreAttempts counts failed store copies; the sync job gives up at
+	// MaxTaskArtifactStoreAttempts.
+	StoreAttempts int `json:"store_attempts,omitempty"`
+}
+
+// MaxTaskArtifactStoreAttempts bounds retries of copying one result into the
+// artifact store.
+const MaxTaskArtifactStoreAttempts = 3
+
+// StoredTaskArtifact locates one artifact object persisted by the store.
+type StoredTaskArtifact struct {
+	ArtifactKey string `json:"artifact_key"`
+	Bucket      string `json:"bucket"`
+	ObjectKey   string `json:"object_key"`
+	MimeType    string `json:"mime_type,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	StoredAt    int64  `json:"stored_at"`
 }
 
 type TaskExecutionSnapshot struct {
@@ -214,7 +234,7 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
-		!p.ResultDiscarded {
+		!p.ResultDiscarded && p.StoredArtifact == nil && p.StoreAttempts == 0 {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
@@ -375,6 +395,21 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 		return nil
 	}
 	return tasks
+}
+
+// GetSuccessTasksFinishedAfter pages successful tasks by id for the artifact
+// sync job. Rows with id <= lastID are skipped so callers can walk the window
+// without re-reading earlier pages.
+func GetSuccessTasksFinishedAfter(finishedAfterUnix int64, lastID int64, limit int) ([]*Task, error) {
+	var tasks []*Task
+	err := DB.Omit("data").
+		Where("status = ?", TaskStatusSuccess).
+		Where("finish_time >= ?", finishedAfterUnix).
+		Where("id > ?", lastID).
+		Order("id asc").
+		Limit(limit).
+		Find(&tasks).Error
+	return tasks, err
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
@@ -539,6 +574,12 @@ func (Task *Task) Update() error {
 	var err error
 	err = DB.Save(Task).Error
 	return err
+}
+
+// UpdatePrivateData persists only the private_data column, for callers that
+// loaded the row without its data payload and must not overwrite it.
+func (t *Task) UpdatePrivateData() error {
+	return DB.Model(t).Update("private_data", t.PrivateData).Error
 }
 
 func (t *Task) UpdateQuota() error {

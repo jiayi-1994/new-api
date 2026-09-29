@@ -22,6 +22,7 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(taskArtifactSyncHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -149,6 +150,26 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// taskArtifactSyncHandler copies finished video results into the artifact
+// store so they stay downloadable after the provider URL expires. It only
+// runs when a store backend is configured.
+type taskArtifactSyncHandler struct{}
+
+func (taskArtifactSyncHandler) Type() string { return model.SystemTaskTypeArtifactSync }
+
+func (taskArtifactSyncHandler) Enabled() bool { return service.GetTaskArtifactStore().Enabled() }
+
+func (taskArtifactSyncHandler) Interval() time.Duration {
+	return time.Duration(service.GetTaskArtifactStoreConfig().SyncIntervalSeconds) * time.Second
+}
+
+func (taskArtifactSyncHandler) NewPayload() any { return nil }
+
+func (taskArtifactSyncHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary := runTaskArtifactSyncOnce(ctx)
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 

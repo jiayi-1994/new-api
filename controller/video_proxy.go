@@ -82,50 +82,62 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	var descriptor *relaychannel.TaskContentRequest
-	if taskHasPluginExecution(task) {
-		artifacts, projectionErr := projectTaskArtifacts(task)
-		if projectionErr == nil {
-			for _, artifact := range artifacts {
-				if artifact.Type != "video" {
-					continue
-				}
-				adaptor, adaptorErr := initTaskArtifactAdaptor(task)
-				if adaptorErr == nil {
-					if provider, ok := adaptor.(relaychannel.TaskContentRequestProvider); ok {
-						descriptor, adaptorErr = provider.BuildContentRequest(task, artifact.Key, relaychannel.TaskArtifactClientRequest{
-							Method:  c.Request.Method,
-							Headers: taskArtifactClientHeaders(c.Request.Header),
-						})
-					}
-				}
-				if adaptorErr != nil {
-					logger.LogWarn(c.Request.Context(), fmt.Sprintf("Failed to resolve plugin video content for task %s", taskID))
-					descriptor = nil
-				}
-				break
-			}
-		} else {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Failed to project plugin video for task %s", taskID))
-		}
-	}
-	if descriptor == nil {
-		resultURL := task.GetResultURL()
-		if isTaskMediaFallbackLoop(resultURL, task.TaskID) {
-			writeTaskMediaProxyError(c, &taskMediaProxyError{
-				status: http.StatusGone, code: "artifact_gone",
-				message: "Artifact content is no longer available",
-			})
+	artifactKey, descriptor := resolveVideoContentRequest(c.Request.Context(), task, c.Request.Method, taskArtifactClientHeaders(c.Request.Header))
+	artifactStore := service.GetTaskArtifactStore()
+	if ref, resolveErr := artifactStore.Resolve(task, artifactKey); resolveErr == nil && ref != nil {
+		if serveErr := artifactStore.Serve(c, task, ref); serveErr == nil {
 			return
 		}
-		descriptor = &relaychannel.TaskContentRequest{
-			URL:            resultURL,
-			Method:         c.Request.Method,
-			Credentialless: true,
-		}
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Failed to serve stored video for task %s, falling back to upstream", taskID))
+	}
+	if isTaskMediaFallbackLoop(descriptor.URL, task.TaskID) {
+		writeTaskMediaProxyError(c, &taskMediaProxyError{
+			status: http.StatusGone, code: "artifact_gone",
+			message: "Artifact content is no longer available",
+		})
+		return
 	}
 	if err := proxyTaskMedia(c, task, descriptor); err != nil {
 		writeTaskMediaProxyError(c, err)
+	}
+}
+
+// resolveVideoContentRequest picks the video artifact of a finished task and
+// the request that fetches it: the plugin content request when the task ran
+// through a plugin, otherwise the upstream result URL recorded on the task.
+// Callers must still reject descriptor URLs that point back at this server.
+func resolveVideoContentRequest(ctx context.Context, task *model.Task, method string, clientHeaders map[string]string) (string, *relaychannel.TaskContentRequest) {
+	if taskHasPluginExecution(task) {
+		artifacts, err := projectTaskArtifacts(task)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("Failed to project plugin video for task %s", task.TaskID))
+		}
+		for _, artifact := range artifacts {
+			if artifact.Type != "video" {
+				continue
+			}
+			adaptor, adaptorErr := initTaskArtifactAdaptor(task)
+			if adaptorErr == nil {
+				provider, ok := adaptor.(relaychannel.TaskContentRequestProvider)
+				if !ok {
+					break
+				}
+				descriptor, buildErr := provider.BuildContentRequest(task, artifact.Key, relaychannel.TaskArtifactClientRequest{
+					Method:  method,
+					Headers: clientHeaders,
+				})
+				if buildErr == nil && descriptor != nil {
+					return artifact.Key, descriptor
+				}
+			}
+			logger.LogWarn(ctx, fmt.Sprintf("Failed to resolve plugin video content for task %s", task.TaskID))
+			break
+		}
+	}
+	return "video", &relaychannel.TaskContentRequest{
+		URL:            task.GetResultURL(),
+		Method:         method,
+		Credentialless: true,
 	}
 }
 
@@ -628,44 +640,43 @@ func writeTaskMediaProxyError(c *gin.Context, err error) {
 	writeTaskArtifactError(c, proxyErr.status, proxyErr.code, proxyErr.message)
 }
 
-func writeVideoDataURL(c *gin.Context, dataURL string) error {
+// decodeVideoDataURL validates a base64 data: URL and returns its media type,
+// decoded length, and a fresh decoding reader.
+func decodeVideoDataURL(dataURL string) (mimeType string, contentLength int64, body io.Reader, err error) {
 	if len(dataURL) > taskMediaDataURLMaxEncodedBytes {
-		return errTaskMediaRequestRejected
+		return "", 0, nil, errTaskMediaRequestRejected
 	}
-	parts := strings.SplitN(dataURL, ",", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid data url")
+	header, payload, found := strings.Cut(dataURL, ",")
+	if !found {
+		return "", 0, nil, fmt.Errorf("invalid data url")
 	}
-
-	header := parts[0]
-	payload := parts[1]
 	if !strings.HasPrefix(header, "data:") || !strings.Contains(header, ";base64") {
-		return fmt.Errorf("unsupported data url")
+		return "", 0, nil, fmt.Errorf("unsupported data url")
 	}
 
-	mimeType := strings.TrimPrefix(header, "data:")
+	mimeType = strings.TrimPrefix(header, "data:")
 	mimeType = strings.TrimSuffix(mimeType, ";base64")
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
 	if len(mimeType) > 255 || !httpguts.ValidHeaderFieldValue(mimeType) {
-		return fmt.Errorf("invalid data url media type")
+		return "", 0, nil, fmt.Errorf("invalid data url media type")
 	}
 
-	var encoding *base64.Encoding
-	var contentLength int64
 	for _, candidate := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
-		decodedLength, err := io.Copy(io.Discard, base64.NewDecoder(candidate, strings.NewReader(payload)))
-		if err == nil {
-			encoding = candidate
-			contentLength = decodedLength
-			break
+		decodedLength, decodeErr := io.Copy(io.Discard, base64.NewDecoder(candidate, strings.NewReader(payload)))
+		if decodeErr == nil {
+			return mimeType, decodedLength, base64.NewDecoder(candidate, strings.NewReader(payload)), nil
 		}
 	}
-	if encoding == nil {
-		return fmt.Errorf("invalid base64 data")
-	}
+	return "", 0, nil, fmt.Errorf("invalid base64 data")
+}
 
+func writeVideoDataURL(c *gin.Context, dataURL string) error {
+	mimeType, contentLength, body, err := decodeVideoDataURL(dataURL)
+	if err != nil {
+		return err
+	}
 	c.Writer.Header().Set("Content-Type", mimeType)
 	c.Writer.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	setTaskMediaResponseSecurityHeaders(c.Writer.Header())
@@ -673,6 +684,6 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	if c.Request.Method == http.MethodHead {
 		return nil
 	}
-	_, err := io.Copy(c.Writer, base64.NewDecoder(encoding, strings.NewReader(payload)))
+	_, err = io.Copy(c.Writer, body)
 	return err
 }

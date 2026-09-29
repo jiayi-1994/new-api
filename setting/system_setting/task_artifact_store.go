@@ -18,6 +18,9 @@ const (
 
 	DefaultTaskArtifactStorePresignTTLSeconds = 900
 	MaxTaskArtifactStorePresignTTLSeconds     = 7 * 24 * 60 * 60
+	DefaultTaskArtifactStoreRetentionDays     = 30
+	DefaultTaskArtifactStoreSyncIntervalSecs  = 60
+	MinTaskArtifactStoreSyncIntervalSecs      = 10
 )
 
 const (
@@ -29,6 +32,9 @@ const (
 	TaskArtifactStoreS3SecretKeyEnv  = "TASK_ARTIFACT_STORE_S3_SECRET_KEY"
 	TaskArtifactStoreS3PrefixEnv     = "TASK_ARTIFACT_STORE_S3_PREFIX"
 	TaskArtifactStoreS3PresignTTLEnv = "TASK_ARTIFACT_STORE_S3_PRESIGN_TTL"
+	TaskArtifactStoreS3PathStyleEnv  = "TASK_ARTIFACT_STORE_S3_PATH_STYLE"
+	TaskArtifactStoreRetentionEnv    = "TASK_ARTIFACT_STORE_RETENTION_DAYS"
+	TaskArtifactStoreSyncIntervalEnv = "TASK_ARTIFACT_STORE_SYNC_INTERVAL"
 )
 
 var (
@@ -36,8 +42,10 @@ var (
 	taskArtifactStoreRegionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
-// TaskArtifactStoreConfig reserves the configuration contract for a future S3
-// implementation. The current release always falls back to upstream proxying.
+// TaskArtifactStoreConfig is the startup-only storage configuration. Mode
+// "upstream" (default) keeps proxying provider URLs; mode "s3" additionally
+// copies finished artifacts to an S3-compatible bucket and serves them from
+// there while they are within RetentionDays.
 type TaskArtifactStoreConfig struct {
 	Mode                string
 	S3Endpoint          string
@@ -47,10 +55,14 @@ type TaskArtifactStoreConfig struct {
 	S3SecretKey         string
 	S3Prefix            string
 	S3PresignTTLSeconds int
+	S3PathStyle         bool
+	RetentionDays       int
+	SyncIntervalSeconds int
 }
 
 // LoadTaskArtifactStoreConfig reads and validates startup-only configuration.
-// S3 mode is deliberately disabled until a storage implementation is shipped.
+// Any validation failure falls back to upstream mode so a misconfigured store
+// never blocks video delivery.
 func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 	config := TaskArtifactStoreConfig{
 		Mode:                common.GetEnvOrDefaultString(TaskArtifactStoreModeEnv, TaskArtifactStoreModeUpstream),
@@ -61,15 +73,14 @@ func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 		S3SecretKey:         common.GetEnvOrDefaultString(TaskArtifactStoreS3SecretKeyEnv, ""),
 		S3Prefix:            common.GetEnvOrDefaultString(TaskArtifactStoreS3PrefixEnv, ""),
 		S3PresignTTLSeconds: common.GetEnvOrDefault(TaskArtifactStoreS3PresignTTLEnv, DefaultTaskArtifactStorePresignTTLSeconds),
+		S3PathStyle:         common.GetEnvOrDefaultBool(TaskArtifactStoreS3PathStyleEnv, false),
+		RetentionDays:       common.GetEnvOrDefault(TaskArtifactStoreRetentionEnv, DefaultTaskArtifactStoreRetentionDays),
+		SyncIntervalSeconds: common.GetEnvOrDefault(TaskArtifactStoreSyncIntervalEnv, DefaultTaskArtifactStoreSyncIntervalSecs),
 	}
 	if err := ValidateTaskArtifactStoreConfig(config); err != nil {
 		common.SysError("invalid task artifact store configuration: " + err.Error() + "; using upstream mode")
 		config.Mode = TaskArtifactStoreModeUpstream
 		return config
-	}
-	if config.Mode == TaskArtifactStoreModeS3 {
-		common.SysError("task artifact S3 storage is not implemented; using upstream mode")
-		config.Mode = TaskArtifactStoreModeUpstream
 	}
 	return config
 }
@@ -82,6 +93,12 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 	}
 	if config.S3PresignTTLSeconds <= 0 || config.S3PresignTTLSeconds > MaxTaskArtifactStorePresignTTLSeconds {
 		return fmt.Errorf("S3 presign TTL must be between 1 and %d seconds", MaxTaskArtifactStorePresignTTLSeconds)
+	}
+	if config.RetentionDays < 1 {
+		return errors.New("retention days must be at least 1")
+	}
+	if config.SyncIntervalSeconds < MinTaskArtifactStoreSyncIntervalSecs {
+		return fmt.Errorf("sync interval must be at least %d seconds", MinTaskArtifactStoreSyncIntervalSecs)
 	}
 
 	requireS3Fields := config.Mode == TaskArtifactStoreModeS3

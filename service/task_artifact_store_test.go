@@ -24,7 +24,7 @@ func TestDisabledTaskArtifactStoreHasNoStorageBehavior(t *testing.T) {
 	ref, err = store.Persist(t.Context(), task, types.TaskArtifact{Key: "video", Type: "video"}, strings.NewReader("content"))
 	assert.Nil(t, ref)
 	assert.ErrorIs(t, err, ErrTaskArtifactStoreDisabled)
-	assert.ErrorIs(t, store.Serve(&gin.Context{}, task, &StoredArtifactRef{Backend: "s3"}), ErrTaskArtifactStoreDisabled)
+	assert.ErrorIs(t, store.Serve(&gin.Context{}, task, &StoredArtifactRef{ObjectKey: "tasks/x/video.mp4"}), ErrTaskArtifactStoreDisabled)
 	assert.Same(t, store, GetTaskArtifactStore())
 }
 
