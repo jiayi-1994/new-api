@@ -221,6 +221,14 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 			message: "Artifact request was rejected", err: err,
 		}
 	}
+	// Public storage links already authorize the download through the URL. Let
+	// the client fetch the bytes directly, keeping signed query parameters intact.
+	// Requests needing provider headers or a different method must stay proxied.
+	if descriptor.Credentialless && method == c.Request.Method && isObjectStorageMediaURL(parsedURL) {
+		setTaskMediaResponseSecurityHeaders(c.Writer.Header())
+		c.Redirect(http.StatusFound, rawURL)
+		return nil
+	}
 
 	client := service.GetSSRFProtectedHTTPClient()
 	if proxy != "" {
@@ -280,6 +288,17 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		target, locationErr := resp.Location()
+		if locationErr != nil || method != c.Request.Method || !isObjectStorageMediaURL(target) {
+			return &taskMediaProxyError{
+				status: http.StatusBadGateway, code: "artifact_upstream_error",
+				message: "Artifact upstream returned an unsupported redirect", err: locationErr,
+			}
+		}
+		setTaskMediaResponseSecurityHeaders(c.Writer.Header())
+		c.Redirect(http.StatusFound, target.String())
+		return nil
 	case http.StatusOK, http.StatusPartialContent, http.StatusNotModified, http.StatusRequestedRangeNotSatisfiable:
 		copyTaskMediaResponseHeaders(c.Writer.Header(), resp.Header)
 		setTaskMediaResponseSecurityHeaders(c.Writer.Header())
@@ -317,6 +336,36 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 			message: fmt.Sprintf("Artifact upstream returned status %d", resp.StatusCode),
 		}
 	}
+}
+
+// isObjectStorageMediaURL recognizes the managed storage/CDN domains supported
+// by the video downloader. Unrecognized hosts retain the normal proxy behavior.
+func isObjectStorageMediaURL(target *url.URL) bool {
+	if target.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(target.Hostname())
+	if host == "storage.googleapis.com" {
+		return true
+	}
+	for _, suffix := range []string{
+		".r2.cloudflarestorage.com",
+		".r2.dev",
+		".amazonaws.com",
+		".cloudfront.net",
+		".storage.googleapis.com",
+		".aliyuncs.com",
+		".myqcloud.com",
+		".volces.com",
+		".myhuaweicloud.com",
+		".bcebos.com",
+		".blob.core.windows.net",
+	} {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 type taskMediaHTTPResult struct {
@@ -421,6 +470,14 @@ func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, cl
 		}
 		if isSelfTaskMediaURL(c, req.URL) {
 			return fmt.Errorf("%w: proxy loop", errTaskMediaRequestRejected)
+		}
+		// Stop before contacting public storage, including redirects from an
+		// authenticated provider endpoint. Only its Location reaches the client;
+		// provider credentials and video bytes never travel to/from the CDN here.
+		if len(via) > 0 && via[0].Method == c.Request.Method && req.Method == c.Request.Method &&
+			(req.Method == http.MethodGet || req.Method == http.MethodHead) && isObjectStorageMediaURL(req.URL) &&
+			(credentialless || !sameTaskMediaOrigin(via[0].URL, req.URL)) {
+			return http.ErrUseLastResponse
 		}
 		if len(via) > 0 && !sameTaskMediaOrigin(via[len(via)-1].URL, req.URL) {
 			if !credentialless {

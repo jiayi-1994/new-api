@@ -469,6 +469,339 @@ func TestProxyTaskMediaForwardsRangeAndFiltersResponseHeaders(t *testing.T) {
 	assert.Empty(t, recorder.Header().Get("X-Provider-Secret"))
 }
 
+type taskMediaTestTransport func(*http.Request) (*http.Response, error)
+
+func (transport taskMediaTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
+
+func TestTaskMediaRedirectsPublicStorageWithoutFetchingContent(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	previousMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemoryCache })
+	allowPrivateTaskMediaTest(t)
+	// The transport below serves every URL locally; domain checks remain enabled.
+	system_setting.GetFetchSetting().ApplyIPFilterForDomain = false
+	system_setting.GetFetchSetting().DomainFilterMode = false
+	system_setting.GetFetchSetting().DomainList = nil
+	client := service.GetSSRFProtectedHTTPClient()
+	previousClient := *client
+	t.Cleanup(func() { *client = previousClient })
+	var fetched int
+	var upstreamAuthorization string
+	client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+		fetched++
+		upstreamAuthorization = request.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"video/mp4"}},
+			Body: io.NopCloser(strings.NewReader("video-bytes")), Request: request,
+		}, nil
+	})
+
+	for _, test := range []struct {
+		name     string
+		url      string
+		private  bool
+		redirect bool
+	}{
+		{name: "R2 signed", url: "https://bucket.account.r2.cloudflarestorage.com/video.mp4?X-Amz-Signature=a%2Fb&X-Amz-Expires=3600", redirect: true},
+		{name: "R2 public", url: "https://pub-example.r2.dev/video.mp4", redirect: true},
+		{name: "S3", url: "https://bucket.s3.us-east-1.amazonaws.com/video.mp4", redirect: true},
+		{name: "CloudFront", url: "https://example.cloudfront.net/video.mp4", redirect: true},
+		{name: "GCS path style", url: "https://storage.googleapis.com/bucket/video.mp4", redirect: true},
+		{name: "GCS bucket", url: "https://bucket.storage.googleapis.com/video.mp4", redirect: true},
+		{name: "OSS", url: "https://bucket.oss-cn-hangzhou.aliyuncs.com/video.mp4", redirect: true},
+		{name: "COS", url: "https://bucket.cos.ap-guangzhou.myqcloud.com/video.mp4", redirect: true},
+		{name: "TOS", url: "https://bucket.tos-cn-beijing.volces.com/video.mp4", redirect: true},
+		{name: "OBS", url: "https://bucket.obs.cn-north-4.myhuaweicloud.com/video.mp4", redirect: true},
+		{name: "BOS", url: "https://bucket.bj.bcebos.com/video.mp4", redirect: true},
+		{name: "Azure", url: "https://account.blob.core.windows.net/videos/video.mp4", redirect: true},
+		{name: "unknown host", url: "https://cdn.example.com/video.mp4"},
+		{name: "HTTP storage", url: "http://bucket.r2.dev/video.mp4"},
+		{name: "spoofed suffix", url: "https://bucket.r2.dev.attacker.example/video.mp4"},
+		{name: "missing domain boundary", url: "https://notcloudfront.net/video.mp4"},
+		{name: "storage URL only in query", url: "https://example.com/video?url=https://bucket.r2.dev/video.mp4"},
+		{name: "authenticated storage", url: "https://bucket.storage.googleapis.com/video.mp4", private: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				t.Run(method, func(t *testing.T) {
+					fetched = 0
+					upstreamAuthorization = ""
+					recorder := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(recorder)
+					c.Request = httptest.NewRequest(method, "/v1/videos/task_generic/content", nil)
+					c.Request.Header.Set("Range", "bytes=0-3")
+					c.Request.Header.Set("Authorization", "Bearer client-secret")
+					descriptor := &relaychannel.TaskContentRequest{URL: test.url, Method: method, Credentialless: !test.private}
+					if test.private {
+						descriptor.Headers = map[string]string{"Authorization": "Bearer provider-secret"}
+					}
+					require.NoError(t, proxyTaskMedia(c, task, descriptor))
+					c.Writer.WriteHeaderNow()
+					assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+					assert.Equal(t, "no-referrer", recorder.Header().Get("Referrer-Policy"))
+					if test.redirect {
+						assert.Equal(t, http.StatusFound, recorder.Code)
+						assert.Equal(t, test.url, recorder.Header().Get("Location"))
+						assert.Zero(t, fetched, "CDN video must not pass through the gateway")
+						assert.NotContains(t, recorder.Body.String(), "video-bytes")
+					} else {
+						assert.Equal(t, http.StatusOK, recorder.Code)
+						assert.Empty(t, recorder.Header().Get("Location"))
+						assert.Equal(t, 1, fetched)
+						if test.private {
+							assert.Equal(t, "Bearer provider-secret", upstreamAuthorization)
+						} else {
+							assert.Empty(t, upstreamAuthorization)
+						}
+					}
+					if method == http.MethodHead {
+						assert.Empty(t, recorder.Body.String())
+					}
+				})
+			}
+		})
+	}
+
+	task.Action = constant.TaskActionTextToVideo
+	task.PrivateData.ResultURL = "https://bucket.r2.dev/video.mp4?signature=abc%2F123"
+	require.NoError(t, model.DB.Save(task).Error)
+	for _, endpoint := range []struct {
+		name    string
+		path    string
+		handler gin.HandlerFunc
+	}{
+		{name: "video endpoint", path: "/v1/videos/:task_id/content", handler: VideoProxy},
+		{name: "artifact endpoint", path: "/v1/tasks/:key/artifacts/:artifact_key/content", handler: TaskArtifactContent},
+	} {
+		t.Run(endpoint.name, func(t *testing.T) {
+			for _, userID := range []int{task.UserId, task.UserId + 1} {
+				fetched = 0
+				router := gin.New()
+				router.GET(endpoint.path, func(c *gin.Context) {
+					c.Set("id", userID)
+					endpoint.handler(c)
+				})
+				path := strings.NewReplacer(":task_id", task.TaskID, ":key", task.TaskID, ":artifact_key", "video").Replace(endpoint.path)
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+				if userID == task.UserId {
+					assert.Equal(t, http.StatusFound, recorder.Code)
+					assert.Equal(t, task.PrivateData.ResultURL, recorder.Header().Get("Location"))
+				} else {
+					assert.Equal(t, http.StatusNotFound, recorder.Code)
+					assert.Empty(t, recorder.Header().Get("Location"))
+					assert.NotContains(t, recorder.Body.String(), task.PrivateData.ResultURL)
+				}
+				assert.Zero(t, fetched)
+			}
+		})
+	}
+
+	t.Run("Sora plugin uses completed result URLs", func(t *testing.T) {
+		require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Updates(map[string]any{
+			"type": constant.ChannelTypeOpenAI, "base_url": "https://provider.example", "key": "provider-secret",
+		}).Error)
+		task.Platform = constant.TaskPlatform("sora")
+		task.PrivateData.UpstreamTaskID = "upstream-video"
+		task.PrivateData.Execution = &model.TaskExecutionSnapshot{TaskPlugin: &model.TaskPluginSnapshot{
+			Key: "sora", Name: "Sora", Version: "1.1.0", APIVersion: 1,
+		}}
+		previousTransport := client.Transport
+		t.Cleanup(func() { client.Transport = previousTransport })
+		providerBaseURL := "https://provider.example"
+		client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+			fetched++
+			assert.Equal(t, providerBaseURL+"/v1/videos/upstream-video/content", request.URL.String())
+			assert.Equal(t, "Bearer provider-secret", request.Header.Get("Authorization"))
+			return &http.Response{
+				StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"video/mp4"}},
+				Body: io.NopCloser(strings.NewReader("provider-video")), Request: request,
+			}, nil
+		})
+		const directURL = "https://bucket.r2.dev/video.mp4?signature=a%2Fb"
+		for _, field := range []string{
+			"url", "video_url", "output_url", "metadata.url", "metadata.origin_video_url", "object",
+			"same-origin", "same-storage-host", "same-storage-host-other-port", "unrecognized-host",
+			"unrecognized-before-cdn", "spoofed-storage-host", "no-url",
+		} {
+			t.Run(field, func(t *testing.T) {
+				fetched = 0
+				providerBaseURL = "https://provider.example"
+				wantRedirect := true
+				data := map[string]any{"status": "completed", "object": "video"}
+				switch field {
+				case "metadata.url":
+					data["metadata"] = map[string]any{"url": directURL}
+				case "metadata.origin_video_url":
+					data["metadata"] = map[string]any{"origin_video_url": directURL}
+				case "same-origin":
+					data["video_url"] = "https://provider.example:443/v1/videos/upstream-video/content"
+					wantRedirect = false
+				case "same-storage-host", "same-storage-host-other-port":
+					providerBaseURL = "https://bucket.r2.dev"
+					if field == "same-storage-host-other-port" {
+						providerBaseURL += ":8443"
+					}
+					data["video_url"] = directURL
+					wantRedirect = false
+				case "unrecognized-host":
+					data["url"] = "https://files.provider.example/v1/videos/upstream-video/content"
+					wantRedirect = false
+				case "unrecognized-before-cdn":
+					data["url"] = "https://files.provider.example/jobs/upstream-video"
+					data["video_url"] = directURL
+				case "spoofed-storage-host":
+					data["url"] = "https://bucket.r2.dev.example/video.mp4"
+					wantRedirect = false
+				case "no-url":
+					wantRedirect = false
+				default:
+					data[field] = directURL
+				}
+				require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("base_url", providerBaseURL).Error)
+				task.SetData(data)
+				require.NoError(t, model.DB.Save(task).Error)
+				for _, handler := range []gin.HandlerFunc{VideoProxy, TaskArtifactContent} {
+					fetched = 0
+					recorder := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(recorder)
+					c.Set("id", task.UserId)
+					c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}, {Key: "key", Value: task.TaskID}, {Key: "artifact_key", Value: "video"}}
+					c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+					handler(c)
+					c.Writer.WriteHeaderNow()
+					if !wantRedirect {
+						assert.Equal(t, http.StatusOK, recorder.Code)
+						assert.Equal(t, "provider-video", recorder.Body.String())
+						assert.Empty(t, recorder.Header().Get("Location"))
+						assert.Equal(t, 1, fetched)
+					} else {
+						assert.Equal(t, http.StatusFound, recorder.Code)
+						assert.Equal(t, directURL, recorder.Header().Get("Location"))
+						assert.Zero(t, fetched)
+					}
+				}
+			})
+		}
+	})
+
+	for _, credentialless := range []bool{true, false} {
+		name := "public download redirect"
+		if !credentialless {
+			name = "authenticated download redirect"
+		}
+		t.Run(name, func(t *testing.T) {
+			const cdnURL = "https://bucket.r2.dev/video.mp4?signature=abc%2F123"
+			previousTransport := client.Transport
+			t.Cleanup(func() { client.Transport = previousTransport })
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				fetched = 0
+				var cdnFetched bool
+				client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+					fetched++
+					response := &http.Response{
+						StatusCode: http.StatusFound, Header: make(http.Header),
+						Body: io.NopCloser(strings.NewReader("")), Request: request,
+					}
+					if request.URL.Host == "provider.example" {
+						if credentialless {
+							assert.Empty(t, request.Header.Get("Authorization"))
+						} else {
+							assert.Equal(t, "Bearer provider-secret", request.Header.Get("Authorization"))
+						}
+						if request.URL.Path == "/content" {
+							response.Header.Set("Location", "/download")
+						} else {
+							response.Header.Set("Location", cdnURL)
+						}
+					} else {
+						cdnFetched = true
+						response.StatusCode = http.StatusOK
+					}
+					return response, nil
+				})
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(method, "/content", nil)
+				descriptor := &relaychannel.TaskContentRequest{
+					URL: "https://provider.example/content", Method: method, Credentialless: credentialless,
+				}
+				if !credentialless {
+					descriptor.Headers = map[string]string{"Authorization": "Bearer provider-secret"}
+				}
+				err := proxyTaskMedia(c, task, descriptor)
+				require.NoError(t, err)
+				c.Writer.WriteHeaderNow()
+				assert.Equal(t, http.StatusFound, recorder.Code)
+				assert.Equal(t, cdnURL, recorder.Header().Get("Location"))
+				assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+				assert.Equal(t, "no-referrer", recorder.Header().Get("Referrer-Policy"))
+				assert.Equal(t, 2, fetched, "only the provider redirect chain should be fetched")
+				assert.False(t, cdnFetched, "neither video bytes nor provider credentials should pass to the CDN")
+			}
+		})
+	}
+
+	t.Run("authenticated same-origin storage redirect stays proxied", func(t *testing.T) {
+		fetched = 0
+		previousTransport := client.Transport
+		t.Cleanup(func() { client.Transport = previousTransport })
+		client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+			fetched++
+			assert.Equal(t, "Bearer provider-secret", request.Header.Get("Authorization"))
+			response := &http.Response{
+				StatusCode: http.StatusOK, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader("video-bytes")), Request: request,
+			}
+			if request.URL.Path == "/content" {
+				response.StatusCode = http.StatusFound
+				response.Header.Set("Location", "/video.mp4")
+			}
+			return response, nil
+		})
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+		require.NoError(t, proxyTaskMedia(c, task, &relaychannel.TaskContentRequest{
+			URL: "https://bucket.r2.dev/content", Method: http.MethodGet,
+			Headers: map[string]string{"Authorization": "Bearer provider-secret"},
+		}))
+		assert.Equal(t, http.StatusOK, recorder.Code)
+		assert.Empty(t, recorder.Header().Get("Location"))
+		assert.Equal(t, "video-bytes", recorder.Body.String())
+		assert.Equal(t, 2, fetched)
+	})
+
+	t.Run("blocked storage domain", func(t *testing.T) {
+		system_setting.GetFetchSetting().DomainList = []string{"bucket.r2.dev"}
+		previousTransport := client.Transport
+		t.Cleanup(func() { client.Transport = previousTransport })
+		client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+			fetched++
+			assert.Equal(t, "provider.example", request.URL.Host)
+			return &http.Response{
+				StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://bucket.r2.dev/video.mp4"}},
+				Body: io.NopCloser(strings.NewReader("")), Request: request,
+			}, nil
+		})
+		for index, sourceURL := range []string{"https://bucket.r2.dev/video.mp4", "https://provider.example/content"} {
+			fetched = 0
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+			err := proxyTaskMedia(c, task, &relaychannel.TaskContentRequest{
+				URL: sourceURL, Method: http.MethodGet, Credentialless: true,
+			})
+			require.Error(t, err)
+			assert.Empty(t, recorder.Header().Get("Location"))
+			assert.Equal(t, index, fetched)
+		}
+	})
+}
+
 func TestProxyTaskMediaPassesThroughUnsatisfiedRange(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

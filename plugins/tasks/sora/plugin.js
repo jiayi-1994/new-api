@@ -7,7 +7,7 @@ export const meta = {
     en: "OpenAI Sora video generation (text-to-video, image-to-video, and remix)",
     zh: "OpenAI Sora 视频生成（文生视频、图生视频、remix）",
   },
-  version: "1.1.0",
+  version: "1.1.1",
   channelTypes: [55, 1], // OpenAI-type channels natively serve sora with the same wire format
   author: { name: "QuantumNous" },
   models: ["sora-2", "sora-2-pro"],
@@ -169,6 +169,29 @@ export function listArtifacts(task) {
 
 export function buildContentRequest(ctx) {
   if (ctx.artifactKey !== "video") throw new Error("artifact_not_found");
+  const data = ctx.data || {};
+  const metadata = data.metadata || {};
+  const baseAuthority = /^https?:\/\/([^/?#]+)/i.exec(ctx.baseUrl);
+  const providerHost = baseAuthority ? baseAuthority[1].toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "") : "";
+  // Keep in sync with the host's isObjectStorageMediaURL download policy.
+  const storageSuffixes = [
+    ".r2.cloudflarestorage.com", ".r2.dev", ".amazonaws.com", ".cloudfront.net",
+    ".storage.googleapis.com", ".aliyuncs.com", ".myqcloud.com", ".volces.com",
+    ".myhuaweicloud.com", ".bcebos.com", ".blob.core.windows.net",
+  ];
+  // Compatible providers may return a storage URL without implementing /content.
+  // Never attach the channel key to those URLs. Same-host links keep using the
+  // authenticated provider endpoint; the host validates storage targets too.
+  for (const value of [data.url, data.video_url, data.output_url, metadata.url, metadata.origin_video_url, data.object]) {
+    if (typeof value !== "string") continue;
+    const url = value.trim();
+    const external = /^https:\/\/([a-z0-9.-]+)(?::443)?(?:[/?][^\s#\\]*)?$/i.exec(url);
+    if (!external) continue;
+    const host = external[1].toLowerCase();
+    if (host.replace(/\.$/, "") === providerHost) continue;
+    if (host !== "storage.googleapis.com" && !storageSuffixes.some(suffix => host.endsWith(suffix))) continue;
+    return { url, method: ctx.clientRequest.method, credentialless: true };
+  }
   return {
     url: ctx.baseUrl + "/v1/videos/" + encodeURIComponent(ctx.upstreamTaskId) + "/content",
     method: ctx.clientRequest.method,
