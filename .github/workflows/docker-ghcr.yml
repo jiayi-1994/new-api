@@ -1,7 +1,8 @@
-name: Publish Docker image (GHCR fork build)
+name: Publish Docker image (GHCR and Docker Hub)
 
-# Fork-specific build: pushes to ghcr.io/<owner>/new-api using the built-in
-# GITHUB_TOKEN, so no extra registry secrets are required.
+# Fork-specific build: pushes to ghcr.io/<owner>/new-api and Docker Hub.
+# GHCR uses GITHUB_TOKEN; Docker Hub requires DOCKERHUB_USERNAME and
+# DOCKERHUB_TOKEN repository secrets.
 on:
   workflow_dispatch:
   push:
@@ -10,10 +11,11 @@ on:
       - v1.1
       - v1.3
       - v1.4
-      - feature/v1.0.0
+      - 'feature/**'
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/new-api
+  DOCKERHUB_IMAGE: docker.io/xjy94/new-api
   # Only this release branch may update :latest.
   LATEST_BRANCH: v1.3
 
@@ -24,7 +26,7 @@ concurrency:
 jobs:
   verify:
     name: Verify video download flow (Linux)
-    if: github.ref_type == 'branch' && contains(fromJSON('["v1.0", "v1.1", "v1.3", "v1.4", "feature/v1.0.0"]'), github.ref_name)
+    if: github.ref_type == 'branch' && (contains(fromJSON('["v1.0", "v1.1", "v1.3", "v1.4"]'), github.ref_name) || startsWith(github.ref_name, 'feature/'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -50,7 +52,7 @@ jobs:
         run: go test ./controller ./router ./relay/channel/task/jsplugin -count=1 -timeout=10m
 
   build:
-    name: Build & push (amd64)
+    name: Build & push to GHCR and Docker Hub (amd64)
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -76,6 +78,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Resolve tags
         id: meta
         run: |
@@ -86,11 +95,13 @@ jobs:
           # Keep :latest on the established release branch.
           {
             echo "tags<<TAGS_EOF"
-            echo "${IMAGE}:${branch}"
-            echo "${IMAGE}:${branch}-${sha}"
-            if [ "${GITHUB_REF}" = "refs/heads/${LATEST_BRANCH}" ]; then
-              echo "${IMAGE}:latest"
-            fi
+            for image in "$IMAGE" "$DOCKERHUB_IMAGE"; do
+              echo "${image}:${branch}"
+              echo "${image}:${branch}-${sha}"
+              if [ "${GITHUB_REF}" = "refs/heads/${LATEST_BRANCH}" ]; then
+                echo "${image}:latest"
+              fi
+            done
             echo "TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
 
