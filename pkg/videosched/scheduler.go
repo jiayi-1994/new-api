@@ -97,8 +97,8 @@ type ReferenceLine struct {
 }
 
 type HealthStat struct {
-	Rate    float64
-	Samples int
+	Rate    float64 `json:"rate"`
+	Samples int     `json:"samples"`
 }
 
 type SellPrice struct {

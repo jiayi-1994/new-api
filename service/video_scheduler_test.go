@@ -3,10 +3,13 @@ package service
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -102,7 +105,10 @@ func TestDecideVideoSchedFreezesOneRequestLevelAnswer(t *testing.T) {
 		// once and while its runtime prerequisites hold; shadow needs neither.
 		{"on before the first calibration", operation_setting.VideoSchedulingModeOn, nil, protocol(megabyai, seedance), VideoSchedDecision{Reason: VideoSchedReasonNotReady}, true, false},
 		{"on without the memory cache", operation_setting.VideoSchedulingModeOn, nil, protocol(megabyai, seedance), VideoSchedDecision{Reason: VideoSchedReasonNotReady}, false, true},
-		{"shadow before the first calibration", operation_setting.VideoSchedulingModeShadow, nil, protocol(megabyai, seedance), VideoSchedDecision{Shadow: true}, true, true},
+		{"shadow before the first calibration", operation_setting.VideoSchedulingModeShadow, nil, protocol(megabyai, seedance), VideoSchedDecision{Shadow: true}, true, false},
+		// Shadow reads candidates from the memory cache like on does; without it
+		// the candidate snapshot would silently be empty.
+		{"shadow without the memory cache", operation_setting.VideoSchedulingModeShadow, nil, protocol(megabyai, seedance), VideoSchedDecision{Reason: VideoSchedReasonNotReady}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setVideoSchedulingForTest(t, tc.mode, tc.models...)
@@ -375,6 +381,7 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	useVideoHealthBackend(t, "memory")
 	setting := operation_setting.GetVideoSchedulingSetting()
 	setting.MinSamples, setting.MinSubmitRate, setting.UnknownSellPolicy = 1, 0.8, "relative"
+	setting.ProbeRatio, setting.ProbeMaxInFlight = 0, 1 // subtests turn probing on
 	setting.CapacityGroups = map[string]int{"acct": 2}
 	plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
 	require.NoError(t, err)
@@ -444,6 +451,98 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		assert.Equal(t, want, got)
 	})
 
+	t.Run("a frozen takeover keeps its candidates after scheduling is switched off", func(t *testing.T) {
+		c := request(VideoSchedDecision{Takeover: true}, 3207)
+		setting.Mode = operation_setting.VideoSchedulingModeOff
+		t.Cleanup(func() { setting.Mode = operation_setting.VideoSchedulingModeShadow })
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		assert.Equal(t, 3204, channel.Id)
+	})
+
+	t.Run("a gated channel is probed and a lost slot is decided again", func(t *testing.T) {
+		setting.ProbeRatio = 1
+		lastProbeKey, _ := videoProbeStateKeys(3201)
+		restartCooldown := func() { require.NoError(t, videoHealthStore().set(lastProbeKey, 0)) }
+		t.Cleanup(func() {
+			setting.ProbeRatio = 0
+			restartCooldown()
+		})
+
+		// 3201 fails the submit gate in the top layer; with the gates relaxed it
+		// is the only eligible channel there, so it is probed.
+		c := request(VideoSchedDecision{Takeover: true}, 3207)
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		assert.Equal(t, 3201, channel.Id)
+		records := VideoScheduleRecords(c)
+		require.Len(t, records, 1)
+		assert.True(t, records[0].Probe)
+		assert.NotEmpty(t, records[0].Fingerprint)
+		lease, leased := peekVideoProbeLease(c)
+		require.True(t, leased)
+		assert.Equal(t, 3201, lease.ChannelID)
+		health, err := GetVideoChannelHealth(3201, "videos-fast", 1)
+		require.NoError(t, err)
+		assert.Positive(t, health.Probe.LastProbeAt, "the cooldown starts at acquisition")
+
+		// The task inherits the selection, so terminal logs correlate by task.
+		RequestPolicy(c).BeginAttempt(channel, "default")
+		summary := NewVideoSchedulingSummary(c, channel, "videos-fast")
+		require.NotNil(t, summary)
+		require.NotNil(t, summary.ProbeSlot)
+		assert.Equal(t, lease.Token, summary.ProbeSlot.Token)
+		assert.Equal(t, 3201, summary.Selected)
+		assert.Equal(t, 1, summary.SelectionSeq)
+		assert.Equal(t, 2, summary.AttemptSeq, "3207 was attempted first")
+		assert.True(t, summary.Probe)
+		require.NotNil(t, summary.Spec)
+		assert.Equal(t, map[string]int{"video": 0, "image": 0, "audio": 0}, summary.Spec.References)
+		other := model.NewLogOther()
+		AppendVideoScheduleConsumeLog(c, &model.Task{ChannelId: 3201}, other)
+		adminInfo := other.Snapshot()["admin_info"].(map[string]any)
+		schedule := adminInfo["video_schedule"].(map[string]any)
+		assert.Equal(t, "on", schedule["mode"])
+		assert.Equal(t, 3201, schedule["selected"])
+		assert.Equal(t, true, schedule["probe"])
+		assert.Len(t, schedule["attempts"], 1)
+		assert.NotContains(t, other.Snapshot(), "video_schedule")
+		ReleaseUnpersistedVideoProbeLease(c)
+		restartCooldown()
+
+		// Another request takes the slot between this one's decision and its
+		// admission: the lost choice is recorded, and a fresh snapshot that
+		// sees the held slot decides again under a new selection_seq.
+		previous := acquireVideoProbeSlot
+		t.Cleanup(func() { acquireVideoProbeSlot = previous })
+		rival := newVideoSchedTestContext(t)
+		acquireVideoProbeSlot = func(_ *gin.Context, channelID, n int, ttl time.Duration) (bool, error) {
+			won, err := AcquireVideoProbeSlot(rival, channelID, n, ttl)
+			require.NoError(t, err)
+			require.True(t, won)
+			return false, nil
+		}
+		c = request(VideoSchedDecision{Takeover: true}, 3207)
+		channel, err = model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		assert.Equal(t, 3204, channel.Id)
+		records = VideoScheduleRecords(c)
+		require.Len(t, records, 2)
+		assert.Equal(t, []int{1, 2}, []int{records[0].SelectionSeq, records[1].SelectionSeq})
+		assert.Equal(t, []int{2, 2}, []int{records[0].AttemptSeq, records[1].AttemptSeq})
+		assert.Equal(t, 3201, records[0].Recommended)
+		assert.Equal(t, VideoSchedAdmissionProbeTaken, records[0].Admission)
+		assert.Equal(t, 3204, records[1].Recommended)
+		assert.False(t, records[1].Probe)
+		assert.NotEqual(t, records[0].Fingerprint, records[1].Fingerprint)
+		_, leased = peekVideoProbeLease(c)
+		assert.False(t, leased)
+		ReleaseUnpersistedVideoProbeLease(rival)
+	})
+
 	t.Run("no eligible candidate never falls back to ordinary selection", func(t *testing.T) {
 		channel, err := model.GetRandomSatisfiedChannelWithContext(request(VideoSchedDecision{Takeover: true}, 3204, 3207), "default", "videos-fast", 0, nil)
 		require.NoError(t, err)
@@ -460,6 +559,9 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	})
 
 	t.Run("shadow scores after ordinary selection and writes no state", func(t *testing.T) {
+		// Shadow recommends the probe but never acquires its slot.
+		setting.ProbeRatio = 1
+		t.Cleanup(func() { setting.ProbeRatio = 0 })
 		// fmt prints maps in key order, so equal text is equal state.
 		snapshot := func() string {
 			memoryVideoHealth.mu.Lock()
@@ -477,7 +579,8 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		assert.Equal(t, "shadow", records[0].Mode)
 		assert.Equal(t, selectGroup, records[0].Group)
 		assert.Equal(t, channel.Id, records[0].Selected)
-		assert.Equal(t, 3204, records[0].Recommended)
+		assert.Equal(t, 3201, records[0].Recommended)
+		assert.True(t, records[0].Probe)
 		assert.False(t, records[0].AffinityHit)
 		assert.Equal(t, before, snapshot())
 		_, leased := peekVideoProbeLease(c)
@@ -563,6 +666,185 @@ func TestShouldDisableChannelForRequestYieldsTransientFailuresToScheduling(t *te
 				health = "channel_disable_requested"
 			}
 			assert.Equal(t, health, events[len(events)-1].Health)
+		})
+	}
+}
+
+// videoDecisionTestInput is a hand-built decision input: channel 1 is healthy
+// and proven, every other channel is added by the case. Probing and
+// exploration are off unless a case turns them on.
+func videoDecisionTestInput(candidates ...videosched.Candidate) VideoDecisionInput {
+	healthy := videosched.HealthStat{Rate: 1, Samples: 20}
+	return VideoDecisionInput{
+		Candidates: append([]videosched.Candidate{videoDecisionTestCandidate(1, 0, healthy, healthy)}, candidates...),
+		Policy: videosched.Policy{
+			Weights:       videosched.DefaultWeights,
+			MinSubmitRate: 0.8, MinGenRate: 0.5, MinSamples: 10,
+			UnknownSellPolicy: videosched.UnknownSellExclude,
+			MaxCostUSD:        1e6,
+		},
+		Explore:       VideoExploreSettings{ProbeCooldownSec: 300, ProbeMaxInFlight: 1, ExploreMaxInFlight: 2},
+		Probe:         map[int]VideoProbeState{},
+		SlotOccupancy: map[int]int{},
+		Now:           time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+		Seed:          7,
+	}
+}
+
+func videoDecisionTestCandidate(id int, priority int64, submit, gen videosched.HealthStat) videosched.Candidate {
+	return videosched.Candidate{
+		ID: id, Name: fmt.Sprintf("video-%d", id), Priority: priority, Weight: 1, Quality: 0.5,
+		Cost:   videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": 1}},
+		Spec:   videosched.Spec{Tier: "*", References: map[string]int{"video": 0, "image": 0, "audio": 0}},
+		Sell:   videosched.SellPrice{Kind: videosched.SellKnown, USD: 10},
+		Submit: submit, Gen: gen,
+	}
+}
+
+func TestDecideVideoScheduleProbesAndExplores(t *testing.T) {
+	healthy := videosched.HealthStat{Rate: 1, Samples: 20}
+	failing := videosched.HealthStat{Rate: 0, Samples: 20}
+	gated := func(id int, priority int64) videosched.Candidate {
+		return videoDecisionTestCandidate(id, priority, failing, healthy)
+	}
+	unproven := func(id, samples int) videosched.Candidate {
+		return videoDecisionTestCandidate(id, 0, videosched.HealthStat{Rate: 1, Samples: samples}, videosched.HealthStat{Rate: 1, Samples: samples})
+	}
+	probing := func(input *VideoDecisionInput) { input.Explore.ProbeRatio = 1 }
+
+	for _, tc := range []struct {
+		name     string
+		extra    []videosched.Candidate
+		setup    func(*VideoDecisionInput)
+		want     int
+		probe    bool
+		explore  bool
+		excluded map[int]string
+	}{
+		{"a gated channel gets a probe despite a lower score", []videosched.Candidate{gated(2, 0)}, probing, 2, true, false, nil},
+		{"no probe draw keeps it gated", []videosched.Candidate{gated(2, 0)}, nil, 1, false, false, map[int]string{2: "submit rate 0.00 < 0.80"}},
+		{"a disabled channel is never probed", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Candidates[1].Excluded = "disabled"
+		}, 1, false, false, map[int]string{2: "disabled"}},
+		{"a tried channel is never probed", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Candidates[1].Excluded = "tried"
+		}, 1, false, false, nil},
+		{"an at-capacity channel is never probed", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Candidates[1].Capacity, input.Candidates[1].InFlight = 1, 1
+		}, 1, false, false, nil},
+		{"an unpriced channel is never probed", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Candidates[1].Cost.Prices = nil
+		}, 1, false, false, nil},
+		{"the cooldown doubles per consecutive failure", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Probe[2] = VideoProbeState{LastProbeAt: input.Now.Add(-9 * time.Minute).Unix(), ConsecutiveFails: 1}
+		}, 1, false, false, nil},
+		{"an elapsed cooldown probes again", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.Probe[2] = VideoProbeState{LastProbeAt: input.Now.Add(-10 * time.Minute).Unix(), ConsecutiveFails: 1}
+		}, 2, true, false, nil},
+		{"held probe slots block the probe", []videosched.Candidate{gated(2, 0)}, func(input *VideoDecisionInput) {
+			probing(input)
+			input.SlotOccupancy[2] = 1
+		}, 1, false, false, nil},
+		{"a lower layer is never probed across a live higher layer", []videosched.Candidate{gated(2, -1)}, probing, 1, false, false, nil},
+		{"a higher layer holding only gated channels is probed", []videosched.Candidate{gated(2, 5)}, probing, 2, true, false, nil},
+		{"with proven channels the fewest-samples unproven one is explored", []videosched.Candidate{unproven(3, 5), unproven(4, 1)}, func(input *VideoDecisionInput) {
+			input.Explore.ExploreShare = 1
+		}, 4, false, true, nil},
+		{"without an explore draw unproven channels stay out of the argmax", []videosched.Candidate{unproven(3, 5), unproven(4, 1)}, nil, 1, false, false,
+			map[int]string{3: "unproven", 4: "unproven"}},
+		{"without proven channels unproven ones are capped per channel", []videosched.Candidate{unproven(3, 0), unproven(4, 0)}, func(input *VideoDecisionInput) {
+			input.Candidates = input.Candidates[1:]
+			input.Candidates[0].Quality, input.Candidates[0].InFlight = 1, 2
+		}, 4, false, false, map[int]string{3: "explore limit"}},
+		{"a zero explore cap leaves unproven channels uncapped", []videosched.Candidate{unproven(3, 0), unproven(4, 0)}, func(input *VideoDecisionInput) {
+			input.Candidates = input.Candidates[1:]
+			input.Candidates[0].Quality, input.Candidates[0].InFlight = 1, 2
+			input.Explore.ExploreMaxInFlight = 0
+		}, 3, false, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := videoDecisionTestInput(tc.extra...)
+			if tc.setup != nil {
+				tc.setup(&input)
+			}
+			choice := DecideVideoSchedule(input)
+			require.NotNil(t, choice.Best)
+			assert.Equal(t, tc.want, choice.Best.ID)
+			assert.Equal(t, tc.probe, choice.Probe)
+			assert.Equal(t, tc.explore, choice.Explore)
+			for id, reason := range tc.excluded {
+				for _, score := range choice.Board {
+					if score.Candidate.ID == id {
+						assert.Equal(t, reason, score.Reason, "channel %d", id)
+					}
+				}
+			}
+			assert.Equal(t, choice, DecideVideoSchedule(input), "the same input decides the same")
+		})
+	}
+}
+
+// The fingerprint covers every input of the decision, probe and explore
+// included, and the segment hashes name the part that changed.
+func TestVideoDecisionFingerprintPinsEveryInput(t *testing.T) {
+	encoded, err := common.Marshal(map[string]int{"b": 1, "a": 2})
+	require.NoError(t, err)
+	require.Equal(t, `{"a":2,"b":1}`, string(encoded), "canonical JSON relies on common.Marshal sorting map keys")
+
+	base := func() VideoDecisionInput {
+		input := videoDecisionTestInput(videoDecisionTestCandidate(2, 0, videosched.HealthStat{Rate: 0, Samples: 20}, videosched.HealthStat{Rate: 1, Samples: 20}))
+		input.Probe[2] = VideoProbeState{LastProbeAt: 100, ConsecutiveFails: 1}
+		return input
+	}
+	whole, segments, err := VideoDecisionFingerprint(base())
+	require.NoError(t, err)
+	again, againSegments, err := VideoDecisionFingerprint(base())
+	require.NoError(t, err)
+	assert.Equal(t, whole, again)
+	assert.Equal(t, segments, againSegments)
+	assert.ElementsMatch(t, []string{"candidates", "settings", "probe", "slots", "now", "seed"}, slices.Collect(maps.Keys(segments)))
+
+	for _, tc := range []struct {
+		name    string
+		segment string
+		change  func(*VideoDecisionInput)
+	}{
+		{"last probe time", "probe", func(input *VideoDecisionInput) {
+			input.Probe[2] = VideoProbeState{LastProbeAt: 101, ConsecutiveFails: 1}
+		}},
+		{"consecutive failures", "probe", func(input *VideoDecisionInput) {
+			input.Probe[2] = VideoProbeState{LastProbeAt: 100, ConsecutiveFails: 2}
+		}},
+		{"probe cooldown", "settings", func(input *VideoDecisionInput) { input.Explore.ProbeCooldownSec = 301 }},
+		{"probe ratio", "settings", func(input *VideoDecisionInput) { input.Explore.ProbeRatio = 0.5 }},
+		{"probe slots", "settings", func(input *VideoDecisionInput) { input.Explore.ProbeMaxInFlight = 2 }},
+		{"explore share", "settings", func(input *VideoDecisionInput) { input.Explore.ExploreShare = 0.2 }},
+		{"explore cap", "settings", func(input *VideoDecisionInput) { input.Explore.ExploreMaxInFlight = 3 }},
+		{"cost bound", "settings", func(input *VideoDecisionInput) { input.Policy.MaxCostUSD = 2e6 }},
+		{"slot occupancy", "slots", func(input *VideoDecisionInput) { input.SlotOccupancy[2] = 1 }},
+		{"clock", "now", func(input *VideoDecisionInput) { input.Now = input.Now.Add(time.Second) }},
+		{"seed", "seed", func(input *VideoDecisionInput) { input.Seed = 8 }},
+		{"in-flight count", "candidates", func(input *VideoDecisionInput) { input.Candidates[1].InFlight = 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := base()
+			tc.change(&input)
+			changed, changedSegments, err := VideoDecisionFingerprint(input)
+			require.NoError(t, err)
+			assert.NotEqual(t, whole, changed)
+			for name, hash := range segments {
+				if name == tc.segment {
+					assert.NotEqual(t, hash, changedSegments[name], name)
+				} else {
+					assert.Equal(t, hash, changedSegments[name], name)
+				}
+			}
 		})
 	}
 }

@@ -94,11 +94,15 @@ func ValidateVideoSchedulingOption(key, value string) error {
 	switch field {
 	case "mode":
 		switch value {
-		case VideoSchedulingModeOff, VideoSchedulingModeShadow:
+		case VideoSchedulingModeOff:
 			return nil
-		case VideoSchedulingModeOn:
+		case VideoSchedulingModeShadow, VideoSchedulingModeOn:
+			// Candidates are read from the in-memory channel cache.
 			if !common.MemoryCacheEnabled {
-				return fmt.Errorf("video scheduling mode on requires MEMORY_CACHE_ENABLED")
+				return fmt.Errorf("video scheduling mode %s requires MEMORY_CACHE_ENABLED", value)
+			}
+			if value == VideoSchedulingModeShadow {
+				return nil
 			}
 			// ponytail: no single-instance detector; a slave node without Redis
 			// is the only multi-instance proof available. Add an instance

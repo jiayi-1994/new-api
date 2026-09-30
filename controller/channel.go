@@ -276,7 +276,7 @@ func GetAllChannels(c *gin.Context) {
 		typeCounts[r.Type] = r.Count
 	}
 	common.ApiSuccess(c, gin.H{
-		"items":       channelData,
+		"items":       channelListItems(channelData),
 		"total":       total,
 		"page":        pageInfo.GetPage(),
 		"page_size":   pageInfo.GetPageSize(),
@@ -472,7 +472,7 @@ func SearchChannels(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"items":       pagedData,
+			"items":       channelListItems(pagedData),
 			"total":       total,
 			"type_counts": typeCounts,
 		},

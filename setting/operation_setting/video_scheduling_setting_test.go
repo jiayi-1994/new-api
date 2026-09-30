@@ -71,4 +71,6 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "on"), "slave without Redis")
 	common.RedisEnabled, common.IsMasterNode, common.MemoryCacheEnabled = true, true, false
 	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "on"), "memory cache off")
+	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "shadow"), "shadow reads the memory cache too")
+	require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "off"))
 }

@@ -150,10 +150,28 @@ type TaskPrivateData struct {
 // TaskSchedulingSummary is what video scheduling needs once a task outlives
 // its request: the health key, the capacity group counted at submit (so a
 // regrouped channel still releases the right counter), and an owned probe slot.
+// Selected, the sequences and Spec tie the task to the scheduling selection in
+// its consumption log.
 type TaskSchedulingSummary struct {
 	Model         string         `json:"model"`
 	CapacityGroup string         `json:"capacity_group,omitempty"`
 	ProbeSlot     *TaskProbeSlot `json:"probe_slot,omitempty"`
+	Selected      int            `json:"selected,omitempty"`
+	SelectionSeq  int            `json:"selection_seq,omitempty"`
+	AttemptSeq    int            `json:"attempt_seq,omitempty"`
+	Probe         bool           `json:"probe,omitempty"`
+	Spec          *VideoSpecView `json:"spec,omitempty"`
+}
+
+// VideoSpecView summarizes the spec a candidate's plugin described: output
+// seconds (nil = unknown), resolution tier, reference counts per kind, and the
+// fields the plugin could not determine.
+type VideoSpecView struct {
+	OutputSeconds *float64       `json:"output_seconds,omitempty"`
+	SecondsKind   string         `json:"seconds_kind,omitempty"`
+	Tier          string         `json:"tier,omitempty"`
+	References    map[string]int `json:"references"`
+	Missing       []string       `json:"missing,omitempty"`
 }
 
 // TaskProbeSlot is a probe lease; only the holder of Token may release Key.

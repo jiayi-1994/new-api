@@ -176,12 +176,25 @@ func TestVideoProbeLeaseLifecycle(t *testing.T) {
 			ok, err = AcquireVideoProbeSlot(healthTestContext(), 9, 0, time.Hour)
 			require.NoError(t, err)
 			assert.False(t, ok, "the slot is taken")
+			held, err := VideoProbeSlotsHeld(9, 2)
+			require.NoError(t, err)
+			assert.Equal(t, 1, held)
+			// A request holds one lease at most: taking slot 1 frees slot 0.
+			ok, err = AcquireVideoProbeSlot(c, 9, 1, time.Hour)
+			require.NoError(t, err)
+			require.True(t, ok)
+			held, err = VideoProbeSlotsHeld(9, 1)
+			require.NoError(t, err)
+			assert.Zero(t, held)
 			ObserveVideoSubmit(c, channel, "m", &taskdto.TaskError{StatusCode: http.StatusBadGateway})
+			held, err = VideoProbeSlotsHeld(9, 2)
+			require.NoError(t, err)
+			assert.Zero(t, held, "a rejected probe submission frees its slot")
 			health, err := GetVideoChannelHealth(9, "m", 0)
 			require.NoError(t, err)
 			assert.Equal(t, 1, health.Probe.ConsecutiveFails)
 			assert.Positive(t, health.Probe.LastProbeAt)
-			assert.Equal(t, 10*time.Minute, VideoProbeCooldown(health.Probe))
+			assert.Equal(t, 10*time.Minute, VideoProbeCooldown(300, health.Probe))
 
 			// An accepted probe hands the slot to its task, which releases it at
 			// the terminal state and clears the failure streak.

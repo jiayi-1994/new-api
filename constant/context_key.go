@@ -90,4 +90,7 @@ const (
 	// ContextKeyVideoSchedBoard holds every video scheduling selection of the
 	// request ([]service.VideoScheduleRecord), appended in selection order.
 	ContextKeyVideoSchedBoard ContextKey = "video_sched_board"
+	// ContextKeyTaskPersisted holds the ID of the task this request inserted,
+	// set right after the insert succeeds.
+	ContextKeyTaskPersisted ContextKey = "task_persisted"
 )

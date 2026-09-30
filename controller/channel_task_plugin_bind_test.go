@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -229,4 +230,156 @@ export function parseTaskResult() { return {}; }
 	}
 	assert.Contains(t, copyChannel(2, common.RoleAdminUser).Body.String(), "task plugin channels require the task_plugin.bind permission")
 	assert.Contains(t, copyChannel(1, common.RoleRootUser).Body.String(), `"success":true`)
+}
+
+func videoScheduleAdminRequest(t *testing.T, handler gin.HandlerFunc, method, target, body string, params ...gin.Param) map[string]any {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("id", 1)
+	context.Set("role", common.RoleRootUser)
+	context.Params = params
+	context.Request = httptest.NewRequest(method, target, strings.NewReader(body))
+	context.Request.Header.Set("Content-Type", "application/json")
+	handler(context)
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
+	return response
+}
+
+// The simulator runs a request through the same entry, assembly and decision
+// as live traffic. Its fingerprint only repeats for an equal decision input,
+// and the segment hashes name the part that changed.
+func TestVideoScheduleSimulateAndSchedulable(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+	previousMemory := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemory
+		model.InitChannelCache()
+	})
+	common.MemoryCacheEnabled = true
+	for i, plugin := range []string{"megabyai", "seedance-hjmie", "seedance-hjmie"} {
+		priority, weight, autoBan := int64(0), uint(100), 0
+		binding := fmt.Sprintf(`{"task_plugin_key":%q}`, plugin)
+		settings := `{"video_scheduling":{"quality":0.5,"models":{"videos-fast":{"mode":"per_second","prices":{"720p":0.05}}}}}`
+		if i == 2 {
+			settings = "" // a channel scheduling never considers
+		}
+		channel := &model.Channel{Id: 7701 + i, Type: constant.ChannelTypeTaskPlugin, Key: "k", Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("sim-%d", i),
+			Weight: &weight, Priority: &priority, AutoBan: &autoBan, Models: "videos-fast", Group: "default", Setting: &binding, OtherSettings: settings}
+		require.NoError(t, model.DB.Create(channel).Error)
+		require.NoError(t, channel.AddAbilities(model.DB))
+	}
+	model.InitChannelCache()
+
+	snapshot := *operation_setting.GetVideoSchedulingSetting()
+	snapshot.UnknownSellPolicy = "relative"
+	simulate := func(change func(map[string]any)) map[string]any {
+		body := map[string]any{
+			"group": "default", "entry": "protocol", "protocol": "openai_video", "seed": 42, "now": "2026-10-01T12:00:00Z",
+			"request_body":    map[string]any{"model": "videos-fast", "prompt": "cat", "seconds": 8, "size": "1280x720"},
+			"config_snapshot": snapshot,
+			"health_override": map[string]any{"7701": map[string]any{"probe": map[string]any{"last_probe_at": 100, "consecutive_fails": 1}}},
+		}
+		if change != nil {
+			change(body)
+		}
+		encoded, err := common.Marshal(body)
+		require.NoError(t, err)
+		response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", string(encoded))
+		require.Equal(t, true, response["success"], response["message"])
+		return response["data"].(map[string]any)
+	}
+
+	first := simulate(nil)
+	assert.Equal(t, "videos-fast", first["model"])
+	assert.Equal(t, "2026-10-01T12:00:00Z", first["now"])
+	assert.Equal(t, float64(42), first["seed"])
+	candidates := first["candidates"].([]any)
+	require.Len(t, candidates, 3)
+	rows := map[float64]map[string]any{}
+	for _, candidate := range candidates {
+		row := candidate.(map[string]any)
+		rows[row["id"].(float64)] = row
+	}
+	assert.Equal(t, "megabyai", rows[7701]["plugin"])
+	assert.Equal(t, "seedance-hjmie", rows[7702]["plugin"])
+	assert.InDelta(t, 0.4, rows[7701]["cost_usd"], 1e-9, "8 seconds at $0.05")
+	assert.Equal(t, "not schedulable: no cost table", rows[7703]["excluded"])
+	assert.NotZero(t, first["recommended"])
+
+	again := simulate(nil)
+	assert.Equal(t, first["fingerprint"], again["fingerprint"])
+	assert.Equal(t, first["segments"], again["segments"])
+	assert.Equal(t, first["recommended"], again["recommended"])
+
+	for _, tc := range []struct {
+		name    string
+		segment string
+		change  func(map[string]any)
+	}{
+		{"probe state", "probe", func(body map[string]any) {
+			body["health_override"] = map[string]any{"7701": map[string]any{"probe": map[string]any{"last_probe_at": 100, "consecutive_fails": 2}}}
+		}},
+		{"probe cooldown", "settings", func(body map[string]any) {
+			changed := snapshot
+			changed.ProbeCooldownSec = 600
+			body["config_snapshot"] = changed
+		}},
+		{"probe slots", "slots", func(body map[string]any) { body["slot_override"] = map[string]any{"7701": 1} }},
+		{"in-flight", "candidates", func(body map[string]any) {
+			body["inflight_override"] = map[string]any{"channels": map[string]any{"7702": 1}}
+		}},
+		{"seed", "seed", func(body map[string]any) { body["seed"] = 43 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := simulate(tc.change)
+			assert.NotEqual(t, first["fingerprint"], changed["fingerprint"])
+			segments, changedSegments := first["segments"].(map[string]any), changed["segments"].(map[string]any)
+			for name, hash := range segments {
+				if name == tc.segment {
+					assert.NotEqual(t, hash, changedSegments[name], name)
+				} else {
+					assert.Equal(t, hash, changedSegments[name], name)
+				}
+			}
+		})
+	}
+
+	for _, body := range []string{
+		`{"group":"auto","entry":"protocol","protocol":"openai_video","request_body":{"model":"videos-fast"}}`,
+		`{"group":"default","entry":"batch","request_body":{"model":"videos-fast"}}`,
+		`{"group":"default","entry":"protocol","protocol":"openai_video","request_body":{"model":"videos-fast"}}`, // no plugin accepts a promptless body
+	} {
+		response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", body)
+		assert.Equal(t, false, response["success"], body)
+	}
+
+	schedulable := videoScheduleAdminRequest(t, GetVideoSchedulable, http.MethodGet, "/api/channel/video_schedule/schedulable?plugin=seedance-hjmie", "")
+	require.Equal(t, true, schedulable["success"])
+	data := schedulable["data"].(map[string]any)
+	assert.Equal(t, true, data["describe_spec"])
+	assert.Contains(t, data["models"], map[string]any{"model": "videos-fast", "static_blockers": []any{}})
+	schedulable = videoScheduleAdminRequest(t, GetVideoSchedulable, http.MethodGet, "/api/channel/video_schedule/schedulable?plugin=sora", "")
+	assert.Equal(t, false, schedulable["data"].(map[string]any)["describe_spec"])
+
+	health := videoScheduleAdminRequest(t, GetChannelVideoHealth, http.MethodGet, "/api/channel/7701/video_health", "", gin.Param{Key: "id", Value: "7701"})
+	require.Equal(t, true, health["success"])
+	view := health["data"].(map[string]any)
+	assert.Contains(t, view, "submit")
+	assert.Contains(t, view["models"], "videos-fast")
+	health = videoScheduleAdminRequest(t, GetChannelVideoHealth, http.MethodGet, "/api/channel/7703/video_health", "", gin.Param{Key: "id", Value: "7703"})
+	assert.Nil(t, health["data"], "a channel without a cost table has no scheduling health")
+
+	list := videoScheduleAdminRequest(t, GetAllChannels, http.MethodGet, "/api/channel/?p=1&page_size=10", "")
+	require.Equal(t, true, list["success"])
+	for _, item := range list["data"].(map[string]any)["items"].([]any) {
+		channel := item.(map[string]any)
+		if channel["id"] == float64(7703) {
+			assert.NotContains(t, channel, "video_health")
+		} else {
+			assert.Contains(t, channel, "video_health")
+			assert.Equal(t, fmt.Sprintf("sim-%d", int(channel["id"].(float64))-7701), channel["name"])
+		}
+	}
 }

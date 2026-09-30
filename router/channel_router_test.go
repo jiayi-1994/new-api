@@ -4,13 +4,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
@@ -61,4 +66,50 @@ func assertChannelRoutePermission(t *testing.T, method string, path string, perm
 		}
 	}
 	t.Fatalf("route %s %s not found", method, path)
+}
+
+// The simulator runs plugin hooks on an arbitrary body, so it is root-only;
+// the read-only scheduling views follow channel read permission.
+func TestVideoScheduleRoutesPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/video_health", authz.ChannelRead, controller.GetChannelVideoHealth)
+	assertChannelRoutePermission(t, http.MethodGet, "/video_schedule/schedulable", authz.ChannelRead, controller.GetVideoSchedulable)
+
+	previousDB, previousLogDB, previousRedis, previousMaster := model.DB, model.LOG_DB, common.RedisEnabled, common.IsMasterNode
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Log{}, &model.AuditLog{}, &model.CasbinRule{}, &model.AuthzRole{}))
+	model.DB, model.LOG_DB, common.RedisEnabled, common.IsMasterNode = db, db, false, true
+	require.NoError(t, authz.Init(db))
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB, common.RedisEnabled, common.IsMasterNode = previousDB, previousLogDB, previousRedis, previousMaster
+	})
+	for _, user := range []struct {
+		name  string
+		role  int
+		token string
+	}{{"sim-admin", common.RoleAdminUser, "sim-admin-token"}, {"sim-root", common.RoleRootUser, "sim-root-token"}} {
+		token := user.token
+		require.NoError(t, db.Create(&model.User{Username: user.name, Password: "placeholder", Role: user.role, Status: common.UserStatusEnabled,
+			Group: "default", AccessToken: &token, AuthVersion: 1, AffCode: user.name}).Error)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	registerChannelRoutes(engine.Group("/api"))
+	simulate := func(token string) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/channel/video_schedule/simulate", strings.NewReader(`{}`))
+		request.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	assert.Equal(t, http.StatusUnauthorized, simulate(""))
+	assert.Equal(t, http.StatusForbidden, simulate("sim-admin-token"))
+	assert.Equal(t, http.StatusOK, simulate("sim-root-token"), "root reaches the handler, which rejects the empty body")
 }

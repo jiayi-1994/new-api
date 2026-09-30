@@ -705,6 +705,7 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	durable = true
+	common.SetContextKey(c, constant.ContextKeyTaskPersisted, task.TaskID)
 	service.VideoTaskPersisted(c, task)
 	stage = "settle"
 	diagnostics.durable(task)

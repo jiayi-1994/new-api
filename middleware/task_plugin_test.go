@@ -1833,10 +1833,11 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 // made before distribution, also on the legacy /v1/tasks/:key submit entry.
 func TestPrepareTaskPluginEndpointKeepsEachSharedCandidateDecodedBody(t *testing.T) {
 	setting := operation_setting.GetVideoSchedulingSetting()
-	saved := *setting
-	t.Cleanup(func() { *setting = saved })
+	saved, savedMemoryCache := *setting, common.MemoryCacheEnabled
+	t.Cleanup(func() { *setting, common.MemoryCacheEnabled = saved, savedMemoryCache })
 	setting.Mode = operation_setting.VideoSchedulingModeShadow
 	setting.Models = nil
+	common.MemoryCacheEnabled = true // shadow reads candidates from the memory cache
 
 	var pinned jsplugin.PinnedEndpoint
 	var taskRequest any

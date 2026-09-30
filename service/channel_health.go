@@ -78,7 +78,17 @@ type videoProbeLease struct {
 // health: scheduling is not off and the channel has a cost table. A channel
 // built from request context carries no settings; its cached copy is read.
 func VideoSchedulingTracks(channel *model.Channel) (*dto.VideoSchedulingConfig, bool) {
-	if channel == nil || operation_setting.GetVideoSchedulingSetting().Mode == operation_setting.VideoSchedulingModeOff {
+	if operation_setting.GetVideoSchedulingSetting().Mode == operation_setting.VideoSchedulingModeOff {
+		return nil, false
+	}
+	return VideoSchedulingConfigOf(channel)
+}
+
+// VideoSchedulingConfigOf returns a channel's video_scheduling config whatever
+// the live mode: a request whose takeover was frozen keeps its candidates even
+// if scheduling is switched off mid-request.
+func VideoSchedulingConfigOf(channel *model.Channel) (*dto.VideoSchedulingConfig, bool) {
+	if channel == nil {
 		return nil, false
 	}
 	if channel.OtherSettings == "" && channel.Id > 0 {
@@ -159,6 +169,11 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 	summary := &model.TaskSchedulingSummary{Model: modelName, CapacityGroup: cfg.CapacityGroup}
 	if lease, ok := peekVideoProbeLease(c); ok && lease.ChannelID == channel.Id {
 		summary.ProbeSlot = &model.TaskProbeSlot{Key: lease.Key, Token: lease.Token}
+	}
+	// The selection that fed the submitting attempt, so terminal logs can be
+	// matched to the consumption log's attempts by task ID.
+	if record, row, ok := videoScheduleSelection(c, channel.Id); ok {
+		summary.Selected, summary.SelectionSeq, summary.AttemptSeq, summary.Probe, summary.Spec = channel.Id, record.SelectionSeq, record.AttemptSeq, record.Probe, row.Spec
 	}
 	return summary
 }
@@ -265,6 +280,71 @@ func GetVideoChannelHealth(channelID int, modelName string, minSamples int) (Vid
 	return health, nil
 }
 
+// VideoHealthView is an operator view of one scheduled channel: its
+// channel-wide windows, in-flight count and probe state, whether a health gate
+// holds it back under the current setting, its capacity, held probe slots and,
+// on request, the windows of each model it prices.
+type VideoHealthView struct {
+	VideoChannelHealth
+	Gated              bool                          `json:"gated"`
+	Capacity           int                           `json:"capacity"`
+	CapacityGroup      string                        `json:"capacity_group,omitempty"`
+	GroupCapacity      int                           `json:"group_capacity,omitempty"`
+	GroupInFlight      int                           `json:"group_in_flight,omitempty"`
+	ProbeSlotsHeld     int                           `json:"probe_slots_held"`
+	ProbeCooldownUntil int64                         `json:"probe_cooldown_until,omitempty"` // unix seconds after the last probe
+	Models             map[string]VideoChannelHealth `json:"models,omitempty"`
+}
+
+// GetVideoHealthView reads a channel's scheduling state from Redis or memory
+// only, never the database for a channel that carries its settings. It
+// returns nil for a channel without a video_scheduling config.
+func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView, error) {
+	cfg, ok := VideoSchedulingConfigOf(channel)
+	if !ok {
+		return nil, nil
+	}
+	setting := operation_setting.GetVideoSchedulingSetting()
+	health, err := GetVideoChannelHealth(channel.Id, videoSchedAllModels, setting.MinSamples)
+	if err != nil {
+		return nil, err
+	}
+	view := &VideoHealthView{
+		VideoChannelHealth: health,
+		Gated:              videoGated(health.Submit, health.Gen, setting.MinSubmitRate, setting.MinGenRate, setting.MinSamples),
+		Capacity:           cfg.Capacity,
+		CapacityGroup:      cfg.CapacityGroup,
+		GroupCapacity:      setting.CapacityGroups[cfg.CapacityGroup],
+	}
+	if view.GroupCapacity > 0 {
+		if view.GroupInFlight, err = GetVideoGroupInFlight(cfg.CapacityGroup); err != nil {
+			return nil, err
+		}
+	}
+	if view.ProbeSlotsHeld, err = VideoProbeSlotsHeld(channel.Id, setting.ProbeMaxInFlight); err != nil {
+		return nil, err
+	}
+	if last := health.Probe.LastProbeAt; last > 0 {
+		view.ProbeCooldownUntil = last + int64(VideoProbeCooldown(setting.ProbeCooldownSec, health.Probe).Seconds())
+	}
+	if perModel {
+		view.Models = make(map[string]VideoChannelHealth, len(cfg.Models))
+		for name := range cfg.Models {
+			if view.Models[name], err = GetVideoChannelHealth(channel.Id, name, setting.MinSamples); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return view, nil
+}
+
+// videoGated reports a health gate holding a channel back: a metric with at
+// least minSamples samples below its enabled minimum rate.
+func videoGated(submit, gen videosched.HealthStat, minSubmit, minGen float64, minSamples int) bool {
+	return (minSubmit > 0 && submit.Samples >= minSamples && submit.Rate < minSubmit) ||
+		(minGen > 0 && gen.Samples >= minSamples && gen.Rate < minGen)
+}
+
 // GetVideoGroupInFlight reads the in-flight gauge of a capacity group.
 func GetVideoGroupInFlight(group string) (int, error) {
 	values, err := videoHealthStore().get([]string{videoGroupInFlightKey(group)})
@@ -284,10 +364,10 @@ func videoHealthStat(ok, fail int64) videosched.HealthStat {
 	return videosched.HealthStat{Rate: float64(ok) / float64(samples), Samples: int(samples)}
 }
 
-// VideoProbeCooldown doubles the configured cooldown per consecutive failure,
-// capped at one day.
-func VideoProbeCooldown(state VideoProbeState) time.Duration {
-	cooldown := time.Duration(operation_setting.GetVideoSchedulingSetting().ProbeCooldownSec) * time.Second
+// VideoProbeCooldown doubles the base cooldown per consecutive failure, capped
+// at one day.
+func VideoProbeCooldown(baseSeconds int, state VideoProbeState) time.Duration {
+	cooldown := time.Duration(baseSeconds) * time.Second
 	for range min(state.ConsecutiveFails, 32) {
 		cooldown *= 2
 		if cooldown >= videoSchedProbeCooldownMax {
@@ -297,11 +377,29 @@ func VideoProbeCooldown(state VideoProbeState) time.Duration {
 	return min(cooldown, videoSchedProbeCooldownMax)
 }
 
+func videoProbeSlotKey(channelID, n int) string {
+	return fmt.Sprintf("%sprobe:%d:%d", videoSchedKeyPrefix, channelID, n)
+}
+
+// VideoProbeSlotsHeld counts the held probe slots 0..slots-1 of a channel.
+func VideoProbeSlotsHeld(channelID, slots int) (int, error) {
+	if slots <= 0 {
+		return 0, nil
+	}
+	keys := make([]string, slots)
+	for n := range slots {
+		keys[n] = videoProbeSlotKey(channelID, n)
+	}
+	return videoHealthStore().held(keys)
+}
+
 // AcquireVideoProbeSlot claims probe slot n of a channel for this request.
 // The request owns the lease until its task is persisted; slot TTL is only a
-// backstop. LastProbeAt is stamped on success so the cooldown starts now.
+// backstop. LastProbeAt is stamped on success so the cooldown starts now. A
+// request holds at most one lease: an earlier unpersisted one is released.
 func AcquireVideoProbeSlot(c *gin.Context, channelID, n int, ttl time.Duration) (bool, error) {
-	key := fmt.Sprintf("%sprobe:%d:%d", videoSchedKeyPrefix, channelID, n)
+	ReleaseUnpersistedVideoProbeLease(c)
+	key := videoProbeSlotKey(channelID, n)
 	token := common.GetRandomString(24)
 	ok, err := videoHealthStore().acquire(key, token, ttl)
 	if err != nil || !ok {
@@ -504,6 +602,8 @@ type videoHealthBackend interface {
 	// while it still holds token.
 	acquire(key, token string, ttl time.Duration) (bool, error)
 	release(key, token string) error
+	// held counts the keys that currently exist.
+	held(keys []string) (int, error)
 }
 
 func videoHealthStore() videoHealthBackend {
@@ -553,6 +653,11 @@ end
 return 0`
 
 type redisVideoHealth struct{}
+
+func (redisVideoHealth) held(keys []string) (int, error) {
+	n, err := common.RDB.Exists(context.Background(), keys...).Result()
+	return int(n), err
+}
 
 func (redisVideoHealth) addSample(key, field string, minute int64, buckets int) error {
 	ttl := int64(buckets) * 60 * 2
@@ -688,4 +793,16 @@ func (m *memoryVideoHealthStore) release(key, token string) error {
 		delete(m.slots, key)
 	}
 	return nil
+}
+
+func (m *memoryVideoHealthStore) held(keys []string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, key := range keys {
+		if slot, ok := m.slots[key]; ok && time.Now().Before(slot.expires) {
+			n++
+		}
+	}
+	return n, nil
 }

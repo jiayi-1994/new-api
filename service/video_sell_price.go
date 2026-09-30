@@ -49,11 +49,7 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 	if sell.Kind != videosched.SellKnown {
 		return sell
 	}
-	ratio, special := ratio_setting.GetGroupGroupRatio(common.GetContextKeyString(c, constant.ContextKeyUserGroup), group)
-	if !special {
-		ratio = ratio_setting.GetGroupRatio(group)
-	}
-	usd := sell.USD * ratio
+	usd := sell.USD * VideoEffectiveGroupRatio(c, group)
 	// A sale past the single-request quota ceiling saturates, and submission
 	// pre-consume rejects a saturated quota, so it can never be sold.
 	if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
@@ -179,4 +175,15 @@ func videoUsageContext(c *gin.Context, clientModel, mappedModel string, body any
 		UpstreamModel: mappedModel,
 		UsagePurpose:  purpose,
 	})
+}
+
+// VideoEffectiveGroupRatio is the group ratio submission charges a request in
+// group: the user group's special ratio for it when one exists, else the
+// group's own ratio.
+func VideoEffectiveGroupRatio(c *gin.Context, group string) float64 {
+	ratio, special := ratio_setting.GetGroupGroupRatio(common.GetContextKeyString(c, constant.ContextKeyUserGroup), group)
+	if !special {
+		ratio = ratio_setting.GetGroupRatio(group)
+	}
+	return ratio
 }
