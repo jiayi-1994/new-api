@@ -1044,6 +1044,25 @@ func (channel *Channel) ValidateSettings() error {
 	return nil
 }
 
+// GetVideoScheduledChannels returns the scheduling config of every channel
+// that has one, keyed by channel id. The LIKE only narrows the scan; each
+// match is decoded, and rows that fail to decode are skipped.
+func GetVideoScheduledChannels() (map[int]*dto.VideoSchedulingConfig, error) {
+	var rows []Channel
+	err := DB.Select("id", "settings").Where("settings LIKE ?", `%"video_scheduling"%`).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	configs := make(map[int]*dto.VideoSchedulingConfig, len(rows))
+	for _, row := range rows {
+		var settings dto.ChannelOtherSettings
+		if common.UnmarshalJsonStr(row.OtherSettings, &settings) == nil && settings.VideoScheduling != nil {
+			configs[row.Id] = settings.VideoScheduling
+		}
+	}
+	return configs, nil
+}
+
 func (channel *Channel) GetSetting() dto.ChannelSettings {
 	setting := dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {

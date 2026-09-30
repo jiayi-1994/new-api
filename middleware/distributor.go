@@ -35,6 +35,9 @@ func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
 		defer func() {
+			// Covers every exit before a task takes over the probe lease,
+			// including selection failures before the controller runs.
+			service.ReleaseUnpersistedVideoProbeLease(c)
 			if c.Writer.Status() >= 400 {
 				service.RecordRequestPolicyTermination(c, types.NewErrorWithStatusCode(errors.New("request rejected"), types.ErrorCodeInvalidRequest, c.Writer.Status(), types.ErrOptionWithSkipRetry()))
 			}

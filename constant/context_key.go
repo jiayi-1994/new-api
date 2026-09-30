@@ -80,4 +80,8 @@ const (
 	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
 	// ContextKeyTokenAuditSucceeded disambiguates token responses that exceed the audit buffer.
 	ContextKeyTokenAuditSucceeded ContextKey = "token_audit_succeeded"
+
+	// ContextKeyVideoSchedProbeLease holds a video scheduling probe slot the
+	// request owns until its task is persisted.
+	ContextKeyVideoSchedProbeLease ContextKey = "video_sched_probe_lease"
 )

@@ -94,6 +94,8 @@ export interface VideoSpec {
 }
 /** Optional, read-only scheduling facts; never billing usage. */
 export declare function describeSpec(ctx: DriverContext & {usagePurpose: "spec"}): VideoSpec | {unsupported: true};
+/** Optional terminal-failure attribution for channel health; other values count as "upstream". */
+export declare function classifyFailure(reason: string): "upstream" | "user" | "cancelled";
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnComplete(task: TaskQueryContext, result: NormalizedTaskResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function listArtifacts(task: {taskId: string; status: string; action: string; data: unknown; producerVersion: string}): readonly TaskArtifact[];

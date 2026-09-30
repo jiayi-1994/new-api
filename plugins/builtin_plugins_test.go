@@ -160,6 +160,19 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 			callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "describeSpec")
 			require.NoError(t, callableErr)
 			assert.Equal(t, slices.Contains(videoOnlyKeys, key), callable, "describeSpec")
+			// Schedulable plugins attribute terminal failures for channel health.
+			if callable {
+				for reason, class := range map[string]string{
+					"upstream timeout":                       "upstream",
+					"content moderation rejected the prompt": "user",
+					"内容违规":                                   "user",
+					"task cancelled by user":                 "cancelled",
+				} {
+					value, callErr := plugin.Engine.Call(t.Context(), "classifyFailure", reason)
+					require.NoError(t, callErr)
+					assert.Equal(t, class, value, reason)
+				}
+			}
 			require.NotEmpty(t, plugin.Meta.UsageSchema)
 			for usageKey, schema := range plugin.Meta.UsageSchema {
 				assert.NotEmpty(t, schema.Description, usageKey)

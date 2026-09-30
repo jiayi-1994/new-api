@@ -501,6 +501,7 @@ func executeTaskSubmissionWith(
 		Retry:       common.GetPointer(0),
 	}
 
+	var submittedChannel *model.Channel
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		stage = "select_channel"
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
@@ -545,6 +546,10 @@ func executeTaskSubmissionWith(
 
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
+		service.ObserveVideoSubmit(c, channel, relayInfo.OriginModelName, taskErr)
+		if taskErr == nil {
+			submittedChannel = channel
+		}
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("after_submit", retryParam.GetRetry()+1)
 			taskErr = service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
@@ -636,6 +641,7 @@ func executeTaskSubmissionWith(
 		task.PrivateData.PluginState = result.PluginState
 	}
 	task.Action = relayInfo.Action
+	task.PrivateData.SchedulingSummary = service.NewVideoSchedulingSummary(c, submittedChannel, relayInfo.OriginModelName)
 	if immediate := result.Immediate; immediate != nil {
 		task.Status = model.TaskStatus(immediate.Status)
 		task.Progress = immediate.Progress
@@ -686,6 +692,7 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	durable = true
+	service.VideoTaskPersisted(c, task)
 	stage = "settle"
 	diagnostics.durable(task)
 	diagnostics.settleStart(task, result.Quota)

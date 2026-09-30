@@ -125,6 +125,77 @@ func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(
 	}
 }
 
+// Video scheduling calibration reads scheduled channels and active task counts;
+// both queries must behave the same on every supported database.
+func TestVideoSchedulingCalibrationQueries(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var driver gorm.Dialector
+			switch dialect {
+			case "sqlite":
+				driver = sqlite.Open(filepath.Join(t.TempDir(), "video.db"))
+			case "mysql":
+				dsn := os.Getenv("TEST_MYSQL_DSN")
+				if dsn == "" {
+					t.Skip("TEST_MYSQL_DSN is not configured")
+				}
+				driver = mysql.Open(dsn)
+			case "postgres":
+				dsn := os.Getenv("TEST_POSTGRES_DSN")
+				if dsn == "" {
+					t.Skip("TEST_POSTGRES_DSN is not configured")
+				}
+				driver = postgres.Open(dsn)
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			require.NoError(t, db.Migrator().DropTable(&Channel{}, &Task{}))
+			require.NoError(t, db.AutoMigrate(&Channel{}, &Task{}))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&Channel{}, &Task{})) })
+			var version string
+			if dialect == "sqlite" {
+				require.NoError(t, db.Raw("select sqlite_version()").Scan(&version).Error)
+			} else {
+				require.NoError(t, db.Raw("select version()").Scan(&version).Error)
+			}
+			t.Logf("%s version: %s", dialect, version)
+			previousDB := DB
+			DB = db
+			t.Cleanup(func() { DB = previousDB })
+
+			scheduled := &Channel{Name: "scheduled", Key: "k", OtherSettings: `{"video_scheduling":{"capacity_group":"acct","models":{"m":{"mode":"per_video","prices":{"*":1}}}}}`}
+			plain := &Channel{Name: "plain", Key: "k", OtherSettings: `{"tool_loss_policy":"allow"}`}
+			corrupt := &Channel{Name: "corrupt", Key: "k", OtherSettings: `{"video_scheduling":`}
+			for _, channel := range []*Channel{scheduled, plain, corrupt} {
+				require.NoError(t, db.Create(channel).Error)
+			}
+			configs, err := GetVideoScheduledChannels()
+			require.NoError(t, err)
+			require.Len(t, configs, 1, "only decodable scheduling configs are returned")
+			assert.Equal(t, "acct", configs[scheduled.Id].CapacityGroup)
+
+			for i, row := range []struct {
+				channel int
+				status  TaskStatus
+			}{
+				{scheduled.Id, TaskStatusSubmitted}, {scheduled.Id, TaskStatusInProgress}, {scheduled.Id, TaskStatusUnknown},
+				{scheduled.Id, TaskStatusSuccess}, {scheduled.Id, TaskStatusFailure}, {plain.Id, TaskStatusQueued},
+			} {
+				require.NoError(t, db.Create(&Task{TaskID: fmt.Sprintf("video-%d", i), ChannelId: row.channel, Status: row.status}).Error)
+			}
+			counts, err := CountActiveTasksByChannel([]int{scheduled.Id, corrupt.Id})
+			require.NoError(t, err)
+			assert.Equal(t, map[int]int64{scheduled.Id: 3}, counts, "terminal tasks and unlisted channels are not counted")
+			empty, err := CountActiveTasksByChannel(nil)
+			require.NoError(t, err)
+			assert.Empty(t, empty)
+		})
+	}
+}
+
 func TestInferencePresetSettingsAndDatabaseRoundTrip(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {

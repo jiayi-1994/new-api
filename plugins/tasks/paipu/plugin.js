@@ -355,6 +355,16 @@ export function describeSpec(ctx) {
   };
 }
 
+// classifyFailure attributes a terminal failure reason for channel health:
+// content or input rejections are the user's, cancellations are neutral, and
+// anything else counts against the upstream channel.
+export function classifyFailure(reason) {
+  const text = String(reason || "").toLowerCase();
+  if (/cancel/.test(text)) return "cancelled";
+  if (/moderat|sensitive|content policy|violat|prohibit|nsfw|inappropriate|审核|违规|敏感|不合规|invalid (image|video|audio|input|prompt|url)|unsupported (image|video|audio)/.test(text)) return "user";
+  return "upstream";
+}
+
 export function extractUsageOnComplete() {
   // Preserve frozen submitted facts. Paipu billing/charged_quota is not usage
   // in our host, and its query contract does not promise measured video length.

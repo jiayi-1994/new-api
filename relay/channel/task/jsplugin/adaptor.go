@@ -1627,6 +1627,27 @@ func (a *TaskAdaptor) logRejectedUsage(hook string, _ error) {
 	common.SysError(fmt.Sprintf("task plugin %s rejected invalid %s billing facts", a.plugin.Meta.Key, hook))
 }
 
+// ClassifyFailure asks the plugin's optional classifyFailure hook whether a
+// terminal failure reason is the upstream's fault ("upstream"), the user's
+// ("user") or a cancellation ("cancelled"). ok is false without a valid answer.
+func (a *TaskAdaptor) ClassifyFailure(reason string) (string, bool) {
+	ctx := context.Background()
+	if callable, err := a.plugin.Engine.HasCallablePath(ctx, "classifyFailure"); err != nil || !callable {
+		return "", false
+	}
+	value, err := a.plugin.Engine.Call(ctx, "classifyFailure", reason)
+	if err != nil {
+		common.SysError(fmt.Sprintf("task plugin %s classifyFailure failed: %v", a.plugin.Meta.Key, err))
+		return "", false
+	}
+	class, _ := value.(string)
+	switch class {
+	case service.VideoFailureUpstream, service.VideoFailureUser, service.VideoFailureCancelled:
+		return class, true
+	}
+	return "", false
+}
+
 func (a *TaskAdaptor) hasHook(ctx context.Context, hook string) bool {
 	has, err := a.plugin.Engine.HasExport(ctx, hook)
 	return err == nil && has

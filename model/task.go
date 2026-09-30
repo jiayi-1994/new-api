@@ -142,6 +142,24 @@ type TaskPrivateData struct {
 	// StoreAttempts counts failed store copies; the sync job gives up at
 	// MaxTaskArtifactStoreAttempts.
 	StoreAttempts int `json:"store_attempts,omitempty"`
+	// SchedulingSummary is set when the submitting channel takes part in
+	// video scheduling; nil tasks are invisible to channel health.
+	SchedulingSummary *TaskSchedulingSummary `json:"scheduling_summary,omitempty"`
+}
+
+// TaskSchedulingSummary is what video scheduling needs once a task outlives
+// its request: the health key, the capacity group counted at submit (so a
+// regrouped channel still releases the right counter), and an owned probe slot.
+type TaskSchedulingSummary struct {
+	Model         string         `json:"model"`
+	CapacityGroup string         `json:"capacity_group,omitempty"`
+	ProbeSlot     *TaskProbeSlot `json:"probe_slot,omitempty"`
+}
+
+// TaskProbeSlot is a probe lease; only the holder of Token may release Key.
+type TaskProbeSlot struct {
+	Key   string `json:"key"`
+	Token string `json:"token"`
 }
 
 // MaxTaskArtifactStoreAttempts bounds retries of copying one result into the
@@ -623,6 +641,33 @@ type TaskQuotaUsage struct {
 }
 
 // TaskCountAllTasks returns total tasks that match the given query params (admin usage)
+// CountActiveTasksByChannel counts non-terminal tasks per channel. Channels
+// without active tasks are absent from the map; a query error is returned
+// rather than zero counts so callers never reset gauges on a failed read.
+func CountActiveTasksByChannel(channelIDs []int) (map[int]int64, error) {
+	counts := make(map[int]int64, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return counts, nil
+	}
+	var rows []struct {
+		ChannelId int
+		Count     int64
+	}
+	err := DB.Model(&Task{}).
+		Select("channel_id, COUNT(*) AS count").
+		Where("channel_id IN ?", channelIDs).
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Group("channel_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.ChannelId] = row.Count
+	}
+	return counts, nil
+}
+
 func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	var total int64
 	query := DB.Model(&Task{})
