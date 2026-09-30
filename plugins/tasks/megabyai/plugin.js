@@ -276,6 +276,23 @@ export function extractUsage(ctx) {
   return { seconds: params.duration, surcharge_seconds: params.duration, resolution: params.resolution };
 }
 
+// Scheduling facts for the host's purchase-cost quote; never billing usage.
+// surcharge_seconds is part of the per-second base price, not a reference fact.
+export function describeSpec(ctx) {
+  const params = videoParams(ctx.requestBody);
+  return {
+    spec_version: 1,
+    output_seconds: params.duration,
+    seconds_kind: "exact",
+    resolution: params.resolution,
+    references: {
+      video: (params.referenceVideos || []).length,
+      image: (params.referenceImages || []).length,
+      audio: (params.referenceAudios || []).length,
+    },
+  };
+}
+
 // Mega's public query contract does not specify measured duration/usage.
 // Keep the validated submitted facts frozen; do not invent usage from a missing field.
 export function extractUsageOnComplete() {

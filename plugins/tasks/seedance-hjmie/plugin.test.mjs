@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+import * as plugin from "./plugin.js";
+
+const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
+for (const entry of fixture.cases) {
+  test(entry.name, () => {
+    let hook = plugin[entry.hook];
+    for (const name of entry.path || []) hook = hook[name];
+    if (entry.expectedError !== undefined) {
+      assert.throws(() => hook(...entry.args), (error) => error.message.includes(entry.expectedError));
+    } else {
+      assert.deepEqual(hook(...entry.args), entry.expected);
+    }
+  });
+}
+
+// The spec a submission is scheduled by, derived from the body actually sent upstream.
+function submittedSpec(ctx) {
+  const body = plugin.buildSubmitRequest({ ...ctx, baseUrl: "https://api.hjmie.cc.cd", apiKey: "fixture-only-key" }).body;
+  return {
+    spec_version: 1, output_seconds: body.duration, seconds_kind: "exact", resolution: body.resolution,
+    references: { video: (body.videos || []).length, image: (body.images || []).length, audio: (body.audios || []).length },
+  };
+}
+
+test("describeSpec agrees with the submitted body and reserved usage for every decoded fixture", () => {
+  const decoded = fixture.cases.filter((entry) => (entry.path || []).includes("decodeRequest") && entry.expected?.requestBody);
+  assert.ok(decoded.length > 0);
+  for (const entry of decoded) {
+    const ctx = { model: entry.expected.model, upstreamModel: entry.expected.model, requestBody: entry.expected.requestBody };
+    const spec = plugin.describeSpec(ctx); // no credentials: the hook is read-only
+    assert.deepEqual(spec, submittedSpec(ctx), entry.name);
+    const usage = plugin.extractUsage(ctx);
+    assert.equal(spec.output_seconds, usage.seconds, entry.name);
+    assert.equal(spec.resolution, usage.resolution, entry.name);
+  }
+});
+
+test("describeSpec counts each reference kind from the final body", () => {
+  const value = {
+    model: "videos-fast", prompt: "a cat", duration: 8, resolution: "2160p",
+    referenceImages: ["https://cdn.example/1.png", "https://cdn.example/2.png"],
+    reference_videos: ["https://cdn.example/1.mp4"], audios: ["https://cdn.example/1.mp3"],
+  };
+  const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
+  const ctx = { model: value.model, upstreamModel: value.model, requestBody: intent.requestBody };
+  assert.deepEqual(plugin.describeSpec(ctx), {
+    spec_version: 1, output_seconds: 8, seconds_kind: "exact", resolution: "4k",
+    references: { video: 1, image: 2, audio: 1 },
+  });
+  assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
+
+  const plain = { model: value.model, requestBody: { prompt: "a cat", duration: 5, resolution: "480p" } };
+  assert.deepEqual(plugin.describeSpec(plain).references, { video: 0, image: 0, audio: 0 });
+  assert.throws(() => plugin.describeSpec({ model: value.model, requestBody: { prompt: "a cat", resolution: "480p" } }), /duration/);
+});

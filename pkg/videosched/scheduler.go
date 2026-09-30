@@ -7,7 +7,6 @@ package videosched
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -15,30 +14,31 @@ import (
 	"strings"
 )
 
-// Spec value kinds.
+// Spec seconds kinds.
 const (
-	KindExact    = "exact"
-	KindEstimate = "estimate"
-	KindFixed    = "fixed" // the request cannot change it; channel constraints still apply
-
-	TierResolution = "resolution"
-	TierProduct    = "product"
-	TierUnknown    = "unknown"
+	KindExact = "exact"
+	KindFixed = "fixed" // the request cannot change it; channel constraints still apply
 )
 
-// Cost modes, surcharge kinds and input media keys.
+// Base cost modes.
 const (
 	ModePerVideo  = "per_video"
 	ModePerSecond = "per_second"
-	ModePerUnit   = "per_unit"
-
-	SurchargeAddPerUnit = "add_per_unit" // added to the base unit price before quantity
-	SurchargeAddFlat    = "add_flat"     // added once per video
-	SurchargeMultiply   = "multiply"     // scales base + additions; may be < 1
-
-	InputVideoSeconds = "input_video_seconds"
-	InputImages       = "input_images"
 )
+
+// Reference media rule modes. Each kind and tier selects exactly one rule.
+const (
+	RefUnsupported     = "unsupported"
+	RefIncluded        = "included"
+	RefPerRequest      = "per_request"       // Value USD once per request
+	RefPerInput        = "per_input"         // Value USD per submitted item of the kind
+	RefPerOutputSecond = "per_output_second" // Value USD per output second
+	RefMultiplier      = "multiplier"        // adds base × (Value − 1); Value ≥ 1
+)
+
+// ReferenceKinds is the fixed order in which reference lines are priced and
+// reported, so the first failure never depends on map iteration.
+var ReferenceKinds = []string{"video", "image", "audio"}
 
 // Sell price kinds and unknown-sell policies.
 const (
@@ -50,41 +50,50 @@ const (
 	UnknownSellRelative = "relative"
 )
 
-// Spec is the normalized request shape one candidate's plugin will send.
-// A nil pointer means unknown, which is distinct from zero.
+// Spec is the validated request shape one candidate's plugin will submit.
 type Spec struct {
-	OutputSeconds     *float64
-	SecondsKind       string // exact|estimate|fixed
-	Tier              string // lowercase resolution or product key
-	TierKind          string // resolution|product|unknown
-	InputVideoSeconds *float64
-	InputMediaKind    string // exact|estimate
-	InputImages       *int
-	Units             map[string]float64 // tokens/credits estimates
-	Conditions        map[string]bool    // video_input, audio ...
-	Missing           []string
+	OutputSeconds *float64 // nil = unknown, distinct from zero
+	SecondsKind   string   // exact|fixed
+	Tier          string   // lowercase resolution or product key; "*" = the model has no tiers; "" = unknown
+	References    map[string]int
+	Missing       []string
 }
 
-// Surcharge applies when Conditions[When] is true and Tier is empty or matches.
-// Every condition the request sets must match at least one surcharge, so
-// "included for free" is written as an add_flat surcharge of 0.
-type Surcharge struct {
-	When  string
-	Tier  string
-	Kind  string
-	Value float64
+// ReferenceCost is one reference media rule. Value distinguishes a missing
+// price (nil) from an explicit zero.
+type ReferenceCost struct {
+	Mode  string
+	Value *float64
 }
 
-// CostConfig is one channel's purchase price table for one model, in USD.
+// CostConfig is one channel's purchase price table for one model, in USD. The
+// base price excludes reference surcharges. An absent References kind or tier
+// is unpriced, never included.
 type CostConfig struct {
 	Mode           string
-	UnitName       string
 	Prices         map[string]float64 // tier -> USD; "*" matches any tier
 	MinSeconds     int
 	MaxSeconds     int
 	AllowedSeconds []int
-	Surcharges     []Surcharge
-	InputMedia     map[string]float64 // input_video_seconds | input_images -> USD per unit
+	References     map[string]map[string]ReferenceCost // kind -> tier|"*" -> rule
+}
+
+// CostQuote is the purchase cost of one spec. A non-empty Reason invalidates
+// the whole quote: its amounts are zero and must not be scored. All-zero
+// amounts with an empty Reason are a valid free quote.
+type CostQuote struct {
+	Tier                            string // Prices key that priced the base
+	Reason                          string
+	BaseUSD, ReferenceUSD, TotalUSD float64
+	References                      []ReferenceLine // one per kind with a positive count, in ReferenceKinds order
+}
+
+type ReferenceLine struct {
+	Kind, Mode, Tier string   // Tier is the rule key matched, which may differ from the base tier
+	Quantity         *float64 // 1 per request, item count or output seconds; nil for multipliers
+	Value            *float64 // unit price or multiplier; nil when included
+	USD              float64
+	Reason           string
 }
 
 type HealthStat struct {
@@ -113,9 +122,9 @@ type Candidate struct {
 	Capacity, InFlight           int // channel; Capacity 0 = unlimited
 	GroupCapacity, GroupInFlight int // capacity group total; 0 = no group
 
-	Submit, Gen HealthStat
+	Submit, Gen HealthStat // raw; health gates are applied here, not during assembly
 	Sell        SellPrice
-	Excluded    string // non-empty = excluded while assembling (disabled, tried, ...)
+	Excluded    string // hard exclusion from assembly (disabled, tried, not schedulable, ...); never gated or at capacity
 }
 
 // Weights are normalized internally; they need not sum to 1.
@@ -133,14 +142,13 @@ type Policy struct {
 
 	UnknownSellPolicy  string  // exclude (default) | relative
 	MaxCostToSellRatio float64 // 0 = no loss threshold
+	MaxCostUSD         float64 // purchase cost bound frozen by the host; must be finite and > 0
 	TieEpsilon         float64 // 0 = take the first; >0 = weighted draw among near-ties
 }
 
 type Score struct {
 	Candidate  *Candidate
-	Tier       string
-	Cost       float64
-	Estimated  bool // cost depends on estimated seconds or input media
+	Quote      CostQuote // the quote every price comparison of this score used
 	PriceScore float64
 	Quality    float64
 	Service    float64
@@ -151,146 +159,192 @@ type Score struct {
 
 var ErrNoCandidate = errors.New("videosched: no eligible candidate")
 
-// Quote prices spec against a channel's cost table.
-func Quote(cost CostConfig, spec Spec) (tier string, usd float64, reason string) {
-	if cost.Mode != ModePerVideo && cost.Mode != ModePerSecond && cost.Mode != ModePerUnit {
-		return "", 0, "invalid billing mode"
+// Quote prices spec against a channel's cost table: the base cost plus one
+// surcharge per reference kind the request carries.
+func Quote(cost CostConfig, spec Spec) CostQuote {
+	q := quoteBase(cost, spec)
+	if q.Reason != "" {
+		return q
+	}
+	for _, kind := range ReferenceKinds {
+		n := spec.References[kind]
+		if n == 0 {
+			continue
+		}
+		line := quoteReference(kind, n, cost.References[kind], spec, q.BaseUSD)
+		q.References = append(q.References, line)
+		if q.Reason != "" {
+			continue
+		}
+		q.Reason = line.Reason
+		q.ReferenceUSD += line.USD
+		if q.Reason == "" && !finiteNonNeg(q.ReferenceUSD) {
+			q.Reason = "invalid total price"
+		}
+	}
+	q.TotalUSD = q.BaseUSD + q.ReferenceUSD
+	if q.Reason == "" && !finiteNonNeg(q.TotalUSD) {
+		q.Reason = "invalid total price"
+	}
+	if q.Reason != "" {
+		q.BaseUSD, q.ReferenceUSD, q.TotalUSD = 0, 0, 0
+	}
+	return q
+}
+
+// quoteBase prices the base tier and checks the seconds constraints.
+func quoteBase(cost CostConfig, spec Spec) CostQuote {
+	if cost.Mode != ModePerVideo && cost.Mode != ModePerSecond {
+		return CostQuote{Reason: "invalid billing mode"}
 	}
 	if len(cost.Prices) == 0 {
-		return "", 0, "no price configured"
+		return CostQuote{Reason: "no price configured"}
 	}
 
-	tier = strings.ToLower(strings.TrimSpace(spec.Tier))
-	base, ok := cost.Prices[tier]
+	tier := strings.ToLower(strings.TrimSpace(spec.Tier))
+	key := tier
+	base, ok := cost.Prices[key]
 	switch {
-	case spec.TierKind == TierUnknown || tier == "":
+	case tier == "":
 		// Never guess the cheapest tier: only a lone wildcard price quotes blind.
-		base, ok = cost.Prices["*"]
+		key = "*"
+		base, ok = cost.Prices[key]
 		if !ok || len(cost.Prices) != 1 {
-			return "", 0, "tier unknown"
+			return CostQuote{Reason: "tier unknown"}
 		}
-		tier = "*"
 	case !ok:
-		if base, ok = cost.Prices["*"]; !ok {
-			return "", 0, "tier " + tier + " not supported"
+		key = "*"
+		if base, ok = cost.Prices[key]; !ok {
+			return CostQuote{Reason: "tier " + tier + " not priced"}
 		}
 	}
 	if !finiteNonNeg(base) {
-		return "", 0, "invalid price"
+		return CostQuote{Reason: "invalid price"}
 	}
 
 	constrained := cost.MinSeconds > 0 || cost.MaxSeconds > 0 || len(cost.AllowedSeconds) > 0
-	seconds := 0.0
+	quantity := 1.0
 	if spec.OutputSeconds == nil {
 		if cost.Mode == ModePerSecond || constrained {
-			return "", 0, "seconds unknown"
+			return CostQuote{Reason: "seconds unknown"}
 		}
 	} else {
-		seconds = *spec.OutputSeconds
+		seconds := *spec.OutputSeconds
 		if !(seconds > 0) || math.IsInf(seconds, 0) { // also rejects NaN
-			return "", 0, "invalid seconds"
+			return CostQuote{Reason: "invalid seconds"}
 		}
 		if (cost.MinSeconds > 0 && seconds < float64(cost.MinSeconds)) || (cost.MaxSeconds > 0 && seconds > float64(cost.MaxSeconds)) {
-			return "", 0, fmt.Sprintf("seconds %g out of range", seconds)
+			return CostQuote{Reason: fmt.Sprintf("seconds %g out of range", seconds)}
 		}
 		if len(cost.AllowedSeconds) > 0 && !slices.ContainsFunc(cost.AllowedSeconds, func(allowed int) bool { return float64(allowed) == seconds }) {
-			return "", 0, fmt.Sprintf("seconds %g not allowed", seconds)
+			return CostQuote{Reason: fmt.Sprintf("seconds %g not allowed", seconds)}
+		}
+		if cost.Mode == ModePerSecond {
+			quantity = seconds
 		}
 	}
 
-	quantity := 1.0
-	switch cost.Mode {
-	case ModePerSecond:
-		quantity = seconds
-	case ModePerUnit:
-		units, ok := spec.Units[cost.UnitName]
-		if cost.UnitName == "" || !ok {
-			return "", 0, "units unknown"
-		}
-		if !finiteNonNeg(units) {
-			return "", 0, "invalid units"
-		}
-		quantity = units
+	usd, ok := product(base, quantity)
+	if !ok {
+		return CostQuote{Reason: "invalid total price"}
 	}
+	return CostQuote{Tier: key, BaseUSD: usd}
+}
 
-	unit, flat, multiplier := base, 0.0, 1.0
-	for _, condition := range slices.Sorted(maps.Keys(spec.Conditions)) {
-		if !spec.Conditions[condition] {
-			continue
-		}
-		priced := false
-		for _, s := range cost.Surcharges {
-			if s.When != condition || (s.Tier != "" && !strings.EqualFold(s.Tier, tier)) {
-				continue
-			}
-			priced = true
-			switch {
-			case s.Kind == SurchargeAddPerUnit && finiteNonNeg(s.Value):
-				unit += s.Value
-			case s.Kind == SurchargeAddFlat && finiteNonNeg(s.Value):
-				flat += s.Value
-			case s.Kind == SurchargeMultiply && s.Value > 0 && !math.IsInf(s.Value, 1):
-				multiplier *= s.Value
-			default:
-				return "", 0, "invalid surcharge"
-			}
-		}
-		if !priced {
-			return "", 0, "condition " + condition + " not priced"
-		}
+// quoteReference prices one reference kind carrying n items. The rule is
+// matched on the request tier and falls back to an explicit "*"; the tier the
+// base price hit never hides a tier-specific surcharge.
+func quoteReference(kind string, n int, rules map[string]ReferenceCost, spec Spec, base float64) ReferenceLine {
+	line := ReferenceLine{Kind: kind}
+	if n < 0 {
+		line.Reason = "invalid reference " + kind + " count"
+		return line
 	}
+	tier := strings.ToLower(strings.TrimSpace(spec.Tier))
+	rule, ok := rules[tier]
+	if tier == "" || !ok {
+		tier = "*"
+		rule, ok = rules[tier]
+	}
+	if !ok {
+		line.Reason = "reference " + kind + " not priced"
+		return line
+	}
+	line.Mode, line.Tier = rule.Mode, tier
 
-	usd = unit * quantity
-	if !finiteNonNeg(usd) || (unit > 0 && quantity > 0 && usd == 0) {
-		return "", 0, "invalid total price"
+	quantity := 0.0
+	switch rule.Mode {
+	case RefUnsupported:
+		line.Reason = "reference " + kind + " unsupported"
+		return line
+	case RefIncluded:
+		return line
+	case RefPerRequest:
+		quantity = 1
+	case RefPerInput:
+		quantity = float64(n)
+	case RefPerOutputSecond:
+		if spec.OutputSeconds == nil {
+			line.Reason = "seconds unknown"
+			return line
+		}
+		quantity = *spec.OutputSeconds
+	case RefMultiplier:
+	default:
+		line.Reason = "invalid reference " + kind + " rule"
+		return line
 	}
-	usd += flat
-	scaled := usd * multiplier
-	if !finiteNonNeg(scaled) || (usd > 0 && scaled == 0) {
-		return "", 0, "invalid total price"
+	if rule.Value == nil {
+		line.Reason = "invalid reference " + kind + " price"
+		return line
 	}
-	usd = scaled
+	value := *rule.Value
+	line.Value = &value
 
-	for _, media := range slices.Sorted(maps.Keys(cost.InputMedia)) {
-		price := cost.InputMedia[media]
-		if !finiteNonNeg(price) {
-			return "", 0, "invalid input media price"
-		}
-		var amount float64
-		switch media {
-		case InputVideoSeconds:
-			if spec.InputVideoSeconds == nil {
-				return "", 0, "input media unknown"
-			}
-			amount = *spec.InputVideoSeconds
-		case InputImages:
-			if spec.InputImages == nil {
-				return "", 0, "input media unknown"
-			}
-			amount = float64(*spec.InputImages)
-		default:
-			return "", 0, "unsupported input media " + media
-		}
-		if !finiteNonNeg(amount) {
-			return "", 0, "invalid input media"
-		}
-		charge := price * amount
-		if !finiteNonNeg(charge) || (price > 0 && amount > 0 && charge == 0) {
-			return "", 0, "invalid total price"
-		}
-		usd += charge
+	multiplier := rule.Mode == RefMultiplier
+	if (multiplier && !(value >= 1)) || !finiteNonNeg(value) {
+		line.Reason = "invalid reference " + kind + " price"
+		return line
 	}
-	if !finiteNonNeg(usd) {
-		return "", 0, "invalid total price"
+	a, b := value, quantity
+	if multiplier {
+		a, b = base, value-1
+	} else {
+		line.Quantity = &quantity
 	}
-	return tier, usd, ""
+	usd, ok := product(a, b)
+	if !ok {
+		line.Reason = "invalid total price"
+		return line
+	}
+	line.USD = usd
+	return line
+}
+
+// product multiplies two non-negative amounts, rejecting overflow and a
+// positive product that underflows to a free zero.
+func product(a, b float64) (float64, bool) {
+	p := a * b
+	return p, finiteNonNeg(p) && !(a > 0 && b > 0 && p == 0)
 }
 
 // Evaluate scores every candidate and returns them sorted: eligible first,
-// then Total desc, Cost asc, ID asc. Only the highest Priority layer holding an
-// eligible candidate is ranked; eligible candidates below it get the reason
+// then Total desc, TotalUSD asc, ID asc. Only the highest Priority layer holding
+// an eligible candidate is ranked; eligible candidates below it get the reason
 // "lower priority". Evaluate does not modify cands.
 func Evaluate(cands []Candidate, p Policy) []Score {
+	return evaluate(cands, p, false)
+}
+
+// EvaluateProbe scores the same snapshot for a recovery probe: it only skips
+// the health gates, so a gated candidate gets its real score. Hard exclusions,
+// capacity, the quote, the cost bound, the sell policy and the loss threshold
+// all still apply.
+func EvaluateProbe(cands []Candidate, p Policy) []Score {
+	return evaluate(cands, p, true)
+}
+
+func evaluate(cands []Candidate, p Policy, relaxHealth bool) []Score {
 	wp, wq, ws := normalizeWeights(p.Weights)
 	policyReason := ""
 	switch {
@@ -300,6 +354,8 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 		policyReason = "invalid minimum samples"
 	case !finiteNonNeg(p.MaxCostToSellRatio):
 		policyReason = "invalid loss threshold"
+	case !(p.MaxCostUSD > 0) || math.IsInf(p.MaxCostUSD, 1):
+		policyReason = "invalid policy"
 	}
 
 	scores := make([]Score, len(cands))
@@ -307,20 +363,25 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 		c := &cands[i]
 		s := &scores[i]
 		s.Candidate = c
-		if s.Reason = candidateReason(c, p, policyReason); s.Reason != "" {
+		if s.Reason = candidateReason(c, p, policyReason, relaxHealth); s.Reason != "" {
 			continue
 		}
-		if s.Tier, s.Cost, s.Reason = Quote(c.Cost, c.Spec); s.Reason != "" {
+		if s.Quote = Quote(c.Cost, c.Spec); s.Quote.Reason != "" {
+			s.Reason = s.Quote.Reason
 			continue
 		}
-		s.Estimated = c.Spec.SecondsKind == KindEstimate || c.Spec.InputMediaKind == KindEstimate
+		cost := s.Quote.TotalUSD
+		if cost > p.MaxCostUSD {
+			s.Reason = "cost exceeds bound"
+			continue
+		}
 		s.Unproven = c.Submit.Samples < p.MinSamples || c.Gen.Samples < p.MinSamples
 		if p.MaxCostToSellRatio > 0 && c.Sell.Kind != SellUnknown {
 			ratio := 0.0
 			switch {
 			case c.Sell.Kind == SellKnown:
-				ratio = s.Cost / c.Sell.USD
-			case s.Cost > 0: // a paid channel against a free sell price always loses
+				ratio = cost / c.Sell.USD
+			case cost > 0: // a paid channel against a free sell price always loses
 				ratio = math.Inf(1)
 			}
 			if ratio > p.MaxCostToSellRatio {
@@ -347,7 +408,7 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 			continue
 		}
 		if s.Candidate.Sell.Kind == SellUnknown {
-			cheapestUnknown = min(cheapestUnknown, s.Cost)
+			cheapestUnknown = min(cheapestUnknown, s.Quote.TotalUSD)
 		} else {
 			hasPricedSell = true
 		}
@@ -359,11 +420,12 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 			continue
 		}
 		c := s.Candidate
+		cost := s.Quote.TotalUSD
 		switch c.Sell.Kind {
 		case SellKnown:
-			s.PriceScore = 1 - clamp01(s.Cost/c.Sell.USD)
+			s.PriceScore = 1 - clamp01(cost/c.Sell.USD)
 		case SellFree:
-			if s.Cost == 0 {
+			if cost == 0 {
 				s.PriceScore = 1
 			}
 		default:
@@ -374,10 +436,10 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 				continue
 			}
 			switch {
-			case s.Cost == 0:
+			case cost == 0:
 				s.PriceScore = 1
 			case cheapestUnknown > 0:
-				s.PriceScore = cheapestUnknown / s.Cost
+				s.PriceScore = cheapestUnknown / cost
 			}
 		}
 		s.Quality = clamp01(c.Quality)
@@ -393,8 +455,8 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 		if a.Total != b.Total {
 			return a.Total > b.Total
 		}
-		if a.Cost != b.Cost {
-			return a.Cost < b.Cost
+		if a.Quote.TotalUSD != b.Quote.TotalUSD {
+			return a.Quote.TotalUSD < b.Quote.TotalUSD
 		}
 		return a.Candidate.ID < b.Candidate.ID
 	})
@@ -431,7 +493,8 @@ func Select(cands []Candidate, p Policy, rnd *rand.Rand) (*Candidate, []Score, e
 }
 
 // candidateReason applies the state and policy gates that do not need a quote.
-func candidateReason(c *Candidate, p Policy, policyReason string) string {
+// relaxHealth skips only the two health gates.
+func candidateReason(c *Candidate, p Policy, policyReason string, relaxHealth bool) string {
 	switch {
 	case c.Excluded != "":
 		return c.Excluded
@@ -447,9 +510,9 @@ func candidateReason(c *Candidate, p Policy, policyReason string) string {
 		return "invalid in-flight count"
 	case (c.Capacity > 0 && c.InFlight >= c.Capacity) || (c.GroupCapacity > 0 && c.GroupInFlight >= c.GroupCapacity):
 		return "at capacity"
-	case p.MinSubmitRate > 0 && c.Submit.Samples >= p.MinSamples && c.Submit.Rate < p.MinSubmitRate:
+	case !relaxHealth && p.MinSubmitRate > 0 && c.Submit.Samples >= p.MinSamples && c.Submit.Rate < p.MinSubmitRate:
 		return fmt.Sprintf("submit rate %.2f < %.2f", c.Submit.Rate, p.MinSubmitRate)
-	case p.MinGenRate > 0 && c.Gen.Samples >= p.MinSamples && c.Gen.Rate < p.MinGenRate:
+	case !relaxHealth && p.MinGenRate > 0 && c.Gen.Samples >= p.MinSamples && c.Gen.Rate < p.MinGenRate:
 		return fmt.Sprintf("generation rate %.2f < %.2f", c.Gen.Rate, p.MinGenRate)
 	case c.Sell.Kind == SellKnown && !(c.Sell.USD > 0 && !math.IsInf(c.Sell.USD, 1)):
 		return "invalid sell price"

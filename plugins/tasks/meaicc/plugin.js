@@ -272,6 +272,22 @@ export function extractUsage(ctx) {
   return { requests: 1 };
 }
 
+// Scheduling facts for the host's purchase-cost quote; never billing usage.
+// Reads the same validated body extractUsage and buildSubmitRequest use.
+export function describeSpec(ctx) {
+  const body = modelRequest(ctx);
+  const references = { video: 0, image: 0, audio: 0 };
+  const kinds = { reference_video: "video", first_frame: "image", last_frame: "image", reference_image: "image", reference_voice: "audio" };
+  for (const item of body.input.media || []) references[kinds[item.type]] += 1;
+  return {
+    spec_version: 1,
+    output_seconds: body.parameters.duration,
+    seconds_kind: "exact",
+    resolution: body.parameters.resolution,
+    references,
+  };
+}
+
 export function extractUsageOnComplete() {
   return { requests: 1 };
 }

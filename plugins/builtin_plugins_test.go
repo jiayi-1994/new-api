@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/pkg/videosched/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,6 +143,11 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 				require.NoError(t, callableErr)
 				assert.True(t, callable, hook)
 			}
+			// Only the third-party relays are schedulable; a pool holding an
+			// official plugin is never taken over.
+			callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "describeSpec")
+			require.NoError(t, callableErr)
+			assert.Equal(t, slices.Contains(videoOnlyKeys, key), callable, "describeSpec")
 			require.NotEmpty(t, plugin.Meta.UsageSchema)
 			for usageKey, schema := range plugin.Meta.UsageSchema {
 				assert.NotEmpty(t, schema.Description, usageKey)
@@ -177,6 +184,61 @@ func TestBuiltInResponsesDecodersEchoChannelMappedAlias(t *testing.T) {
 			require.NoError(t, common.Unmarshal(encoded, &decoded))
 			assert.Equal(t, "submit", decoded["kind"])
 			assert.Equal(t, alias, decoded["model"])
+		})
+	}
+}
+
+// The describeSpec value crossing the JS runtime parses on the host: decode
+// with the plugin itself, call the hook without credentials, then spec.Parse.
+func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
+	images := []any{"https://cdn.example/1.png", "https://cdn.example/2.png"}
+	video := []any{"https://cdn.example/1.mp4"}
+	cases := []struct {
+		key, model string
+		body       map[string]any
+		seconds    float64
+		want       videosched.Spec
+	}{
+		{"meaicc", "w3-c1", map[string]any{"input": map[string]any{"prompt": "cat", "media": []any{
+			map[string]any{"type": "first_frame", "url": "https://cdn.example/f.png"},
+			map[string]any{"type": "reference_video", "url": "https://cdn.example/v.mp4"},
+		}}, "parameters": map[string]any{"duration": 12, "resolution": "1080p"}}, 12,
+			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 1, "audio": 0}}},
+		{"megabyai", "videos-fast", map[string]any{"prompt": "cat", "seconds": "8", "size": "1280x720", "referenceImages": images}, 8,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+		{"seedance-hjmie", "videos-fast", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
+			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0}}},
+		{"paipu", "lec-seed-2-0-900", map[string]any{"prompt": "cat", "images": images}, 15,
+			videosched.Spec{Tier: "*", SecondsKind: videosched.KindFixed, References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+		{"pidoi", "tejiasd-mini-720p", map[string]any{"prompt": "cat", "seconds": 8, "resolution": "480p", "images": images}, 8,
+			videosched.Spec{Tier: "480p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			source, sourceErr := Source(tc.key)
+			require.NoError(t, sourceErr)
+			plugin, registerErr := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: tc.key})
+			require.NoError(t, registerErr)
+			tc.body["model"] = tc.model
+			decoded, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+				"model": tc.model, "upstreamModel": tc.model, "body": map[string]any{"kind": "json", "value": tc.body},
+			})
+			require.NoError(t, decodeErr)
+			value, callErr := plugin.Engine.Call(t.Context(), "describeSpec", map[string]any{
+				"model": tc.model, "upstreamModel": tc.model, "usagePurpose": "spec",
+				"requestBody": decoded.(map[string]any)["requestBody"],
+			})
+			require.NoError(t, callErr)
+			raw, ok := value.(map[string]any)
+			require.True(t, ok, "describeSpec must return an object")
+			got, parseErr := spec.Parse(raw)
+			require.NoError(t, parseErr)
+			want := tc.want
+			want.OutputSeconds = &tc.seconds
+			if want.SecondsKind == "" {
+				want.SecondsKind = videosched.KindExact
+			}
+			assert.Equal(t, want, got)
 		})
 	}
 }

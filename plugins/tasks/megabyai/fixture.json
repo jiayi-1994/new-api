@@ -1,0 +1,2023 @@
+{
+  "cases": [
+    {
+      "name": "Immediate failed task remains durable for refund",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 200,
+          "body": {
+            "id": "video_123",
+            "status": "failed",
+            "error": {
+              "message": "审核失败"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "video_123",
+        "taskData": {
+          "id": "video_123",
+          "status": "failed",
+          "error": {
+            "message": "审核失败"
+          }
+        },
+        "immediate": {
+          "status": "FAILURE",
+          "reason": "审核失败"
+        }
+      }
+    },
+    {
+      "name": "Envelope success without a video status is not task completion",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "success",
+          "data": {}
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized video task status: success"
+      }
+    },
+    {
+      "name": "2k is not an enabled resolution",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A city",
+            "duration": 5,
+            "resolution": "2K"
+          }
+        }
+      ],
+      "expectedError": "resolution must be one of 480p, 720p, 1080p, 4k"
+    },
+    {
+      "name": "1440 pixel size cannot bypass disabled resolution",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A city",
+            "seconds": 5,
+            "size": "2560x1440"
+          }
+        }
+      ],
+      "expectedError": "does not map to a supported resolution"
+    },
+    {
+      "name": "Duration ceiling and 2160p alias",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A city",
+            "duration": 3600,
+            "resolution": "2160p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 3600,
+        "resolution": "4k",
+        "surcharge_seconds": 3600
+      }
+    },
+    {
+      "name": "Reference URL count is bounded before forwarding",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A city",
+            "duration": 5,
+            "resolution": "720p",
+            "referenceImages": [
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png",
+              "https://assets.example/a.png"
+            ]
+          }
+        }
+      ],
+      "expectedError": "at most 128 reference URLs"
+    },
+    {
+      "name": "New API channel uses the same video endpoint",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "videos-standard",
+          "upstream": {
+            "kind": "new_api"
+          },
+          "baseUrl": "https://gateway.example/",
+          "apiKey": "ignored-key",
+          "authHeader": "Bearer gateway-token",
+          "requestBody": {
+            "prompt": "A city",
+            "duration": 5,
+            "resolution": "4k"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://gateway.example/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer gateway-token",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "videos-standard",
+          "prompt": "A city",
+          "duration": 5,
+          "resolution": "4k"
+        }
+      }
+    },
+    {
+      "name": "Chinese image reference request keeps 480p and 5 seconds",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "图片1 这只小狗在倒立",
+              "duration": 5,
+              "resolution": "480p",
+              "ratio": "16:9",
+              "referenceImages": [
+                "https://assets.example/dog.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "图片1 这只小狗在倒立",
+          "duration": 5,
+          "resolution": "480p",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/dog.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "OpenAI seconds and size infer 4k without a 720p default",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "中文电影镜头 🎬",
+              "seconds": "8",
+              "size": "3840x2160"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "中文电影镜头 🎬",
+          "duration": 8,
+          "resolution": "4k",
+          "ratio": "16:9"
+        }
+      }
+    },
+    {
+      "name": "OpenAI image_url object becomes Mega referenceImages",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "input_reference": {
+                "image_url": "https://assets.example/dog.png"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/dog.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "All three media aliases use Mega camelCase fields",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "images": [
+                "https://assets.example/a.png"
+              ],
+              "videos": [
+                "https://assets.example/a.mp4"
+              ],
+              "audios": [
+                "https://assets.example/a.wav"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/a.png"
+          ],
+          "referenceVideos": [
+            "https://assets.example/a.mp4"
+          ],
+          "referenceAudios": [
+            "https://assets.example/a.wav"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Portrait pixel size and matching aliases",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "seconds": "5",
+              "duration": 5,
+              "size": "1080x1920",
+              "resolution": "1080P",
+              "aspect_ratio": "9:16"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "1080p",
+          "ratio": "9:16"
+        }
+      }
+    },
+    {
+      "name": "480p conventional rounded 16:9 dimensions",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "seconds": 5,
+              "size": "854x480"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "480p",
+          "ratio": "16:9"
+        }
+      }
+    },
+    {
+      "name": "Admin model alias is preserved until channel mapping",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "my-video",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "my-video",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "my-video",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9"
+        }
+      }
+    },
+    {
+      "name": "Multipart repeated reference URLs",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "videos-standard"
+              ],
+              "prompt": [
+                "图片运镜"
+              ],
+              "seconds": [
+                "5"
+              ],
+              "resolution": [
+                "4K"
+              ],
+              "ratio": [
+                "16:9"
+              ],
+              "referenceImages[]": [
+                "https://assets.example/a.png",
+                "https://assets.example/b.png"
+              ]
+            },
+            "files": []
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "图片运镜",
+          "duration": 5,
+          "resolution": "4k",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/a.png",
+            "https://assets.example/b.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Multipart serialized image_url object",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "videos-standard"
+              ],
+              "prompt": [
+                "A dog"
+              ],
+              "seconds": [
+                "5"
+              ],
+              "size": [
+                "1280x720"
+              ],
+              "input_reference": [
+                "{\"image_url\":\"https://assets.example/a.png\"}"
+              ]
+            },
+            "files": []
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/a.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Missing duration",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "duration or seconds is required"
+    },
+    {
+      "name": "Missing resolution",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "resolution or size is required"
+    },
+    {
+      "name": "Conflicting durations",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "seconds": 6
+            }
+          }
+        }
+      ],
+      "expectedError": "conflicting values for duration/seconds"
+    },
+    {
+      "name": "Conflicting size and resolution",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "size": "1920x1080"
+            }
+          }
+        }
+      ],
+      "expectedError": "size conflicts with resolution"
+    },
+    {
+      "name": "Conflicting size and ratio",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "size": "720x1280"
+            }
+          }
+        }
+      ],
+      "expectedError": "size conflicts with ratio"
+    },
+    {
+      "name": "Sora 1024p size is not guessed",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "ratio": "16:9",
+              "size": "1792x1024"
+            }
+          }
+        }
+      ],
+      "expectedError": "does not map to a supported resolution"
+    },
+    {
+      "name": "3:2 size is not silently stretched",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "480p",
+              "ratio": "16:9",
+              "size": "720x480"
+            }
+          }
+        }
+      ],
+      "expectedError": "does not map to a supported ratio"
+    },
+    {
+      "name": "Negative duration",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": -1,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number of seconds"
+    },
+    {
+      "name": "Fractional duration",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5.5,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number of seconds"
+    },
+    {
+      "name": "Huge duration",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 3601,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "between 1 and 3600"
+    },
+    {
+      "name": "Boolean duration",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": true,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number of seconds"
+    },
+    {
+      "name": "Unsupported resolution",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "8k",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "must be one of"
+    },
+    {
+      "name": "Empty prompt",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "  ",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "prompt is required"
+    },
+    {
+      "name": "Unknown nested override",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "metadata": {
+                "duration": 999999
+              }
+            }
+          }
+        }
+      ],
+      "expectedError": "unsupported video parameter: metadata"
+    },
+    {
+      "name": "OpenAI file_id cannot be resolved",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "input_reference": {
+                "file_id": "file-123"
+              }
+            }
+          }
+        }
+      ],
+      "expectedError": "file_id is not supported"
+    },
+    {
+      "name": "Base64 reference is rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "referenceImages": [
+                "data:image/png;base64,AAAA"
+              ]
+            }
+          }
+        }
+      ],
+      "expectedError": "public http(s) URLs"
+    },
+    {
+      "name": "URL credentials are rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "referenceImages": [
+                "https://user:pass@assets.example/a.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expectedError": "without embedded credentials"
+    },
+    {
+      "name": "Markdown URL is rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "referenceImages": [
+                "[https://assets.example/a.png](https://assets.example/a.png)"
+              ]
+            }
+          }
+        }
+      ],
+      "expectedError": "public http(s) URLs"
+    },
+    {
+      "name": "Duplicate image aliases are rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "referenceImages": [
+                "https://assets.example/a.png"
+              ],
+              "images": [
+                "https://assets.example/a.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expectedError": "provide only one reference field"
+    },
+    {
+      "name": "Uploaded files require a URL",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "videos-standard"
+              ]
+            },
+            "files": [
+              {
+                "ref": "request_file:input_reference",
+                "field": "input_reference",
+                "filename": "a.png",
+                "mimeType": "image/png",
+                "size": 3
+              }
+            ]
+          }
+        }
+      ],
+      "expectedError": "Mega accepts public reference URLs"
+    },
+    {
+      "name": "Forward only Mega parameters with channel model mapping",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "model": "my-video",
+          "requestBody": {
+            "prompt": "中文图生视频",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceImages": [
+              "https://assets.example/a.png"
+            ],
+            "referenceVideos": [
+              "https://assets.example/a.mp4"
+            ],
+            "referenceAudios": [
+              "https://assets.example/a.wav"
+            ]
+          },
+          "upstreamModel": "sd-2.0"
+        }
+      ],
+      "expected": {
+        "url": "https://newapi.megabyai.cc/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-token",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.0",
+          "prompt": "中文图生视频",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9",
+          "referenceImages": [
+            "https://assets.example/a.png"
+          ],
+          "referenceVideos": [
+            "https://assets.example/a.mp4"
+          ],
+          "referenceAudios": [
+            "https://assets.example/a.wav"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Builder rejects invalid duration even without decoder",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "model": "videos-standard",
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 999999,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expectedError": "between 1 and 3600"
+    },
+    {
+      "name": "Usage rejects invalid duration even without decoder",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 0,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expectedError": "integer number of seconds"
+    },
+    {
+      "name": "Missing upstream key cannot submit",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "",
+          "model": "videos-standard",
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expectedError": "channel API key is required"
+    },
+    {
+      "name": "Billing facts for none",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for image",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceImages": [
+              "https://assets.example/a.png"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for video",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceVideos": [
+              "https://assets.example/a.mp4"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for audio",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceAudios": [
+              "https://assets.example/a.wav"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for image_video",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceImages": [
+              "https://assets.example/a.png"
+            ],
+            "referenceVideos": [
+              "https://assets.example/a.mp4"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for image_audio",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceImages": [
+              "https://assets.example/a.png"
+            ],
+            "referenceAudios": [
+              "https://assets.example/a.wav"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for video_audio",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceVideos": [
+              "https://assets.example/a.mp4"
+            ],
+            "referenceAudios": [
+              "https://assets.example/a.wav"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Billing facts for image_video_audio",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "ratio": "16:9",
+            "referenceImages": [
+              "https://assets.example/a.png"
+            ],
+            "referenceVideos": [
+              "https://assets.example/a.mp4"
+            ],
+            "referenceAudios": [
+              "https://assets.example/a.wav"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Completion retains validated submission billing facts",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {},
+        {},
+        {
+          "seconds": 0,
+          "resolution": "480p",
+          "billing_amount": 99
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "Parse documented queued response",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 200,
+          "body": {
+            "id": "video_123",
+            "task_id": "video_123",
+            "status": "queued"
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "video_123",
+        "taskData": {
+          "id": "video_123",
+          "task_id": "video_123",
+          "status": "queued"
+        }
+      }
+    },
+    {
+      "name": "Parse nested create response",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 201,
+          "body": {
+            "success": true,
+            "data": {
+              "id": "video_123",
+              "status": "queued"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "video_123",
+        "taskData": {
+          "success": true,
+          "data": {
+            "id": "video_123",
+            "status": "queued"
+          }
+        }
+      }
+    },
+    {
+      "name": "Immediate completed task",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 200,
+          "body": {
+            "id": "video_123",
+            "status": "completed",
+            "video_url": "https://assets.example/a.mp4"
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "video_123",
+        "taskData": {
+          "id": "video_123",
+          "status": "completed",
+          "video_url": "https://assets.example/a.mp4"
+        },
+        "immediate": {
+          "status": "SUCCESS"
+        }
+      }
+    },
+    {
+      "name": "Create error never becomes a phantom task",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 200,
+          "body": {
+            "error": {
+              "code": "invalid_resolution",
+              "message": "No 4k price"
+            }
+          }
+        }
+      ],
+      "expectedError": "No 4k price"
+    },
+    {
+      "name": "Create without id is rejected",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "status": 200,
+          "body": {
+            "status": "queued"
+          }
+        }
+      ],
+      "expectedError": "no task id"
+    },
+    {
+      "name": "Query uses encoded upstream id and channel authorization",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc/",
+          "authHeader": "Bearer gateway-token",
+          "taskId": "task/123"
+        }
+      ],
+      "expected": {
+        "url": "https://newapi.megabyai.cc/v1/videos/task%2F123",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer gateway-token"
+        }
+      }
+    },
+    {
+      "name": "Queued",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "queued"
+        }
+      ],
+      "expected": {
+        "status": "QUEUED"
+      }
+    },
+    {
+      "name": "Running with percent progress",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "in_progress",
+          "progress": "50%"
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS",
+        "progress": "50%"
+      }
+    },
+    {
+      "name": "Completed documented nested URL",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "completed",
+          "progress": 100,
+          "data": {
+            "url": "https://assets.example/a.mp4"
+          }
+        }
+      ],
+      "expected": {
+        "status": "SUCCESS",
+        "progress": "100%"
+      }
+    },
+    {
+      "name": "Nested task status wins over envelope success",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "success",
+          "data": {
+            "status": "processing",
+            "progress": 0
+          }
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS",
+        "progress": "0%"
+      }
+    },
+    {
+      "name": "Failed task preserves reason",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "failed",
+          "error": {
+            "message": "审核不通过"
+          }
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "审核不通过"
+      }
+    },
+    {
+      "name": "Cancelled task refunds",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "cancelled",
+          "fail_reason": "Cancelled by provider"
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "Cancelled by provider"
+      }
+    },
+    {
+      "name": "Unknown state does not fake progress",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "new_state"
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized video task status: new_state"
+      }
+    },
+    {
+      "name": "Query error without task status is unknown",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "error": {
+            "message": "temporary error"
+          }
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized video task status: "
+      }
+    },
+    {
+      "name": "Completed task exposes artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "SUCCESS"
+        }
+      ],
+      "expected": [
+        {
+          "key": "video",
+          "type": "video",
+          "mimeType": "video/mp4"
+        }
+      ]
+    },
+    {
+      "name": "Pending task has no artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "IN_PROGRESS"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "External result URL never receives channel key",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "GET",
+            "headers": {}
+          },
+          "data": {
+            "status": "completed",
+            "data": {
+              "url": "https://assets.example/a.mp4?sig=temporary"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://assets.example/a.mp4?sig=temporary",
+        "method": "GET",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "Documented same-origin content.mp4 uses auth",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "HEAD"
+          },
+          "data": {
+            "video_url": "https://newapi.megabyai.cc/v1/videos/video_123/content.mp4"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://newapi.megabyai.cc/v1/videos/video_123/content.mp4",
+        "method": "HEAD",
+        "headers": {
+          "Authorization": "Bearer fixture-token"
+        }
+      }
+    },
+    {
+      "name": "Prefer external storage over redirecting content proxy",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "GET",
+            "headers": {}
+          },
+          "data": {
+            "video_url": "https://newapi.megabyai.cc/v1/videos/video_123/content.mp4",
+            "data": {
+              "url": "https://assets.example/a.mp4"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://assets.example/a.mp4",
+        "method": "GET",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "Result list URL is supported",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "GET",
+            "headers": {}
+          },
+          "data": {
+            "results": [
+              {
+                "url": "https://assets.example/a.mp4"
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://assets.example/a.mp4",
+        "method": "GET",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "Missing video URL is explicit",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "GET",
+            "headers": {}
+          },
+          "data": {
+            "status": "completed"
+          }
+        }
+      ],
+      "expectedError": "no downloadable video URL"
+    },
+    {
+      "name": "Unsafe result URL cannot be downloaded",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "fixture-token",
+          "upstreamTaskId": "video_123",
+          "artifactKey": "video",
+          "clientRequest": {
+            "method": "GET",
+            "headers": {}
+          },
+          "data": {
+            "url": "file:///secret"
+          }
+        }
+      ],
+      "expectedError": "no downloadable video URL"
+    },
+    {
+      "name": "Renderer keeps URL and drops upstream billing data",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "SUCCESS",
+          "data": {
+            "status": "completed",
+            "resolution": "4k",
+            "data": {
+              "url": "https://assets.example/a.mp4"
+            },
+            "billing_amount": 999,
+            "request": {
+              "api_key": "upstream-secret"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "resolution": "4k",
+        "video_url": "https://assets.example/a.mp4",
+        "url": "https://assets.example/a.mp4"
+      }
+    },
+    {
+      "name": "Renderer reports failure",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "FAILURE",
+          "data": {
+            "status": "failed",
+            "error": {
+              "code": "moderation",
+              "message": "审核失败"
+            },
+            "quota": 999
+          }
+        }
+      ],
+      "expected": {
+        "error": {
+          "message": "审核失败"
+        }
+      }
+    },
+    {
+      "name": "Empty video references with image and audio keep the same billing facts",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "720p",
+            "referenceVideos": [],
+            "referenceImages": [
+              "https://assets.example/dog.png"
+            ],
+            "referenceAudios": [
+              "https://assets.example/music.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "Video alias alongside image and audio does not add a pricing dimension",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "seconds": 5,
+            "size": "1280x720",
+            "videos": [
+              "https://assets.example/video.mp4"
+            ],
+            "images": [
+              "https://assets.example/dog.png"
+            ],
+            "audios": [
+              "https://assets.example/music.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5,
+        "resolution": "720p",
+        "surcharge_seconds": 5
+      }
+    },
+    {
+      "name": "1440p is rejected before upstream forwarding",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://newapi.megabyai.cc",
+          "apiKey": "test-key",
+          "model": "videos-standard",
+          "requestBody": {
+            "prompt": "A city",
+            "duration": 5,
+            "resolution": "1440p"
+          }
+        }
+      ],
+      "expectedError": "resolution must be one of 480p, 720p, 1080p, 4k"
+    },
+    {
+      "name": "Client cannot override validated surcharge duration",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "requestBody": {
+            "prompt": "A dog",
+            "duration": 5,
+            "resolution": "480p",
+            "surcharge_seconds": 0
+          }
+        }
+      ],
+      "expectedError": "unsupported video parameter: surcharge_seconds"
+    }
+  ]
+}

@@ -274,6 +274,25 @@ export function extractUsage(ctx) {
   return MODELS[body.model].unit === "second" ? { seconds: body.seconds } : { requests: 1 };
 }
 
+// Scheduling facts for the host's purchase-cost quote; never billing usage.
+// Per-request billing does not make the spec unknown: tejiasd-mini-720p still
+// reports its 480p/720p tier. Only models without published resolutions are "*".
+export function describeSpec(ctx) {
+  const body = modelRequest(ctx);
+  const model = MODELS[body.model];
+  return {
+    spec_version: 1,
+    output_seconds: body.seconds,
+    seconds_kind: model.fixed ? "fixed" : "exact",
+    resolution: model.resolutions ? body.resolution : "*",
+    references: {
+      video: (body.reference_videos || []).length,
+      image: (body.image_url ? 1 : 0) + (body.reference_image_urls || []).length,
+      audio: (body.audio_urls || []).length,
+    },
+  };
+}
+
 export function extractUsageOnComplete() {
   // The documented response seconds echoes the request, not measured duration.
   // Keep frozen validated submission facts; upstream money/token fields are not usage.

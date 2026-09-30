@@ -85,6 +85,15 @@ export declare function buildBatchQueryRequest(ctx: BatchQueryContext, tasks: re
 export declare function parseTaskResult(ctx: TaskQueryContext, body: unknown, response: HookHTTPResponse): NormalizedTaskResult;
 export declare function parseBatchResult(ctx: BatchQueryContext, body: unknown, response: HookHTTPResponse): readonly (NormalizedTaskResult & {taskId: string; data?: unknown; state?: unknown})[];
 export declare function extractUsage(ctx: DriverContext & {usagePurpose?: "facts" | "billing_ratios"}): Readonly<Record<string, string | number | boolean>> | null;
+export interface VideoSpec {
+  spec_version: number;
+  output_seconds?: number;
+  seconds_kind?: "exact" | "fixed";
+  resolution?: string;
+  references: {video: number; image: number; audio: number};
+}
+/** Optional, read-only scheduling facts; never billing usage. */
+export declare function describeSpec(ctx: DriverContext & {usagePurpose: "spec"}): VideoSpec | {unsupported: true};
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnComplete(task: TaskQueryContext, result: NormalizedTaskResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function listArtifacts(task: {taskId: string; status: string; action: string; data: unknown; producerVersion: string}): readonly TaskArtifact[];

@@ -1,0 +1,217 @@
+{
+  "cases": [
+    {
+      "name": "OpenAI size and reference aliases become upstream fields",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{
+        "model": "videos-standard",
+        "body": {"kind": "json", "value": {
+          "model": "videos-standard", "prompt": "A sunrise", "seconds": "15",
+          "size": "1920x1080", "referenceImages": ["https://cdn.example/a.png"],
+          "referenceVideos": ["https://cdn.example/b.mp4"],
+          "referenceAudios": ["https://cdn.example/c.wav"]
+        }}
+      }],
+      "expected": {
+        "kind": "submit", "model": "videos-standard", "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
+          "images": ["https://cdn.example/a.png"],
+          "videos": ["https://cdn.example/b.mp4"],
+          "audios": ["https://cdn.example/c.wav"]
+        }
+      }
+    },
+    {
+      "name": "explicit 4k and duration",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-fast", "body": {"kind": "json", "value": {
+        "model": "videos-fast", "prompt": "A city", "duration": 8, "resolution": "4K", "aspect_ratio": "9:16"
+      }}}],
+      "expected": {"kind": "submit", "model": "videos-fast", "action": "text_to_video", "requestBody": {
+        "prompt": "A city", "duration": 8, "resolution": "4k", "ratio": "9:16"
+      }}
+    },
+    {
+      "name": "Chinese prompt with 4k OpenAI-style fields",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {
+        "model": "videos-standard", "prompt": "一只猫在海边奔跑，电影感镜头",
+        "seconds": 5, "resolution": "4k", "ratio": "16:9"
+      }}}],
+      "expected": {"kind": "submit", "model": "videos-standard", "action": "text_to_video", "requestBody": {
+        "prompt": "一只猫在海边奔跑，电影感镜头", "duration": 5,
+        "resolution": "4k", "ratio": "16:9"
+      }}
+    },
+    {
+      "name": "multipart text fields and repeated references",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "multipart", "fields": {
+        "model": ["videos-mini"], "prompt": ["A lake"], "seconds": ["6"],
+        "size": ["1280x720"], "images[]": ["https://cdn.example/1.png", "https://cdn.example/2.png"]
+      }, "files": []}}],
+      "expected": {"kind": "submit", "model": "videos-mini", "action": "reference_to_video", "requestBody": {
+        "prompt": "A lake", "duration": 6, "resolution": "720p", "ratio": "16:9",
+        "images": ["https://cdn.example/1.png", "https://cdn.example/2.png"]
+      }}
+    },
+    {
+      "name": "missing resolution is not silently 720p",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 5
+      }}}],
+      "expectedError": "resolution or size is required"
+    },
+    {
+      "name": "unsupported 1024 pixel size is rejected",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 5, "size": "1792x1024"
+      }}}],
+      "expectedError": "does not map to a supported resolution"
+    },
+    {
+      "name": "conflicting size and resolution is rejected",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+        "size": "1280x720", "resolution": "1080p"
+      }}}],
+      "expectedError": "size conflicts with resolution"
+    },
+    {
+      "name": "unknown quality field is reported",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+        "resolution": "720p", "quality": "high"
+      }}}],
+      "expectedError": "unsupported video parameter: quality"
+    },
+    {
+      "name": "duplicate duration aliases disagree",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+        "duration": 8, "resolution": "720p"
+      }}}],
+      "expectedError": "conflicting values for seconds/duration"
+    },
+    {
+      "name": "unbounded duration is rejected before billing",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
+        "model": "videos-mini", "prompt": "A lake", "seconds": 3601, "resolution": "720p"
+      }}}],
+      "expectedError": "seconds must be between 1 and 3600"
+    },
+    {
+      "name": "multipart file is rejected because upstream only accepts URLs",
+      "hook": "protocols", "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-mini", "body": {"kind": "multipart", "fields": {
+        "model": ["videos-mini"], "prompt": ["A lake"], "seconds": ["5"], "resolution": ["720p"]
+      }, "files": [{"ref": "request_file:input_reference", "field": "input_reference", "filename": "a.png", "mimeType": "image/png", "size": 3}]}}],
+      "expectedError": "file uploads are not supported"
+    },
+    {
+      "name": "build exact upstream JSON payload",
+      "hook": "buildSubmitRequest",
+      "args": [{"baseUrl": "https://poxiaoapi001.com/", "authHeader": "Bearer test-key", "model": "videos-standard", "upstreamModel": "videos-standard", "requestBody": {
+        "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
+        "images": ["https://cdn.example/a.png"], "videos": ["https://cdn.example/b.mp4"],
+        "audios": ["https://cdn.example/c.wav"]
+      }}],
+      "expected": {"url": "https://poxiaoapi001.com/v1/videos", "method": "POST", "headers": {
+        "Authorization": "Bearer test-key", "Content-Type": "application/json"
+      }, "body": {
+        "model": "videos-standard", "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
+        "images": ["https://cdn.example/a.png"], "videos": ["https://cdn.example/b.mp4"],
+        "audios": ["https://cdn.example/c.wav"]
+      }}
+    },
+    {
+      "name": "create response task id",
+      "hook": "parseSubmitResponse",
+      "args": [{}, {"body": {"id": "task-123", "task_id": "task-123", "status": "queued"}}],
+      "expected": {"taskId": "task-123", "taskData": {"id": "task-123", "task_id": "task-123", "status": "queued"}}
+    },
+    {
+      "name": "reserve requested seconds and resolution",
+      "hook": "extractUsage",
+      "args": [{"requestBody": {"duration": 15, "resolution": "1080p"}}],
+      "expected": {"seconds": 15, "resolution": "1080p"}
+    },
+    {
+      "name": "settle on valid reported output facts",
+      "hook": "extractUsageOnComplete",
+      "args": [{}, {"status": "SUCCESS"}, {"seconds": "12", "size": "3840x2160"}],
+      "expected": {"seconds": 12, "resolution": "4k"}
+    },
+    {
+      "name": "ignore invalid upstream billing quantities",
+      "hook": "extractUsageOnComplete",
+      "args": [{}, {"status": "SUCCESS"}, {"seconds": 1000000, "resolution": "1440p"}],
+      "expected": {}
+    },
+    {
+      "name": "query public upstream task",
+      "hook": "buildQueryRequest",
+      "args": [{"baseUrl": "https://poxiaoapi001.com", "authHeader": "Bearer test-key", "taskId": "task/123"}],
+      "expected": {"url": "https://poxiaoapi001.com/v1/videos/task%2F123", "method": "GET", "headers": {"Authorization": "Bearer test-key"}}
+    },
+    {
+      "name": "uppercase success status",
+      "hook": "parseTaskResult",
+      "args": [{}, {"status": "SUCCEEDED", "progress": 100}],
+      "expected": {"status": "SUCCESS", "progress": "100%"}
+    },
+    {
+      "name": "inline failed reason",
+      "hook": "parseTaskResult",
+      "args": [{}, {"status": "FAILED: moderation rejected"}],
+      "expected": {"status": "FAILURE", "reason": "moderation rejected"}
+    },
+    {
+      "name": "unknown status stays unknown",
+      "hook": "parseTaskResult",
+      "args": [{}, {"status": "mysterious"}],
+      "expected": {"status": "UNKNOWN", "reason": "unrecognized status: mysterious"}
+    },
+    {
+      "name": "completed task has video artifact",
+      "hook": "listArtifacts",
+      "args": [{"status": "SUCCESS"}],
+      "expected": [{"key": "video", "type": "video", "mimeType": "video/mp4"}]
+    },
+    {
+      "name": "content proxy follows public storage URL without credentials",
+      "hook": "buildContentRequest",
+      "args": [{"baseUrl": "https://poxiaoapi001.com", "authHeader": "Bearer test-key", "artifactKey": "video", "upstreamTaskId": "task-123", "clientRequest": {"method": "GET", "headers": {}}, "data": {
+        "url": "https://poxiaoapi001.com/v1/videos/task-123/content?video_token=temporary",
+        "metadata": {"final_video_url": "https://cdn.example/video.mp4?sig=temporary"}
+      }}],
+      "expected": {"url": "https://cdn.example/video.mp4?sig=temporary", "method": "GET", "credentialless": true}
+    },
+    {
+      "name": "content proxy uses upstream task id and auth",
+      "hook": "buildContentRequest",
+      "args": [{"baseUrl": "https://poxiaoapi001.com", "authHeader": "Bearer test-key", "artifactKey": "video", "upstreamTaskId": "task/123", "clientRequest": {"method": "HEAD", "headers": {}}}],
+      "expected": {"url": "https://poxiaoapi001.com/v1/videos/task%2F123/content", "method": "HEAD", "headers": {"Authorization": "Bearer test-key"}}
+    },
+    {
+      "name": "video renderer excludes upstream billing details",
+      "hook": "protocols", "path": ["openai_video", "render"],
+      "args": [{}, {"status": "SUCCESS", "data": {
+        "status": "completed", "url": "https://cdn.example/video.mp4", "resolution": "1080p",
+        "billing_amount": 4.2, "metadata": {"final_video_url": "https://private.example/asset"}
+      }}],
+      "expected": {"url": "https://cdn.example/video.mp4", "resolution": "1080p"}
+    }
+  ]
+}

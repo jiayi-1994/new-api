@@ -335,6 +335,26 @@ export function extractUsage(ctx) {
   return facts;
 }
 
+// Scheduling facts for the host's purchase-cost quote; never billing usage.
+// Same validated body and resolution choice as extractUsage; a model without a
+// published resolution is untiered ("*").
+export function describeSpec(ctx) {
+  const body = modelRequest(ctx);
+  const name = ctx.upstreamModel || ctx.model;
+  const selected = body.resolution || (has(MODELS, body.model) ? MODELS[body.model][0] : TEMPLATES[name]);
+  return {
+    spec_version: 1,
+    output_seconds: body.duration,
+    seconds_kind: has(FIXED_DURATIONS, body.model) ? "fixed" : "exact",
+    resolution: selected || "*",
+    references: {
+      video: (body.videos || []).length,
+      image: (body.images || []).length,
+      audio: (body.audios || []).length,
+    },
+  };
+}
+
 export function extractUsageOnComplete() {
   // Preserve frozen submitted facts. Paipu billing/charged_quota is not usage
   // in our host, and its query contract does not promise measured video length.

@@ -1,0 +1,628 @@
+{
+  "source": "User-supplied pricing snapshot",
+  "pricing_version": "a42d372ccf0b5dd13ecf71203521f9d2",
+  "model_price_currency": "unspecified",
+  "group_ratio": {
+    "Anthropic": 0.9,
+    "cccc": 1,
+    "deepseek": 0.7,
+    "default": 1,
+    "dpskv4.1": 1.1,
+    "fable 5": 1.5,
+    "gemini": 0.8,
+    "gork": 1,
+    "gpt": 0.5,
+    "grok推理": 0.5,
+    "jiuyuegrok": 1,
+    "seedace官转": 1,
+    "北部": 1,
+    "图片": 1,
+    "满血CC": 1.35,
+    "满血国产模型": 0.8,
+    "特价SD": 1
+  },
+  "models": [
+    {
+      "model_name": "dola-seedance-2.5",
+      "description": "特价模型不售后 30图 0 10音频",
+      "tags": "2.5,30s,720p",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "seedace官转": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 1,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ],
+      "pricing_version": "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
+    },
+    {
+      "model_name": "sd-2.5-720p-pro",
+      "description": "特价速推渠道随时改价，以当天数据为准，SD 2.5 720P 高质量原生过人脸  30参考图  0视频   10参考音频 5-30秒   按秒计费 速度500秒一条   seedace官转 分组",
+      "tags": "720p  30秒,按秒计费",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.7,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "Bt-sd2.0-720p",
+      "description": "2.0 稳定兜底 0.58/秒 官转分组 满血720p 9图3视频3音频 纯血高质量 ",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.58,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "wan30-1080p-fast",
+      "description": "按秒计费,支持4-30s,素材10-5-5,原生支持真人，带参考视频只支持4-15s",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "default": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.35,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "wan30-720p",
+      "description": "wan 3.0 720p分辨率 10张参考图 5个参考音频  5个参考视频，不建议使用参考视频，否则生成速度太慢，时长30秒,按秒计费,提示词里不要有乱七八糟的符号，否则会提示上游失败的报错",
+      "tags": "720p  30秒",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "default": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.2,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "seedace-2.0-480p",
+      "description": "seedace-2.0-480p 官转API 按秒计费 不卡真人  seedace官转 令牌",
+      "icon": "Jimeng",
+      "tags": "sd-2.0-480p 4-15秒 按秒计费",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.45,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "jydancan-1.5",
+      "description": "测试模型 不要碰",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "jiuyuegrok": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 1.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "jiuyuegrok"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "seedace-2.0-720p",
+      "description": "seedace-2.0-720P 官转API 按秒计费 不卡真人   seedace官转 令牌",
+      "icon": "Jimeng",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.7,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-720p-3000",
+      "description": "sd 2.5  30图 过真人  不支持参考视频和参考音频   15分钟左右一条",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "特价SD": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 9,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "特价SD"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-480p-plus",
+      "description": "兜底官A速度稳定快： 满血全参视频不加钱  30图-10视频-10音频  seedace官转分组  4秒-30秒    0.6毛/秒",
+      "tags": "480p 30秒,按秒计费",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "grok-imagine-video-1.5-preview",
+      "description": "这个模型 单参 支持6秒 10秒 15秒 ，多参只支持6秒和10秒 支持480P和720P， 按次收费",
+      "quota_type": 1,
+      "price_unit": "mixed",
+      "price_unit_by_group": {
+        "gork": "mixed"
+      },
+      "model_ratio": 0,
+      "model_price": 0.8,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "gork"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-720p-ultra-cf",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "特价SD": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "特价SD"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sora-v3-933-pro",
+      "description": "SD 2.0 满血 原生720P   按次计费   不卡脸    偶尔提示卡脸 重试即可，超速度200-300一条  量大管饱  纯原生  default分组令牌",
+      "icon": "Jimeng",
+      "tags": "720p,15秒,  按次计费",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "default": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 4.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-720p-plus",
+      "description": "兜底官A速度稳定快：  满血全程视频不加钱  30图-10视频-10音频   seedace官转分组 4秒-30秒    1元/秒 ",
+      "tags": "720p 30秒 按秒计费",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.85,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "seedace-2.5-480p",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.58,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sora-v3-933-plus",
+      "description": "SD 2.0 纯满血原生过人脸，高质量超越官转，9参考图 3个参考视频  3个参考音频 按条计费",
+      "tags": "720p 15秒",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "北部": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 7,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "北部"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "veo-3.1-fast",
+      "icon": "Google",
+      "tags": "视频生成",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "default": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 0.4,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd2-pro-933-480p",
+      "description": "sd 2.0 满血 480p 9参考图 3参考视频 3参考音频 不卡脸   偶尔提示卡脸 重试即可  按次计费   ",
+      "tags": "480p  15秒, 按次计费",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "default": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 3.3,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "tejiasd-mini-720p",
+      "description": "2.0 mini 模型  9参考图 0参考视频  3个参考音频  480p 最多15秒，720p 最多12秒，不限制人脸",
+      "tags": "480p支持15秒  720p只支持12秒",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "特价SD": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 0.8,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "特价SD"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-1080p-max",
+      "description": "技术过脸，不售后，按条",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "jiuyue111",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "cccc": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 3.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "cccc"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "tejiasd",
+      "description": "原生720P 9张参考图 3个参考视频 3个参考音频  不卡真人  近期sd 2.0降智厉害，各位老板自己适应下",
+      "tags": "720P,15S",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "特价SD": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 4.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "特价SD"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-720p-900",
+      "description": "sd 2.5视频模型，支持 9 张参考图，0参考音频 0参考视频，提示词最多 12000 字，支持过人脸；按次计费",
+      "tags": "30秒 720p 按次计费",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "seedace官转": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 7,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "video_token_pricing_by_group": {
+        "seedace官转": {
+          "currency": "CNY",
+          "unit": "per_million_tokens",
+          "prices": {
+            "1080p": {
+              "no_video": 77,
+              "video": 46
+            },
+            "480p": {
+              "no_video": 58.8,
+              "video": 35.28
+            },
+            "720p": {
+              "no_video": 58.8,
+              "video": 35.28
+            }
+          }
+        }
+      },
+      "model_name": "doubao-seedance-2-5-yq",
+      "vendor_id": 9,
+      "quota_type": 0,
+      "model_ratio": 37.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "seedace-2.5-720p",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 1.05,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-480p-pro",
+      "description": "特价速推渠道随时改价，以当天数据为准，sd 2.5 480p分辨率  5-30秒  原生过人脸  30参考图 0视频   10参考音频 按秒计费     seedace官转 分组",
+      "tags": "按秒计费,480p  30秒",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.45,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sora-933-720P-fast",
+      "description": "SD 2.0 fast 933   720P 偶尔提示卡脸 重试即可，按次计费  超速度200-300一条  量大管饱  纯原生  default分组令牌",
+      "icon": "Jimeng",
+      "tags": "720 支持10秒或者15秒, 按次计费",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "default": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 3.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "H3video-2k",
+      "description": "minimax H3 9图 3个参考音频，原则上支持参考视频，但是加入参考视频时间太久，不建议使用参考视频，15秒时长，分辨率768分辨率",
+      "tags": "768分辨率  15秒",
+      "quota_type": 1,
+      "price_unit": "request",
+      "price_unit_by_group": {
+        "特价SD": "request"
+      },
+      "model_ratio": 0,
+      "model_price": 1.8,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "特价SD"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "sd-2.5-720p-ultra",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.5,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    },
+    {
+      "model_name": "Bt-sd2.0-480p",
+      "description": "2.0 稳定兜底 0.35/秒 官转分组 满血480p  9图3视频3音频 纯血高质量",
+      "quota_type": 1,
+      "price_unit": "second",
+      "price_unit_by_group": {
+        "seedace官转": "second"
+      },
+      "model_ratio": 0,
+      "model_price": 0.35,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "seedace官转"
+      ],
+      "supported_endpoint_types": [
+        "openai-video"
+      ]
+    }
+  ]
+}

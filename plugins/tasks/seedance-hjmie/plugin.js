@@ -319,6 +319,23 @@ export function buildContentRequest(ctx) {
   };
 }
 
+// Scheduling facts for the host's purchase-cost quote; never billing usage.
+// Reads the decoded body the same way extractUsage and buildSubmitRequest do.
+export function describeSpec(ctx) {
+  const input = ctx.requestBody || {};
+  return {
+    spec_version: 1,
+    output_seconds: seconds(input.duration, "duration"),
+    seconds_kind: "exact",
+    resolution: resolution(input.resolution, "resolution"),
+    references: {
+      video: mediaURLs(input, ["videos"], "videos").length,
+      image: mediaURLs(input, ["images"], "images").length,
+      audio: mediaURLs(input, ["audios"], "audios").length,
+    },
+  };
+}
+
 export const protocols = {
   openai_video: {
     decodeRequest: normalize,

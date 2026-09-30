@@ -1,0 +1,3992 @@
+{
+  "cases": [
+    {
+      "name": "dola-seedance-2.5 decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "dola-seedance-2.5",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "dola-seedance-2.5",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "dola-seedance-2.5",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "dola-seedance-2.5 reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "dola-seedance-2.5",
+          "upstreamModel": "dola-seedance-2.5",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "dola-seedance-2.5 submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "dola-seedance-2.5",
+          "upstreamModel": "dola-seedance-2.5",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "dola-seedance-2.5",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-pro decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-pro",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-pro",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-pro",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-pro reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-pro",
+          "upstreamModel": "sd-2.5-720p-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-720p-pro submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-pro",
+          "upstreamModel": "sd-2.5-720p-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-pro",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "Bt-sd2.0-720p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "Bt-sd2.0-720p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "Bt-sd2.0-720p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "Bt-sd2.0-720p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "Bt-sd2.0-720p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "Bt-sd2.0-720p",
+          "upstreamModel": "Bt-sd2.0-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "Bt-sd2.0-720p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "Bt-sd2.0-720p",
+          "upstreamModel": "Bt-sd2.0-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "Bt-sd2.0-720p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "wan30-1080p-fast decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "wan30-1080p-fast",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "wan30-1080p-fast",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "1080p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "wan30-1080p-fast",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "1080p"
+        }
+      }
+    },
+    {
+      "name": "wan30-1080p-fast reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-1080p-fast",
+          "upstreamModel": "wan30-1080p-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "1080p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "wan30-1080p-fast submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-1080p-fast",
+          "upstreamModel": "wan30-1080p-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "1080p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "wan30-1080p-fast",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "1080p"
+        }
+      }
+    },
+    {
+      "name": "wan30-720p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "wan30-720p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "wan30-720p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "wan30-720p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "wan30-720p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-720p",
+          "upstreamModel": "wan30-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "wan30-720p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-720p",
+          "upstreamModel": "wan30-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "wan30-720p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.0-480p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "seedace-2.0-480p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "seedace-2.0-480p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "seedace-2.0-480p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.0-480p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.0-480p",
+          "upstreamModel": "seedace-2.0-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "seedace-2.0-480p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.0-480p",
+          "upstreamModel": "seedace-2.0-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "seedace-2.0-480p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "jydancan-1.5 decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "jydancan-1.5",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "jydancan-1.5",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "jydancan-1.5",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10
+        }
+      }
+    },
+    {
+      "name": "jydancan-1.5 reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "jydancan-1.5",
+          "upstreamModel": "jydancan-1.5",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "jydancan-1.5 submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "jydancan-1.5",
+          "upstreamModel": "jydancan-1.5",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "jydancan-1.5",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.0-720p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "seedace-2.0-720p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "seedace-2.0-720p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "seedace-2.0-720p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.0-720p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.0-720p",
+          "upstreamModel": "seedace-2.0-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "seedace-2.0-720p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.0-720p",
+          "upstreamModel": "seedace-2.0-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "seedace-2.0-720p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-3000 decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-3000",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-3000",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-3000",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-3000 reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-3000",
+          "upstreamModel": "sd-2.5-720p-3000",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-720p-3000 submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-3000",
+          "upstreamModel": "sd-2.5-720p-3000",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-3000",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-480p-plus decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-480p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-480p-plus",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-480p-plus",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-480p-plus reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-plus",
+          "upstreamModel": "sd-2.5-480p-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-480p-plus submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-plus",
+          "upstreamModel": "sd-2.5-480p-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-480p-plus",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra-cf decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-ultra-cf",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-ultra-cf",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-ultra-cf",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra-cf reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-ultra-cf",
+          "upstreamModel": "sd-2.5-720p-ultra-cf",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra-cf submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-ultra-cf",
+          "upstreamModel": "sd-2.5-720p-ultra-cf",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-ultra-cf",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sora-v3-933-pro decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sora-v3-933-pro",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sora-v3-933-pro",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "15",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sora-v3-933-pro",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 15,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sora-v3-933-pro reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-v3-933-pro",
+          "upstreamModel": "sora-v3-933-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sora-v3-933-pro submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-v3-933-pro",
+          "upstreamModel": "sora-v3-933-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sora-v3-933-pro",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "15",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-plus decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-plus",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-plus reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-720p-plus submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-plus",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.5-480p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "seedace-2.5-480p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "seedace-2.5-480p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "seedace-2.5-480p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.5-480p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.5-480p",
+          "upstreamModel": "seedace-2.5-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "seedace-2.5-480p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.5-480p",
+          "upstreamModel": "seedace-2.5-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "seedace-2.5-480p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sora-v3-933-plus decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sora-v3-933-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sora-v3-933-plus",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "15",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sora-v3-933-plus",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 15,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sora-v3-933-plus reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-v3-933-plus",
+          "upstreamModel": "sora-v3-933-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sora-v3-933-plus submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-v3-933-plus",
+          "upstreamModel": "sora-v3-933-plus",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sora-v3-933-plus",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "15",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "veo-3.1-fast decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "veo-3.1-fast",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "veo-3.1-fast",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "veo-3.1-fast",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10
+        }
+      }
+    },
+    {
+      "name": "veo-3.1-fast reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "veo-3.1-fast",
+          "upstreamModel": "veo-3.1-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "veo-3.1-fast submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "veo-3.1-fast",
+          "upstreamModel": "veo-3.1-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "veo-3.1-fast",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10"
+        }
+      }
+    },
+    {
+      "name": "sd2-pro-933-480p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd2-pro-933-480p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd2-pro-933-480p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd2-pro-933-480p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sd2-pro-933-480p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd2-pro-933-480p",
+          "upstreamModel": "sd2-pro-933-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd2-pro-933-480p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd2-pro-933-480p",
+          "upstreamModel": "sd2-pro-933-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd2-pro-933-480p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "tejiasd-mini-720p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "tejiasd-mini-720p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "tejiasd-mini-720p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "tejiasd-mini-720p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "tejiasd-mini-720p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd-mini-720p",
+          "upstreamModel": "tejiasd-mini-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "tejiasd-mini-720p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd-mini-720p",
+          "upstreamModel": "tejiasd-mini-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "tejiasd-mini-720p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-1080p-max decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-1080p-max",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-1080p-max",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "1080p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-1080p-max",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "1080p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-1080p-max reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-1080p-max",
+          "upstreamModel": "sd-2.5-1080p-max",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "1080p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-1080p-max submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-1080p-max",
+          "upstreamModel": "sd-2.5-1080p-max",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "1080p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-1080p-max",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "1080p"
+        }
+      }
+    },
+    {
+      "name": "jiuyue111 decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "jiuyue111",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "jiuyue111",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "jiuyue111",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "jiuyue111 reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "jiuyue111",
+          "upstreamModel": "jiuyue111",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "jiuyue111 submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "jiuyue111",
+          "upstreamModel": "jiuyue111",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "jiuyue111",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "tejiasd decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "tejiasd",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "tejiasd",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "15",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "tejiasd",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 15,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "tejiasd reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd",
+          "upstreamModel": "tejiasd",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "tejiasd submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd",
+          "upstreamModel": "tejiasd",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "tejiasd",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "15",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-900 decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-900",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-900",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-900",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-900 reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-900",
+          "upstreamModel": "sd-2.5-720p-900",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-720p-900 submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-900",
+          "upstreamModel": "sd-2.5-720p-900",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-900",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.5-720p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "seedace-2.5-720p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "seedace-2.5-720p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "seedace-2.5-720p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "seedace-2.5-720p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.5-720p",
+          "upstreamModel": "seedace-2.5-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "seedace-2.5-720p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.5-720p",
+          "upstreamModel": "seedace-2.5-720p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "seedace-2.5-720p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-480p-pro decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-480p-pro",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-480p-pro",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-480p-pro",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-480p-pro reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-pro",
+          "upstreamModel": "sd-2.5-480p-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-480p-pro submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-pro",
+          "upstreamModel": "sd-2.5-480p-pro",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-480p-pro",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "sora-933-720P-fast decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sora-933-720P-fast",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sora-933-720P-fast",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sora-933-720P-fast",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sora-933-720P-fast reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-933-720P-fast",
+          "upstreamModel": "sora-933-720P-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sora-933-720P-fast submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-933-720P-fast",
+          "upstreamModel": "sora-933-720P-fast",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sora-933-720P-fast",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "H3video-2k decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "H3video-2k",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "H3video-2k",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "15",
+              "resolution": "768p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "H3video-2k",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 15,
+          "resolution": "768p"
+        }
+      }
+    },
+    {
+      "name": "H3video-2k reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "H3video-2k",
+          "upstreamModel": "H3video-2k",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "768p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "H3video-2k submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "H3video-2k",
+          "upstreamModel": "H3video-2k",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 15,
+            "resolution": "768p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "H3video-2k",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "15",
+          "resolution": "768p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-ultra",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-ultra",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-ultra",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-ultra",
+          "upstreamModel": "sd-2.5-720p-ultra",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "sd-2.5-720p-ultra submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-ultra",
+          "upstreamModel": "sd-2.5-720p-ultra",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "sd-2.5-720p-ultra",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "Bt-sd2.0-480p decode",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "Bt-sd2.0-480p",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "Bt-sd2.0-480p",
+              "prompt": "一只猫在海边散步 🐈",
+              "seconds": "10",
+              "resolution": "480p"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "Bt-sd2.0-480p",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": 10,
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "Bt-sd2.0-480p reserve correct unit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "Bt-sd2.0-480p",
+          "upstreamModel": "Bt-sd2.0-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 10
+      }
+    },
+    {
+      "name": "Bt-sd2.0-480p submit documented JSON",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "Bt-sd2.0-480p",
+          "upstreamModel": "Bt-sd2.0-480p",
+          "requestBody": {
+            "prompt": "一只猫在海边散步 🐈",
+            "seconds": 10,
+            "resolution": "480p"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-key",
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "model": "Bt-sd2.0-480p",
+          "prompt": "一只猫在海边散步 🐈",
+          "seconds": "10",
+          "resolution": "480p"
+        }
+      }
+    },
+    {
+      "name": "Equal aliases preserve reference order and filter non-contract fields",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-plus",
+              "prompt": "参考图1、图2，横向 16:9",
+              "duration": 10,
+              "seconds": "10",
+              "resolution": "720p",
+              "aspect_ratio": "9:16",
+              "images": [
+                "https://cdn.example/person.png",
+                "https://cdn.example/scene.png"
+              ],
+              "image_urls": [
+                "https://cdn.example/person.png",
+                "https://cdn.example/scene.png"
+              ],
+              "videos": [
+                "https://cdn.example/motion.mp4"
+              ],
+              "audios": [
+                "https://cdn.example/music.mp3"
+              ],
+              "generate_audio": true,
+              "n": 99,
+              "usage": {
+                "seconds": 0
+              },
+              "metadata": {
+                "duration": -1
+              },
+              "price": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "参考图1、图2，横向 16:9",
+          "seconds": 10,
+          "resolution": "720p",
+          "aspect_ratio": "9:16",
+          "image_url": "https://cdn.example/person.png",
+          "reference_image_urls": [
+            "https://cdn.example/scene.png"
+          ],
+          "reference_videos": [
+            "https://cdn.example/motion.mp4"
+          ],
+          "audio_urls": [
+            "https://cdn.example/music.mp3"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Primary image and additional references concatenate once",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-plus",
+              "prompt": "p",
+              "seconds": 10,
+              "image_url": "https://cdn.example/person.png",
+              "input_reference": {
+                "image_url": "https://cdn.example/person.png"
+              },
+              "reference_image_urls": [
+                "https://cdn.example/scene.png"
+              ],
+              "images": [
+                "https://cdn.example/person.png",
+                "https://cdn.example/scene.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "p",
+          "seconds": 10,
+          "image_url": "https://cdn.example/person.png",
+          "reference_image_urls": [
+            "https://cdn.example/scene.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Pixel size maps resolution and aspect ratio",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-plus",
+              "prompt": "p",
+              "seconds": 10,
+              "size": "720x1280"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "p",
+          "seconds": 10,
+          "resolution": "720p",
+          "aspect_ratio": "9:16"
+        }
+      }
+    },
+    {
+      "name": "Aspect ratio size is accepted",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2.5-720p-plus",
+              "prompt": "p",
+              "seconds": 10,
+              "size": "16:9"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "text_to_video",
+        "requestBody": {
+          "prompt": "p",
+          "seconds": 10,
+          "aspect_ratio": "16:9"
+        }
+      }
+    },
+    {
+      "name": "Multipart repeated references and JSON input reference",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "multipart",
+            "files": [],
+            "fields": {
+              "model": [
+                "sd-2.5-720p-plus"
+              ],
+              "prompt": [
+                "p"
+              ],
+              "seconds": [
+                "10"
+              ],
+              "reference_image_urls[]": [
+                "https://cdn.example/scene.png"
+              ],
+              "input_reference": [
+                "{\"image_url\":\"https://cdn.example/person.png\"}"
+              ],
+              "images": [
+                "[\"https://cdn.example/person.png\",\"https://cdn.example/scene.png\"]"
+              ],
+              "n": [
+                "999"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2.5-720p-plus",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "p",
+          "seconds": 10,
+          "image_url": "https://cdn.example/person.png",
+          "reference_image_urls": [
+            "https://cdn.example/scene.png"
+          ]
+        }
+      }
+    },
+    {
+      "name": "zero rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 0
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "zero rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 0
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "negative rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": -1
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "negative rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": -1
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "fraction rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 1.5
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "fraction rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 1.5
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "boolean rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": true
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "boolean rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": true
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "unsigned overflow rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": "18446744073686646784"
+          }
+        }
+      ],
+      "expectedError": "between 1 and"
+    },
+    {
+      "name": "unsigned overflow rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": "18446744073686646784"
+          }
+        }
+      ],
+      "expectedError": "between 1 and"
+    },
+    {
+      "name": "global duration limit rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 3601
+          }
+        }
+      ],
+      "expectedError": "between 1 and"
+    },
+    {
+      "name": "global duration limit rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 3601
+          }
+        }
+      ],
+      "expectedError": "between 1 and"
+    },
+    {
+      "name": "null rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": null
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "null rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": null
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "scientific text rejected by extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": "1e3"
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "scientific text rejected by buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": "1e3"
+          }
+        }
+      ],
+      "expectedError": "positive integer"
+    },
+    {
+      "name": "duration aliases",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "duration": 15
+          }
+        }
+      ],
+      "expectedError": "conflicting fields"
+    },
+    {
+      "name": "ratio aliases",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "aspect_ratio": "9:16",
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expectedError": "conflicting fields"
+    },
+    {
+      "name": "image aliases",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "https://cdn.example/person.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/scene.png"
+            ]
+          }
+        }
+      ],
+      "expectedError": "conflicting reference"
+    },
+    {
+      "name": "aggregate image conflict",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "https://cdn.example/person.png"
+            ],
+            "image_url": "https://cdn.example/person.png",
+            "reference_image_urls": [
+              "https://cdn.example/scene.png"
+            ]
+          }
+        }
+      ],
+      "expectedError": "images conflicts"
+    },
+    {
+      "name": "size resolution conflict",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "size": "1920x1080",
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expectedError": "size conflicts"
+    },
+    {
+      "name": "size ratio conflict",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "size": "1280x720",
+            "aspect_ratio": "9:16"
+          }
+        }
+      ],
+      "expectedError": "size conflicts"
+    },
+    {
+      "name": "credential URL",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "https://user:pass@cdn.example/x"
+            ]
+          }
+        }
+      ],
+      "expectedError": "without embedded credentials"
+    },
+    {
+      "name": "base64 reference",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "data:image/png;base64,abc"
+            ]
+          }
+        }
+      ],
+      "expectedError": "public http(s)"
+    },
+    {
+      "name": "blank prompt",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": " ",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "prompt is required"
+    },
+    {
+      "name": "snapshot pro forbids videos despite stale docs",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-pro",
+          "upstreamModel": "sd-2.5-720p-pro",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "videos": [
+              "https://cdn.example/motion.mp4"
+            ]
+          }
+        }
+      ],
+      "expectedError": "reference limits"
+    },
+    {
+      "name": "pro lower bound",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-pro",
+          "upstreamModel": "sd-2.5-480p-pro",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 4
+          }
+        }
+      ],
+      "expectedError": "outside supported range"
+    },
+    {
+      "name": "pro upper bound",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-pro",
+          "upstreamModel": "sd-2.5-720p-pro",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 31
+          }
+        }
+      ],
+      "expectedError": "outside supported range"
+    },
+    {
+      "name": "wan with video limit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-1080p-fast",
+          "upstreamModel": "wan30-1080p-fast",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 30,
+            "videos": [
+              "https://cdn.example/motion.mp4"
+            ]
+          }
+        }
+      ],
+      "expectedError": "at most 15 seconds"
+    },
+    {
+      "name": "wan audio alone",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "wan30-720p",
+          "upstreamModel": "wan30-720p",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "audios": [
+              "https://cdn.example/music.mp3"
+            ]
+          }
+        }
+      ],
+      "expectedError": "require an image or video"
+    },
+    {
+      "name": "seedace reference needs image",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "seedace-2.0-480p",
+          "upstreamModel": "seedace-2.0-480p",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "videos": [
+              "https://cdn.example/motion.mp4"
+            ]
+          }
+        }
+      ],
+      "expectedError": "require an image"
+    },
+    {
+      "name": "mini 720p max duration",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd-mini-720p",
+          "upstreamModel": "tejiasd-mini-720p",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 15,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expectedError": "at most 12 seconds"
+    },
+    {
+      "name": "mini explicit resolution",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd-mini-720p",
+          "upstreamModel": "tejiasd-mini-720p",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "resolution must be"
+    },
+    {
+      "name": "fixed duration cannot be overridden",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd",
+          "upstreamModel": "tejiasd",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "requires 15 seconds"
+    },
+    {
+      "name": "Sora fast discrete duration",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-933-720P-fast",
+          "upstreamModel": "sora-933-720P-fast",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 12
+          }
+        }
+      ],
+      "expectedError": "requires 10 or 15 seconds"
+    },
+    {
+      "name": "H3 named 2k actually uses 768p",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "H3video-2k",
+          "upstreamModel": "H3video-2k",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 15,
+            "resolution": "1440p"
+          }
+        }
+      ],
+      "expectedError": "resolution must be 768p"
+    },
+    {
+      "name": "single tier does not accept higher resolution",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-480p-plus",
+          "upstreamModel": "sd-2.5-480p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "resolution": "1080p"
+          }
+        }
+      ],
+      "expectedError": "resolution must be 480p"
+    },
+    {
+      "name": "Sora total reference bound",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sora-v3-933-pro",
+          "upstreamModel": "sora-v3-933-pro",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 15,
+            "images": [
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png"
+            ],
+            "videos": [
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4"
+            ],
+            "audios": [
+              "https://cdn.example/music.mp3"
+            ]
+          }
+        }
+      ],
+      "expectedError": "at most 12 total"
+    },
+    {
+      "name": "dola image bound",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "dola-seedance-2.5",
+          "upstreamModel": "dola-seedance-2.5",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png"
+            ]
+          }
+        }
+      ],
+      "expectedError": "reference limits"
+    },
+    {
+      "name": "global media bound",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "jydancan-1.5",
+          "upstreamModel": "jydancan-1.5",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10,
+            "images": [
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png"
+            ],
+            "videos": [
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4"
+            ]
+          }
+        }
+      ],
+      "expectedError": "at most 50 references"
+    },
+    {
+      "name": "unknown model",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "toString",
+          "upstreamModel": "toString",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "unsupported Pidoi"
+    },
+    {
+      "name": "mixed model not silently priced per call",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "grok-imagine-video-1.5-preview",
+          "upstreamModel": "grok-imagine-video-1.5-preview",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "unsupported Pidoi"
+    },
+    {
+      "name": "token model not silently free",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "doubao-seedance-2-5-yq",
+          "upstreamModel": "doubao-seedance-2-5-yq",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 10
+          }
+        }
+      ],
+      "expectedError": "unsupported Pidoi"
+    },
+    {
+      "name": "Per-call ignores duration and client counters",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "dola-seedance-2.5",
+          "upstreamModel": "dola-seedance-2.5",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 30,
+            "n": 99,
+            "requests": 99,
+            "price": 0
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Maximum published 50 references accepted",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "sd-2.5-720p-plus",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 30,
+            "images": [
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png",
+              "https://cdn.example/person.png"
+            ],
+            "videos": [
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4",
+              "https://cdn.example/motion.mp4"
+            ],
+            "audios": [
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3",
+              "https://cdn.example/music.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 30
+      }
+    },
+    {
+      "name": "Fixed duration may be omitted",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd",
+          "upstreamModel": "tejiasd",
+          "requestBody": {
+            "prompt": "p"
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Alias uses mapped seconds model",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "my-video",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 12
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 12
+      }
+    },
+    {
+      "name": "Registered mapping cannot cross billing units",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "model": "tejiasd",
+          "upstreamModel": "sd-2.5-720p-plus",
+          "requestBody": {
+            "prompt": "p",
+            "seconds": 15
+          }
+        }
+      ],
+      "expectedError": "cannot change billing unit"
+    },
+    {
+      "name": "Completion retains reserved seconds regardless of upstream money and duration",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus"
+        },
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "seconds": 99999999,
+          "requests": 0,
+          "total_tokens": -1,
+          "billing_amount": 99
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "queued status mapping",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "queued"
+        }
+      ],
+      "expected": {
+        "status": "QUEUED"
+      }
+    },
+    {
+      "name": "processing status mapping",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "processing"
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS"
+      }
+    },
+    {
+      "name": "in_progress status mapping",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "in_progress"
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS"
+      }
+    },
+    {
+      "name": "completed status mapping",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "completed"
+        }
+      ],
+      "expected": {
+        "status": "SUCCESS"
+      }
+    },
+    {
+      "name": "Failure triggers host terminal handling",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "failed",
+          "error": {
+            "message": "bad input"
+          }
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "bad input"
+      }
+    },
+    {
+      "name": "Unknown status remains unknown",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "toString"
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized Pidoi task status: tostring"
+      }
+    },
+    {
+      "name": "Error envelope never treated as running",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "processing",
+          "error": {
+            "message": "unauthorized"
+          }
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unauthorized"
+      }
+    },
+    {
+      "name": "Immediate failure settles through host",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "id": "private-id",
+            "status": "failed",
+            "error": {
+              "message": "failed now"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "private-id",
+        "taskData": {
+          "id": "private-id",
+          "status": "failed",
+          "error": {
+            "message": "failed now"
+          }
+        },
+        "immediate": {
+          "status": "FAILURE",
+          "reason": "failed now"
+        }
+      }
+    },
+    {
+      "name": "Immediate success completes without polling",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "task_id": "private-id",
+            "status": "completed"
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "private-id",
+        "taskData": {
+          "task_id": "private-id",
+          "status": "completed"
+        },
+        "immediate": {
+          "status": "SUCCESS"
+        }
+      }
+    },
+    {
+      "name": "Async submit persists ID and data",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "id": "private-id",
+            "status": "processing",
+            "progress": 10
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "private-id",
+        "taskData": {
+          "id": "private-id",
+          "status": "processing",
+          "progress": 10
+        }
+      }
+    },
+    {
+      "name": "Submit error envelope is rejected",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "success": false,
+            "message": "rejected",
+            "id": "bad"
+          }
+        }
+      ],
+      "expectedError": "rejected"
+    },
+    {
+      "name": "Missing task ID is rejected",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "status": "processing"
+          }
+        }
+      ],
+      "expectedError": "no task id"
+    },
+    {
+      "name": "Query normalizes auth 1",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com/",
+          "authHeader": "fixture-key",
+          "taskId": "private/id"
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos/private%2Fid",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer fixture-key"
+        }
+      }
+    },
+    {
+      "name": "Query normalizes auth 2",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com/",
+          "authHeader": "Bearer fixture-key",
+          "taskId": "private/id"
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos/private%2Fid",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer fixture-key"
+        }
+      }
+    },
+    {
+      "name": "Base URL with /v1 rejected",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com/v1",
+          "apiKey": "fixture-key",
+          "taskId": "private-id"
+        }
+      ],
+      "expectedError": "must not end with /v1"
+    },
+    {
+      "name": "Credential header cannot inject lines",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "authHeader": "key\r\nCookie: other",
+          "taskId": "private-id"
+        }
+      ],
+      "expectedError": "must not contain whitespace"
+    },
+    {
+      "name": "GET content uses persisted ID and channel credentials only",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "artifactKey": "video",
+          "upstreamTaskId": "private/id",
+          "clientRequest": {
+            "method": "GET"
+          },
+          "data": {
+            "video_url": "https://attacker.example/steal-key"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos/private%2Fid/content",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer fixture-key"
+        }
+      }
+    },
+    {
+      "name": "HEAD content uses persisted ID and channel credentials only",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://pidoi.com",
+          "apiKey": "fixture-key",
+          "artifactKey": "video",
+          "upstreamTaskId": "private/id",
+          "clientRequest": {
+            "method": "HEAD"
+          },
+          "data": {
+            "video_url": "https://attacker.example/steal-key"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://pidoi.com/v1/videos/private%2Fid/content",
+        "method": "HEAD",
+        "headers": {
+          "Authorization": "Bearer fixture-key"
+        }
+      }
+    },
+    {
+      "name": "Public renderer hides upstream identifiers, URL and billing",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "task_id": "public-id",
+          "status": "SUCCESS",
+          "data": {
+            "id": "private-id",
+            "model": "private-model",
+            "video_url": "https://pidoi.com/v1/videos/private-id/content",
+            "seconds": "15",
+            "billing": {
+              "amount": 99
+            },
+            "metadata": {
+              "api_key": "must-not-leak"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "seconds": "15"
+      }
+    },
+    {
+      "name": "Only completed tasks expose video artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "SUCCESS"
+        }
+      ],
+      "expected": [
+        {
+          "key": "video",
+          "type": "video",
+          "mimeType": "video/mp4"
+        }
+      ]
+    },
+    {
+      "name": "Failed task has no artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "FAILURE"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "Binary uploads rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2.5-720p-plus",
+          "body": {
+            "kind": "multipart",
+            "fields": {},
+            "files": [
+              {
+                "field": "input_reference",
+                "ref": "request_file:input_reference"
+              }
+            ]
+          }
+        }
+      ],
+      "expectedError": "file uploads are not supported"
+    }
+  ]
+}

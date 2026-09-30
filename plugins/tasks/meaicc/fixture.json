@@ -1,0 +1,3328 @@
+{
+  "cases": [
+    {
+      "name": "User's nested request preserves Chinese prompt and ordered mixed media",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "input": {
+                "prompt": "图1中的人物穿上图2的装饰",
+                "media": [
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/person.png"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/decoration.png"
+                  },
+                  {
+                    "type": "reference_voice",
+                    "url": "https://cdn.example/voice.wav"
+                  },
+                  {
+                    "type": "reference_video",
+                    "url": "https://cdn.example/motion.mp4"
+                  }
+                ]
+              },
+              "parameters": {
+                "resolution": "720p",
+                "ratio": "16:9",
+                "duration": 10
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "图1中的人物穿上图2的装饰",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/person.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/decoration.png"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/motion.mp4"
+              }
+            ]
+          },
+          "parameters": {
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "First and last frames keep their roles",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c4",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c4",
+              "input": {
+                "prompt": "运动",
+                "media": [
+                  {
+                    "type": "first_frame",
+                    "url": "https://cdn.example/first.png"
+                  },
+                  {
+                    "type": "last_frame",
+                    "url": "https://cdn.example/last.png"
+                  }
+                ]
+              },
+              "parameters": {
+                "duration": 15,
+                "resolution": "720p"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c4",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "运动",
+            "media": [
+              {
+                "type": "first_frame",
+                "url": "https://cdn.example/first.png"
+              },
+              {
+                "type": "last_frame",
+                "url": "https://cdn.example/last.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "Flat OpenAI duration and pixels normalize to native parameters",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "海边日出",
+              "seconds": "10",
+              "size": "1280x720"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "text_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "海边日出"
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Flat reference arrays map to typed media",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "图1中的人物穿上图2的装饰",
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "images": [
+                "https://cdn.example/person.png",
+                "https://cdn.example/decoration.png"
+              ],
+              "audios": [
+                "https://cdn.example/voice.wav"
+              ],
+              "videos": [
+                "https://cdn.example/motion.mp4"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "图1中的人物穿上图2的装饰",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/person.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/decoration.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/motion.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "Input reference object maps to a reference image",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "海边日出",
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9",
+              "input_reference": {
+                "image_url": "https://cdn.example/a.png"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "海边日出",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/a.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Multipart native JSON objects preserve the vendor contract",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "multipart",
+            "files": [],
+            "fields": {
+              "model": [
+                "sd-2-c1"
+              ],
+              "input": [
+                "{\"prompt\":\"图1中的人物穿上图2的装饰\",\"media\":[{\"type\":\"reference_image\",\"url\":\"https://cdn.example/person.png\"},{\"type\":\"reference_image\",\"url\":\"https://cdn.example/decoration.png\"},{\"type\":\"reference_voice\",\"url\":\"https://cdn.example/voice.wav\"},{\"type\":\"reference_video\",\"url\":\"https://cdn.example/motion.mp4\"}]}"
+              ],
+              "parameters": [
+                "{\"resolution\":\"720p\",\"ratio\":\"16:9\",\"duration\":10}"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "图1中的人物穿上图2的装饰",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/person.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/decoration.png"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/motion.mp4"
+              }
+            ]
+          },
+          "parameters": {
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "Multipart repeated image references remain ordered",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "multipart",
+            "files": [],
+            "fields": {
+              "model": [
+                "sd-2-c1"
+              ],
+              "prompt": [
+                "海边日出"
+              ],
+              "seconds": [
+                "10"
+              ],
+              "size": [
+                "1280x720"
+              ],
+              "images[]": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "海边日出",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Mapped client identity uses W3 capabilities, not the alias capabilities",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "input": {
+                "prompt": "海边日出"
+              },
+              "parameters": {
+                "duration": 30,
+                "resolution": "1080p",
+                "ratio": "16:9"
+              }
+            }
+          },
+          "upstreamModel": "w3-c1"
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "text_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "海边日出"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "1080p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Submit uses mapped upstream model and channel authorization",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "my-paid-video",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 30,
+              "resolution": "1080p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "w3-c1",
+          "authHeader": "Bearer resolved-channel-token"
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer resolved-channel-token",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "w3-c1",
+          "input": {
+            "prompt": "海边日出"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "1080p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Native submit sends exactly the user's input and parameters",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2-c1",
+          "input": {
+            "prompt": "图1中的人物穿上图2的装饰",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/person.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/decoration.png"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/motion.mp4"
+              }
+            ]
+          },
+          "parameters": {
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "A short video reserves exactly one paid request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 4,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "A longer reference video still reserves exactly one paid request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 15
+            }
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Thirty-second W3 at 1080p still reserves one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 30,
+              "resolution": "1080p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "w3-c1"
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Legacy per-call ratios are neutral",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10
+            }
+          },
+          "usagePurpose": "billing_ratios"
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Completion cannot replace the count with upstream zero or negative usage",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {},
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "status": "SUCCEEDED",
+          "seconds": 0,
+          "requests": 0,
+          "usage": {
+            "requests": -1
+          },
+          "quota": -500000
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Completion duration never multiplies the charge",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {},
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "status": "SUCCEEDED",
+          "seconds": 18446744073686647000,
+          "requests": 999999999
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Invalid billing duration 0",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 0,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number"
+    },
+    {
+      "name": "Invalid billing duration -1",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": -1,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number"
+    },
+    {
+      "name": "Invalid billing duration 1.5",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 1.5,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number"
+    },
+    {
+      "name": "Invalid billing duration true",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": true,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number"
+    },
+    {
+      "name": "Invalid billing duration 18446744073686646784",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": "18446744073686646784",
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "between 1 and 30"
+    },
+    {
+      "name": "Ignoring client field does not change the charged count: requests",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            },
+            "requests": 0
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Ignoring client field does not change the charged count: usage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            },
+            "usage": {
+              "requests": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Ignoring client field does not change the charged count: n",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            },
+            "n": 2
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Ignoring client field does not change the charged count: metadata",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "海边日出"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            },
+            "metadata": {
+              "parameters": {
+                "duration": 999999
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Nested parameters cannot hide an extra billed count",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10,
+              "n": 2
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2-c1",
+          "input": {
+            "prompt": "图1中的人物穿上图2的装饰",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/person.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/decoration.png"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/motion.mp4"
+              }
+            ]
+          },
+          "parameters": {
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "A flat prompt cannot silently override nested input",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "input": {
+                "prompt": "图1中的人物穿上图2的装饰",
+                "media": [
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/person.png"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/decoration.png"
+                  },
+                  {
+                    "type": "reference_voice",
+                    "url": "https://cdn.example/voice.wav"
+                  },
+                  {
+                    "type": "reference_video",
+                    "url": "https://cdn.example/motion.mp4"
+                  }
+                ]
+              },
+              "parameters": {
+                "resolution": "720p",
+                "ratio": "16:9",
+                "duration": 10
+              },
+              "prompt": "different"
+            }
+          }
+        }
+      ],
+      "expectedError": "unsupported video request field: prompt"
+    },
+    {
+      "name": "Duration aliases must agree",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "video",
+              "duration": 10,
+              "seconds": 15,
+              "resolution": "720p"
+            }
+          }
+        }
+      ],
+      "expectedError": "seconds conflicts with duration"
+    },
+    {
+      "name": "Size cannot override explicit resolution",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "video",
+              "seconds": 10,
+              "resolution": "1080p",
+              "size": "1280x720"
+            }
+          }
+        }
+      ],
+      "expectedError": "size conflicts with resolution"
+    },
+    {
+      "name": "Missing resolution is not silently defaulted",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 10
+            }
+          }
+        }
+      ],
+      "expectedError": "resolution must be"
+    },
+    {
+      "name": "Blank prompt is rejected before upstream submission",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": " "
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          }
+        }
+      ],
+      "expectedError": "prompt is required"
+    },
+    {
+      "name": "Unknown upstream model cannot inherit a paid route",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10
+            }
+          },
+          "upstreamModel": "free-video"
+        }
+      ],
+      "expectedError": "unsupported upstream video model"
+    },
+    {
+      "name": "sd-2-fast capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 15,
+              "resolution": "720p"
+            }
+          },
+          "upstreamModel": "sd-2-fast"
+        }
+      ],
+      "expectedError": "only supports 10 seconds"
+    },
+    {
+      "name": "sd-2-c8 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 12,
+              "resolution": "720p"
+            }
+          },
+          "upstreamModel": "sd-2-c8"
+        }
+      ],
+      "expectedError": "only supports 10 or 15 seconds"
+    },
+    {
+      "name": "sd-2.5-c1 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p"
+            }
+          },
+          "upstreamModel": "sd-2.5-c1"
+        }
+      ],
+      "expectedError": "only supports 30 seconds"
+    },
+    {
+      "name": "sd-2-c4 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 16,
+              "resolution": "720p"
+            }
+          },
+          "upstreamModel": "sd-2-c4"
+        }
+      ],
+      "expectedError": "between 4 and 15"
+    },
+    {
+      "name": "w3-c1 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 4,
+              "resolution": "1080p"
+            }
+          },
+          "upstreamModel": "w3-c1"
+        }
+      ],
+      "expectedError": "between 5 and 30"
+    },
+    {
+      "name": "mx-h3 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p"
+            }
+          },
+          "upstreamModel": "mx-h3"
+        }
+      ],
+      "expectedError": "resolution must be 768p"
+    },
+    {
+      "name": "sd-2-c1 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "1080p"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "resolution must be 720p"
+    },
+    {
+      "name": "sd-2-c6 capability boundary",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video"
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "21:9"
+            }
+          },
+          "upstreamModel": "sd-2-c6"
+        }
+      ],
+      "expectedError": "ratio must be 1:1, 16:9 or 9:16"
+    },
+    {
+      "name": "10 images exceed SD2 limit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "at most 9 images"
+    },
+    {
+      "name": "4 audio references exceed SD2 limit",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/a.wav"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/a.wav"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/a.wav"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/a.wav"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "3 audio references"
+    },
+    {
+      "name": "first frame counts toward the image cap",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "first_frame",
+                  "url": "https://cdn.example/start.png"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "at most 9 images"
+    },
+    {
+      "name": "fast model rejects video references",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/a.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-fast"
+        }
+      ],
+      "expectedError": "0 videos"
+    },
+    {
+      "name": "duplicate first frames are rejected",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "first_frame",
+                  "url": "https://cdn.example/a.png"
+                },
+                {
+                  "type": "first_frame",
+                  "url": "https://cdn.example/b.png"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "at most one first_frame"
+    },
+    {
+      "name": "unknown media type is rejected",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_audio",
+                  "url": "https://cdn.example/a.wav"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "unsupported media type"
+    },
+    {
+      "name": "embedded credentials are rejected",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://user:pass@cdn.example/a.png"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "without embedded credentials"
+    },
+    {
+      "name": "local file reference is rejected",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "video",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "file:///tmp/a.png"
+                }
+              ]
+            },
+            "parameters": {
+              "duration": 10,
+              "resolution": "720p",
+              "ratio": "16:9"
+            }
+          },
+          "upstreamModel": "sd-2-c1"
+        }
+      ],
+      "expectedError": "must use http(s)"
+    },
+    {
+      "name": "Multipart files are rejected instead of dropped",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "multipart",
+            "fields": {},
+            "files": [
+              {
+                "field": "input_reference",
+                "ref": "request_file:input_reference"
+              }
+            ]
+          }
+        }
+      ],
+      "expectedError": "file uploads are not supported"
+    },
+    {
+      "name": "Multipart duplicate scalar values are rejected",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "sd-2-c1"
+              ],
+              "seconds": [
+                "10",
+                "15"
+              ]
+            },
+            "files": []
+          }
+        }
+      ],
+      "expectedError": "seconds must be provided once"
+    },
+    {
+      "name": "Accepted asynchronous task retains its private ID for host polling",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "statusCode": 202,
+          "body": {
+            "id": "upstream-id",
+            "task_id": "upstream-id",
+            "object": "",
+            "status": "RUNNING",
+            "progress": 0
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "upstream-id",
+        "taskData": {
+          "id": "upstream-id",
+          "task_id": "upstream-id",
+          "object": "",
+          "status": "RUNNING",
+          "progress": 0
+        }
+      }
+    },
+    {
+      "name": "Immediate rejection without a task ID surfaces the provider reason for refund",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "task_id": "",
+            "id": "",
+            "status": "FAILED: 余额不足",
+            "object": ""
+          }
+        }
+      ],
+      "expectedError": "余额不足"
+    },
+    {
+      "name": "Failure with a task ID is terminal at submission",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "id": "upstream-id",
+            "status": "FAILED: 内容不支持",
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "upstream-id",
+        "taskData": {
+          "id": "upstream-id",
+          "status": "FAILED: 内容不支持",
+          "seconds": 0
+        },
+        "immediate": {
+          "status": "FAILURE",
+          "reason": "内容不支持"
+        }
+      }
+    },
+    {
+      "name": "Immediate success uses the host terminal settlement path",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "body": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "SUCCEEDED",
+            "seconds": 15
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "upstream-id",
+        "taskData": {
+          "id": "upstream-id",
+          "object": "https://cdn.example/video.mp4?signature=abc",
+          "status": "SUCCEEDED",
+          "seconds": 15
+        },
+        "immediate": {
+          "status": "SUCCESS"
+        }
+      }
+    },
+    {
+      "name": "Task query path escapes the upstream ID",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "taskId": "a/b?#"
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos/a%2Fb%3F%23",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key"
+        }
+      }
+    },
+    {
+      "name": "Poll maps PENDING",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "PENDING"
+        }
+      ],
+      "expected": {
+        "status": "QUEUED"
+      }
+    },
+    {
+      "name": "Poll maps RUNNING",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "RUNNING"
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS"
+      }
+    },
+    {
+      "name": "Poll maps SUCCEEDED",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "SUCCEEDED"
+        }
+      ],
+      "expected": {
+        "status": "SUCCESS"
+      }
+    },
+    {
+      "name": "Poll maps FAILED",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "FAILED"
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "video generation failed"
+      }
+    },
+    {
+      "name": "Poll maps FAILED: 任务失败",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "FAILED: 任务失败"
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "任务失败"
+      }
+    },
+    {
+      "name": "Poll maps FAILED：额度不足",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "FAILED：额度不足"
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "额度不足"
+      }
+    },
+    {
+      "name": "Poll maps CANCELLED",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "CANCELLED"
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "reason": "video generation failed"
+      }
+    },
+    {
+      "name": "Unknown status enters host poll-failure handling",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "TIME_TRAVEL"
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized video task status: TIME_TRAVEL"
+      }
+    },
+    {
+      "name": "Non-JSON poll response is not reported as running",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        "bad gateway"
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "invalid task response"
+      }
+    },
+    {
+      "name": "Numeric progress is preserved",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "status": "RUNNING",
+          "progress": 45
+        }
+      ],
+      "expected": {
+        "status": "IN_PROGRESS",
+        "progress": "45%"
+      }
+    },
+    {
+      "name": "Success exposes a downloadable artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "SUCCESS"
+        }
+      ],
+      "expected": [
+        {
+          "key": "video",
+          "type": "video",
+          "mimeType": "video/mp4"
+        }
+      ]
+    },
+    {
+      "name": "Failure exposes no video artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "FAILURE"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "GET content follows object URL without credentials",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10
+            }
+          },
+          "artifactKey": "video",
+          "data": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "SUCCEEDED",
+            "seconds": 15
+          },
+          "clientRequest": {
+            "method": "GET"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://cdn.example/video.mp4?signature=abc",
+        "method": "GET",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "HEAD content follows object URL without credentials",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "baseUrl": "https://api.meaicc.com/",
+          "apiKey": "fixture-only-key",
+          "model": "sd-2-c1",
+          "requestBody": {
+            "input": {
+              "prompt": "图1中的人物穿上图2的装饰",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/person.png"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/decoration.png"
+                },
+                {
+                  "type": "reference_voice",
+                  "url": "https://cdn.example/voice.wav"
+                },
+                {
+                  "type": "reference_video",
+                  "url": "https://cdn.example/motion.mp4"
+                }
+              ]
+            },
+            "parameters": {
+              "resolution": "720p",
+              "ratio": "16:9",
+              "duration": 10
+            }
+          },
+          "artifactKey": "video",
+          "data": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "SUCCEEDED",
+            "seconds": 15
+          },
+          "clientRequest": {
+            "method": "HEAD"
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://cdn.example/video.mp4?signature=abc",
+        "method": "HEAD",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "Missing video URL cannot fabricate a content path",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "artifactKey": "video",
+          "data": {
+            "object": "",
+            "status": "SUCCEEDED"
+          }
+        }
+      ],
+      "expectedError": "no downloadable video URL"
+    },
+    {
+      "name": "Unknown artifact cannot download video content",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "artifactKey": "secret",
+          "data": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "SUCCEEDED",
+            "seconds": 15
+          }
+        }
+      ],
+      "expectedError": "artifact_not_found"
+    },
+    {
+      "name": "Content URL cannot contain embedded credentials",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "artifactKey": "video",
+          "data": {
+            "object": "https://key:secret@cdn.example/video.mp4"
+          }
+        }
+      ],
+      "expectedError": "no downloadable video URL"
+    },
+    {
+      "name": "Renderer exposes the URL without overriding host-owned object or ID",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "SUCCESS",
+          "data": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "SUCCEEDED",
+            "seconds": 15
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 15,
+        "video_url": "https://cdn.example/video.mp4?signature=abc",
+        "url": "https://cdn.example/video.mp4?signature=abc"
+      }
+    },
+    {
+      "name": "Renderer does not leak video URL before success",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "IN_PROGRESS",
+          "data": {
+            "id": "upstream-id",
+            "object": "https://cdn.example/video.mp4?signature=abc",
+            "status": "RUNNING",
+            "seconds": 15
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 15
+      }
+    },
+    {
+      "name": "Renderer exposes failure details",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "FAILURE",
+          "data": {
+            "id": "upstream-id",
+            "status": "FAILED: 内容不支持",
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 0,
+        "error": {
+          "message": "内容不支持"
+        }
+      }
+    },
+    {
+      "name": "Customer duplicate image aliases and extra audio option normalize successfully",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+              "seconds": "15",
+              "duration": 15,
+              "resolution": "720p",
+              "aspect_ratio": "9:16",
+              "images": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png",
+                "https://cdn.example/3.png"
+              ],
+              "image_urls": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png",
+                "https://cdn.example/3.png"
+              ],
+              "generate_audio": true,
+              "client_option": {
+                "enabled": true
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Customer request forwards only recognized vendor fields",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2-c1",
+          "input": {
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Customer extra options do not change one-request billing",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "URL-suffixed aliases work without the original media names",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "参考媒体",
+              "seconds": 10,
+              "resolution": "720p",
+              "aspect_ratio": "16:9",
+              "image_urls": [
+                "https://cdn.example/image.png"
+              ],
+              "video_urls": [
+                "https://cdn.example/video.mp4"
+              ],
+              "audio_urls": [
+                "https://cdn.example/voice.wav"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "参考媒体",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/image.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/video.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Snake-case reference aliases preserve media roles",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "参考媒体",
+              "seconds": 10,
+              "resolution": "720p",
+              "aspectRatio": "16:9",
+              "reference_images": [
+                "https://cdn.example/image.png"
+              ],
+              "reference_videos": [
+                "https://cdn.example/video.mp4"
+              ],
+              "reference_audios": [
+                "https://cdn.example/voice.wav"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "参考媒体",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/image.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/video.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Equivalent scalar and array aliases normalize without duplicate references",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "参考媒体",
+              "seconds": 10,
+              "resolution": "720p",
+              "aspect_ratio": "16:9",
+              "image_urls": [
+                "https://cdn.example/image.png"
+              ],
+              "video_urls": [
+                "https://cdn.example/video.mp4"
+              ],
+              "audio_urls": [
+                "https://cdn.example/voice.wav"
+              ],
+              "ratio": "16:9",
+              "aspectRatio": "16:9",
+              "images": " https://cdn.example/image.png ",
+              "referenceImages": [
+                "https://cdn.example/image.png"
+              ],
+              "videos": [
+                "https://cdn.example/video.mp4"
+              ],
+              "audios": [
+                "https://cdn.example/voice.wav"
+              ],
+              "reference_audios": [
+                "https://cdn.example/voice.wav"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "参考媒体",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/image.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/video.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Different image alias lists are not silently merged",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/1.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expectedError": "conflicting reference fields: images, image_urls"
+    },
+    {
+      "name": "Changed image order is a conflict because numbered references matter",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/3.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/1.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expectedError": "conflicting reference fields"
+    },
+    {
+      "name": "An invalid secondary alias cannot be hidden behind a valid primary field",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "file:///tmp/image.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expectedError": "entries must be http(s)"
+    },
+    {
+      "name": "Conflicting aspect aliases remain errors",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": "15",
+            "duration": 15,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            },
+            "ratio": "16:9"
+          }
+        }
+      ],
+      "expectedError": "aspect_ratio conflicts with ratio"
+    },
+    {
+      "name": "Unknown extras cannot mask an invalid duration",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "seconds": -1,
+            "duration": -1,
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+            "images": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "image_urls": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/2.png",
+              "https://cdn.example/3.png"
+            ],
+            "generate_audio": true,
+            "client_option": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "expectedError": "integer number of seconds"
+    },
+    {
+      "name": "New image alias still enforces model media limits",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "参考媒体",
+            "seconds": 10,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "image_urls": [
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png",
+              "https://cdn.example/1.png"
+            ],
+            "video_urls": [
+              "https://cdn.example/video.mp4"
+            ],
+            "audio_urls": [
+              "https://cdn.example/voice.wav"
+            ]
+          }
+        }
+      ],
+      "expectedError": "at most 9 images"
+    },
+    {
+      "name": "Repeated references within a list retain their numbered positions",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "prompt": "参考媒体",
+              "seconds": 10,
+              "resolution": "720p",
+              "aspect_ratio": "16:9",
+              "image_urls": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/1.png"
+              ],
+              "video_urls": [
+                "https://cdn.example/video.mp4"
+              ],
+              "audio_urls": [
+                "https://cdn.example/voice.wav"
+              ],
+              "images": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/1.png"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "参考媒体",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/video.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Multipart aliases and extra options follow the same normalization",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "multipart",
+            "files": [],
+            "fields": {
+              "model": [
+                "sd-2-c1"
+              ],
+              "prompt": [
+                "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致"
+              ],
+              "seconds": [
+                "15"
+              ],
+              "duration": [
+                "15"
+              ],
+              "resolution": [
+                "720p"
+              ],
+              "aspect_ratio": [
+                "9:16"
+              ],
+              "images": [
+                "[\"https://cdn.example/1.png\",\"https://cdn.example/2.png\",\"https://cdn.example/3.png\"]"
+              ],
+              "image_urls[]": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png",
+                "https://cdn.example/3.png"
+              ],
+              "generate_audio": [
+                "true"
+              ],
+              "client_option": [
+                "x",
+                "y"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Nested optional extras are stripped and aspect alias is normalized",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "sd-2-c1",
+              "input": {
+                "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+                "media": [
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/1.png",
+                    "caption": "extra metadata"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/2.png",
+                    "caption": "extra metadata"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/3.png",
+                    "caption": "extra metadata"
+                  }
+                ],
+                "generate_audio": false
+              },
+              "parameters": {
+                "duration": 15,
+                "resolution": "720p",
+                "aspect_ratio": "9:16",
+                "generate_audio": true,
+                "seed": 1,
+                "n": 100
+              },
+              "client_option": {
+                "parameters": {
+                  "duration": 999999
+                }
+              },
+              "usage": {
+                "requests": 0
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sd-2-c1",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Nested extras never reach upstream input parameters or media",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "input": {
+              "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/1.png",
+                  "caption": "extra metadata"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/2.png",
+                  "caption": "extra metadata"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/3.png",
+                  "caption": "extra metadata"
+                }
+              ],
+              "generate_audio": false
+            },
+            "parameters": {
+              "duration": 15,
+              "resolution": "720p",
+              "aspect_ratio": "9:16",
+              "generate_audio": true,
+              "seed": 1,
+              "n": 100
+            },
+            "client_option": {
+              "parameters": {
+                "duration": 999999
+              }
+            },
+            "usage": {
+              "requests": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2-c1",
+          "input": {
+            "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Untrusted counts costs and metadata are excluded from the vendor request",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "参考媒体",
+            "seconds": 10,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "image_urls": [
+              "https://cdn.example/image.png"
+            ],
+            "video_urls": [
+              "https://cdn.example/video.mp4"
+            ],
+            "audio_urls": [
+              "https://cdn.example/voice.wav"
+            ],
+            "metadata": {
+              "parameters": {
+                "duration": 999999,
+                "ratio": "evil"
+              }
+            },
+            "n": 999999,
+            "requests": -5,
+            "usage": {
+              "requests": 0
+            },
+            "quota": -999,
+            "price": 0,
+            "generate_audio": false
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2-c1",
+          "input": {
+            "prompt": "参考媒体",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/image.png"
+              },
+              {
+                "type": "reference_video",
+                "url": "https://cdn.example/video.mp4"
+              },
+              {
+                "type": "reference_voice",
+                "url": "https://cdn.example/voice.wav"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 10,
+            "resolution": "720p",
+            "ratio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "name": "Ignored count and cost fields cannot change billing",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "prompt": "参考媒体",
+            "seconds": 10,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "image_urls": [
+              "https://cdn.example/image.png"
+            ],
+            "video_urls": [
+              "https://cdn.example/video.mp4"
+            ],
+            "audio_urls": [
+              "https://cdn.example/voice.wav"
+            ],
+            "metadata": {
+              "parameters": {
+                "duration": 999999,
+                "ratio": "evil"
+              }
+            },
+            "n": 999999,
+            "requests": -5,
+            "usage": {
+              "requests": 0
+            },
+            "quota": -999,
+            "price": 0,
+            "generate_audio": false
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "Nested numeric duration remains validated even with ignored overrides",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2-c1",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "sd-2-c1",
+            "input": {
+              "prompt": "横向 16:9，固定 15 秒\n@图1、@图2、@图3 保持人物一致",
+              "media": [
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/1.png",
+                  "caption": "extra metadata"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/2.png",
+                  "caption": "extra metadata"
+                },
+                {
+                  "type": "reference_image",
+                  "url": "https://cdn.example/3.png",
+                  "caption": "extra metadata"
+                }
+              ],
+              "generate_audio": false
+            },
+            "parameters": {
+              "duration": "18446744073686646784",
+              "resolution": "720p",
+              "aspect_ratio": "9:16",
+              "generate_audio": true,
+              "seed": 1,
+              "n": 100
+            },
+            "client_option": {
+              "parameters": {
+                "duration": 999999
+              }
+            },
+            "usage": {
+              "requests": 0
+            }
+          }
+        }
+      ],
+      "expectedError": "between 1 and 30"
+    }
+  ]
+}

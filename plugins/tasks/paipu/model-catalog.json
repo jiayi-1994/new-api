@@ -1,0 +1,524 @@
+{
+  "checked_at": "2026-09-28",
+  "pricing_url": "https://api.paipu.net/pricing",
+  "pricing_data_url": "https://api.paipu.net/api/pricing",
+  "catalog_url": "https://api.paipu.net/api/media-models/catalog",
+  "pricing_version": "a42d372ccf0b5dd13ecf71203521f9d2",
+  "catalog_version": "sha256:8829d5f152237609710ddc3657d2cba0656b4e328ebf60020c980ad8f0c0e120",
+  "models": [
+    {
+      "model": "lec-seed-2-5-900",
+      "kind": "video",
+      "resolutions": [],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "分辨率未公开；空数组，不展示分辨率计费"
+    },
+    {
+      "model": "lec-wan3-720p",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ac-image-2-5-flare",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-ac-image-2-5-sunburst",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-gt-seedance-2-0-mini",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-seedance-2-0-full-933-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-seedance-2-0-933-stable-edit",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "使用显式正整数时长；不支持 -1 自动时长与 adaptive 画幅"
+    },
+    {
+      "model": "lec-haya-seedance-2-5-xg-720",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-haya-seedance-2-0-xg-720",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ty-seedance-2-0-mini-933-j-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-grok-4.5",
+      "kind": "chat",
+      "resolutions": null,
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "聊天接口，不加入视频插件"
+    },
+    {
+      "model": "lec-mj-seedance-2-0-full-933-jd",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-rs-seedance-2-0-fast",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-seedance-2-0-mini-c4-480p",
+      "kind": "video",
+      "resolutions": [
+        "480p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-md-seedance-2-0-fast-900-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-mj-wan-3-0-1080p",
+      "kind": "video",
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ty-seedream-5-pro",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件（价格页端点标为视频，官方目录实际为图片）"
+    },
+    {
+      "model": "lec-ac-seedance-2-0-fast-2-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": 15,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-vp-seedance-2-0-933-s2",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-vp-seedance-2-5-m2",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ty-seedance-2-0-mini-933-j-480p",
+      "kind": "video",
+      "resolutions": [
+        "480p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-vg-seedance-2-5-wd",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-omni-video-redraw",
+      "kind": "video",
+      "resolutions": null,
+      "fixed_duration": null,
+      "status": "needs_adapter",
+      "note": "缺少公开请求参数与三种像素尺寸定义，暂不声明支持"
+    },
+    {
+      "model": "lec-bk-video-30s",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ac-banana-flash",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-seedance-2-0",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ty-face-processing-1-0",
+      "kind": "video",
+      "resolutions": null,
+      "fixed_duration": null,
+      "status": "needs_adapter",
+      "note": "人脸处理专用 mode 接口，无 prompt；不兼容现有视频请求"
+    },
+    {
+      "model": "lec-seed-2-0-900",
+      "kind": "video",
+      "resolutions": [],
+      "fixed_duration": 15,
+      "status": "registered",
+      "note": "分辨率未公开；空数组，不展示分辨率计费"
+    },
+    {
+      "model": "lec-ty-wan-3-0-1055-1080p",
+      "kind": "video",
+      "resolutions": [
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-yu25-grok-video-1-5-preview",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ac-banana-pro",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-ty-wan-3-0-1055-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-md-seedance-2-5-900-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-md-seedance-2-0-900-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-seedance-2-0-933-stable",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-gt-seedance-2-0-full",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-h3video-2k",
+      "kind": "video",
+      "resolutions": [
+        "1440p"
+      ],
+      "fixed_duration": 15,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-seedance-2-0-fast-933-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ac-image-2",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-gt-seedance-2-5-720p",
+      "kind": "video",
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-image-2",
+      "kind": "image",
+      "resolutions": null,
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-mj-seedance-2-5-bd-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-minimax-h3-768p",
+      "kind": "video",
+      "resolutions": [
+        "768p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-vp-wan-3-0-prime",
+      "kind": "video",
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ty-seedance-2-0-full-933-me-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-ac-seedance-2-5-10-image",
+      "kind": "video",
+      "resolutions": [],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "分辨率未公开；空数组，不展示分辨率计费"
+    },
+    {
+      "model": "lec-minimax-h3",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-tinysnow-image-2",
+      "kind": "image",
+      "resolutions": [
+        "1K",
+        "2K",
+        "4K",
+        "auto"
+      ],
+      "fixed_duration": null,
+      "status": "not_video",
+      "note": "图片接口，不加入视频插件"
+    },
+    {
+      "model": "lec-mj-seedance-2-5-vd-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "已接入"
+    },
+    {
+      "model": "lec-brx-seedance-2-5-3010",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": 30,
+      "status": "registered",
+      "note": "已接入"
+    }
+  ]
+}
