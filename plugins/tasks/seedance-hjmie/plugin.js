@@ -202,6 +202,12 @@ function normalize(ctx) {
   };
 }
 
+function upstreamModel(ctx) {
+  const model = ctx.upstreamModel || ctx.model;
+  if (!MODELS.includes(model)) throw new Error("unsupported upstream video model: " + model);
+  return model;
+}
+
 function authHeaders(ctx) {
   const value = ctx.authHeader || (ctx.apiKey ? "Bearer " + ctx.apiKey : "");
   if (!value) throw new Error("channel API key is required");
@@ -210,8 +216,7 @@ function authHeaders(ctx) {
 
 export function buildSubmitRequest(ctx) {
   const input = ctx.requestBody || {};
-  const model = ctx.upstreamModel || ctx.model;
-  if (!MODELS.includes(model)) throw new Error("unsupported upstream video model: " + model);
+  const model = upstreamModel(ctx);
   const body = {
     model,
     prompt: input.prompt,
@@ -322,6 +327,7 @@ export function buildContentRequest(ctx) {
 // Scheduling facts for the host's purchase-cost quote; never billing usage.
 // Reads the decoded body the same way extractUsage and buildSubmitRequest do.
 export function describeSpec(ctx) {
+  upstreamModel(ctx);
   const input = ctx.requestBody || {};
   return {
     spec_version: 1,

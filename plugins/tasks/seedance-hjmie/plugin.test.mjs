@@ -56,3 +56,25 @@ test("describeSpec counts each reference kind from the final body", () => {
   assert.deepEqual(plugin.describeSpec(plain).references, { video: 0, image: 0, audio: 0 });
   assert.throws(() => plugin.describeSpec({ model: value.model, requestBody: { prompt: "a cat", resolution: "480p" } }), /duration/);
 });
+
+test("describeSpec and submission apply the same mapped-model validation", () => {
+  const value = { model: "videos-fast", prompt: "a cat", duration: 8, resolution: "720p" };
+  const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
+  for (const identity of [
+    { model: value.model, upstreamModel: "unsupported-mapped-model" },
+    { model: "unsupported-mapped-model" },
+  ]) {
+    const ctx = { ...identity, requestBody: intent.requestBody, usagePurpose: "spec" };
+    const expected = { message: "unsupported upstream video model: unsupported-mapped-model" };
+    assert.throws(() => submittedSpec(ctx), expected);
+    assert.throws(() => plugin.describeSpec(ctx), expected);
+  }
+
+  for (const identity of [
+    { model: value.model, upstreamModel: "videos-standard" },
+    { model: "client-alias", upstreamModel: "videos-standard" },
+  ]) {
+    const ctx = { ...identity, requestBody: intent.requestBody, usagePurpose: "spec" };
+    assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
+  }
+});
