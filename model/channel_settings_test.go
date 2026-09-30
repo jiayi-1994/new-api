@@ -16,6 +16,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
@@ -145,9 +146,10 @@ func TestVideoSchedulingCalibrationQueries(t *testing.T) {
 				if dsn == "" {
 					t.Skip("TEST_POSTGRES_DSN is not configured")
 				}
-				driver = postgres.Open(dsn)
+				driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
 			}
-			db, err := gorm.Open(driver, &gorm.Config{})
+			// The prefix keeps the fixture off the real channels/tasks tables.
+			db, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "video_sched_test_"}})
 			require.NoError(t, err)
 			sqlDB, err := db.DB()
 			require.NoError(t, err)
@@ -180,18 +182,28 @@ func TestVideoSchedulingCalibrationQueries(t *testing.T) {
 			for i, row := range []struct {
 				channel int
 				status  TaskStatus
+				group   string
+				tracked bool
 			}{
-				{scheduled.Id, TaskStatusSubmitted}, {scheduled.Id, TaskStatusInProgress}, {scheduled.Id, TaskStatusUnknown},
-				{scheduled.Id, TaskStatusSuccess}, {scheduled.Id, TaskStatusFailure}, {plain.Id, TaskStatusQueued},
+				{scheduled.Id, TaskStatusSubmitted, "acct", true}, {scheduled.Id, TaskStatusInProgress, "old", true},
+				{scheduled.Id, TaskStatusUnknown, "", true}, {scheduled.Id, TaskStatusQueued, "", false},
+				{scheduled.Id, TaskStatusSuccess, "acct", true}, {scheduled.Id, TaskStatusFailure, "acct", true},
+				{plain.Id, TaskStatusQueued, "acct", true},
 			} {
-				require.NoError(t, db.Create(&Task{TaskID: fmt.Sprintf("video-%d", i), ChannelId: row.channel, Status: row.status}).Error)
+				task := &Task{TaskID: fmt.Sprintf("video-%d", i), ChannelId: row.channel, Status: row.status}
+				if row.tracked {
+					task.PrivateData.SchedulingSummary = &TaskSchedulingSummary{Model: "m", CapacityGroup: row.group}
+				}
+				require.NoError(t, db.Create(task).Error)
 			}
-			counts, err := CountActiveTasksByChannel([]int{scheduled.Id, corrupt.Id})
+			channels, groups, err := CountActiveScheduledTasks([]int{scheduled.Id, corrupt.Id})
 			require.NoError(t, err)
-			assert.Equal(t, map[int]int64{scheduled.Id: 3}, counts, "terminal tasks and unlisted channels are not counted")
-			empty, err := CountActiveTasksByChannel(nil)
+			assert.Equal(t, map[int]int64{scheduled.Id: 3}, channels, "terminal, summary-less and unlisted-channel tasks are not counted")
+			assert.Equal(t, map[string]int64{"acct": 1, "old": 1}, groups, "groups follow the capacity group saved at submit")
+			channels, groups, err = CountActiveScheduledTasks(nil)
 			require.NoError(t, err)
-			assert.Empty(t, empty)
+			assert.Empty(t, channels)
+			assert.Empty(t, groups)
 		})
 	}
 }

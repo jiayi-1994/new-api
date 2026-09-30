@@ -252,7 +252,8 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
-		!p.ResultDiscarded && p.StoredArtifact == nil && p.StoreAttempts == 0 {
+		!p.ResultDiscarded && p.StoredArtifact == nil && p.StoreAttempts == 0 &&
+		p.SchedulingSummary == nil {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
@@ -640,33 +641,41 @@ type TaskQuotaUsage struct {
 	Count float64 `json:"count"`
 }
 
-// TaskCountAllTasks returns total tasks that match the given query params (admin usage)
-// CountActiveTasksByChannel counts non-terminal tasks per channel. Channels
-// without active tasks are absent from the map; a query error is returned
-// rather than zero counts so callers never reset gauges on a failed read.
-func CountActiveTasksByChannel(channelIDs []int) (map[int]int64, error) {
-	counts := make(map[int]int64, len(channelIDs))
+// CountActiveScheduledTasks counts the non-terminal tasks of the given
+// channels that carry a SchedulingSummary, per channel and per the capacity
+// group saved in that summary: the same ownership the in-flight gauges are
+// incremented and released by. Tasks without a summary are not counted. A
+// query or decode error is returned rather than zero counts so callers never
+// reset gauges on a failed read.
+func CountActiveScheduledTasks(channelIDs []int) (map[int]int64, map[string]int64, error) {
+	channels, groups := map[int]int64{}, map[string]int64{}
 	if len(channelIDs) == 0 {
-		return counts, nil
+		return channels, groups, nil
 	}
-	var rows []struct {
-		ChannelId int
-		Count     int64
-	}
-	err := DB.Model(&Task{}).
-		Select("channel_id, COUNT(*) AS count").
+	// ponytail: loads every active task of tracked channels each round; page
+	// with FindInBatches if active tasks grow into the tens of thousands.
+	var tasks []Task
+	err := DB.Select("id", "channel_id", "private_data").
 		Where("channel_id IN ?", channelIDs).
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Group("channel_id").
-		Scan(&rows).Error
+		Find(&tasks).Error
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, row := range rows {
-		counts[row.ChannelId] = row.Count
+	for _, task := range tasks {
+		summary := task.PrivateData.SchedulingSummary
+		if summary == nil {
+			continue
+		}
+		channels[task.ChannelId]++
+		if summary.CapacityGroup != "" {
+			groups[summary.CapacityGroup]++
+		}
 	}
-	return counts, nil
+	return channels, groups, nil
 }
+
+// TaskCountAllTasks returns total tasks that match the given query params (admin usage)
 
 func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	var total int64

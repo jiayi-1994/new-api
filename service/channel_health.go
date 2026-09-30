@@ -31,6 +31,7 @@ const (
 	videoSchedKeyPrefix        = "video_sched:"
 	videoSchedAllModels        = "*"
 	videoSchedCalibrationKey   = videoSchedKeyPrefix + "calib"
+	videoSchedCalibratedKey    = videoSchedKeyPrefix + "calib_ok"
 	videoSchedCalibrationTick  = time.Minute
 	videoSchedProbeCooldownMax = 24 * time.Hour
 )
@@ -73,10 +74,18 @@ type videoProbeLease struct {
 }
 
 // VideoSchedulingTracks reports whether a channel's traffic feeds channel
-// health: scheduling is not off and the channel has a cost table.
+// health: scheduling is not off and the channel has a cost table. A channel
+// built from request context carries no settings; its cached copy is read.
 func VideoSchedulingTracks(channel *model.Channel) (*dto.VideoSchedulingConfig, bool) {
 	if channel == nil || operation_setting.GetVideoSchedulingSetting().Mode == operation_setting.VideoSchedulingModeOff {
 		return nil, false
+	}
+	if channel.OtherSettings == "" && channel.Id > 0 {
+		full, err := model.CacheGetChannel(channel.Id)
+		if err != nil {
+			return nil, false
+		}
+		channel = full
 	}
 	var settings dto.ChannelOtherSettings
 	if channel.OtherSettings == "" || common.UnmarshalJsonStr(channel.OtherSettings, &settings) != nil || settings.VideoScheduling == nil {
@@ -366,7 +375,8 @@ var (
 )
 
 // VideoHealthReady reports that in-flight gauges have been calibrated against
-// the database since startup, by this instance or by the lock holder.
+// the database since startup: by this instance, or by another instance whose
+// success marker is still fresh while it holds the calibration lock.
 func VideoHealthReady() bool {
 	return videoHealthReady.Load()
 }
@@ -395,8 +405,19 @@ func calibrateVideoInFlight() {
 		common.SysError("video scheduling calibration lock failed: " + err.Error())
 		return
 	}
+	_, shared := store.(redisVideoHealth)
 	if !locked {
-		videoHealthReady.Store(true)
+		// Another instance holds the lock and may still be counting or may
+		// have failed; only its published success makes the gauges trusted.
+		// Without Redis the lock holder is this instance itself.
+		if shared {
+			marked, err := common.RDB.Exists(context.Background(), videoSchedCalibratedKey).Result()
+			if err != nil {
+				common.SysError("video scheduling calibration marker read failed: " + err.Error())
+			} else if marked > 0 {
+				videoHealthReady.Store(true)
+			}
+		}
 		return
 	}
 	configs, err := model.GetVideoScheduledChannels()
@@ -408,21 +429,25 @@ func calibrateVideoInFlight() {
 	for id := range configs {
 		ids = append(ids, id)
 	}
-	counts, err := model.CountActiveTasksByChannel(ids)
+	channels, groups, err := model.CountActiveScheduledTasks(ids)
 	if err != nil {
 		// Keep the last gauge values: a failed read must not zero them.
 		common.SysError("video scheduling calibration count failed: " + err.Error())
 		return
 	}
-	groups := map[string]int64{}
 	for id, cfg := range configs {
-		calibrateVideoGauge(store, videoInFlightKey(id), counts[id])
-		if cfg.CapacityGroup != "" {
-			groups[cfg.CapacityGroup] += counts[id]
+		calibrateVideoGauge(store, videoInFlightKey(id), channels[id])
+		if _, ok := groups[cfg.CapacityGroup]; !ok && cfg.CapacityGroup != "" {
+			groups[cfg.CapacityGroup] = 0 // a configured group whose tasks all ended drains to zero
 		}
 	}
 	for group, count := range groups {
 		calibrateVideoGauge(store, videoGroupInFlightKey(group), count)
+	}
+	if shared {
+		if err := common.RDB.Set(context.Background(), videoSchedCalibratedKey, 1, 3*videoSchedCalibrationTick).Err(); err != nil {
+			common.SysError("video scheduling calibration marker write failed: " + err.Error())
+		}
 	}
 	videoHealthReady.Store(true)
 }

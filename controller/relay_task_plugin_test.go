@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -301,6 +302,49 @@ func TestExecuteTaskSubmissionHonorsRouteRetainResult(t *testing.T) {
 			assert.Empty(t, listed[0].Data, "task lists never select the snapshot column")
 		})
 	}
+}
+
+// A first attempt uses the channel the distributor selected, which the relay
+// rebuilds from request context without its settings; channel health must
+// still see the channel's scheduling config.
+func TestExecuteTaskSubmissionFirstAttemptFeedsVideoScheduling(t *testing.T) {
+	events := make([]string, 0, 3)
+	database := setupTaskSubmissionDatabase(t, true, &events)
+	require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.User{}))
+	t.Cleanup(func() { require.NoError(t, database.Migrator().DropTable(&model.Channel{}, &model.User{})) })
+	previousRedis, previousMemory, previousConsume := common.RedisEnabled, common.MemoryCacheEnabled, common.LogConsumeEnabled
+	previousSetting := *operation_setting.GetVideoSchedulingSetting()
+	common.RedisEnabled, common.MemoryCacheEnabled, common.LogConsumeEnabled = false, false, false
+	operation_setting.GetVideoSchedulingSetting().Mode = operation_setting.VideoSchedulingModeShadow
+	t.Cleanup(func() {
+		common.RedisEnabled, common.MemoryCacheEnabled, common.LogConsumeEnabled = previousRedis, previousMemory, previousConsume
+		*operation_setting.GetVideoSchedulingSetting() = previousSetting
+	})
+	channel := &model.Channel{Id: 10000 + int(time.Now().UnixNano()%1_000_000), Type: constant.ChannelTypeTaskPlugin, Name: "scheduled", Key: "k",
+		OtherSettings: `{"video_scheduling":{"capacity_group":"acct","models":{"plugin-model":{"mode":"per_video","prices":{"*":1}}}}}`}
+	require.NoError(t, database.Create(channel).Error)
+
+	c := taskSubmissionTestContext()
+	c.Set("channel_id", channel.Id)
+	c.Set("channel_type", channel.Type)
+	info := taskSubmissionRelayInfo(&taskSubmissionTestBilling{events: &events})
+	info.ChannelMeta, info.LockedChannel = nil, nil
+	outcome, taskErr := executeTaskSubmissionWith(c, info, func(_ *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type} // as the real submit does
+		return &relay.TaskSubmitResult{UpstreamTaskID: "upstream", Platform: constant.TaskPlatform("plugin")}, nil
+	})
+	require.Nil(t, taskErr)
+	require.NotNil(t, outcome)
+
+	health, err := service.GetVideoChannelHealth(channel.Id, "plugin-model", 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, health.Submit.Samples, "the accepted submission is a sample")
+	assert.Equal(t, 1, health.InFlight)
+	var stored model.Task
+	require.NoError(t, database.Where("task_id = ?", "task_public").First(&stored).Error)
+	require.NotNil(t, stored.PrivateData.SchedulingSummary)
+	assert.Equal(t, model.TaskSchedulingSummary{Model: "plugin-model", CapacityGroup: "acct"}, *stored.PrivateData.SchedulingSummary)
+	service.ObserveVideoTerminal(&stored, true)
 }
 
 func TestExecuteTaskSubmissionRefundsCancellationBeforeDurableBarrier(t *testing.T) {

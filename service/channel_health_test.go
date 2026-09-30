@@ -30,12 +30,15 @@ func useVideoHealthBackend(t *testing.T, backend string) {
 	previousRedis, previousRDB := common.RedisEnabled, common.RDB
 	previousSetting := *operation_setting.GetVideoSchedulingSetting()
 	previousMemory := memoryVideoHealth
+	previousReady := videoHealthReady.Load()
 	t.Cleanup(func() {
 		common.RedisEnabled, common.RDB = previousRedis, previousRDB
 		*operation_setting.GetVideoSchedulingSetting() = previousSetting
 		memoryVideoHealth = previousMemory
 		videoCalibrationDrift.Clear()
+		videoHealthReady.Store(previousReady)
 	})
+	videoHealthReady.Store(false)
 	memoryVideoHealth = &memoryVideoHealthStore{hashes: map[string]map[string]int64{}, gauges: map[string]int64{}, slots: map[string]memoryVideoSlot{}}
 	common.RedisEnabled, common.RDB = false, nil
 	if backend == "redis" {
@@ -266,10 +269,38 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 				channel.Name, channel.Key = fmt.Sprintf("c%d", channel.Id), "k"
 				require.NoError(t, database.Create(channel).Error)
 			}
-			for i, status := range []model.TaskStatus{model.TaskStatusSubmitted, model.TaskStatusInProgress, model.TaskStatusSuccess} {
-				require.NoError(t, database.Create(&model.Task{TaskID: fmt.Sprintf("t%d", i), ChannelId: 2, Status: status}).Error)
+			// Channel 2 has two active tracked tasks: one counted in "acct" and
+			// one submitted before a regroup, still owned by group "old". A
+			// finished task and an untracked one (no summary) count nowhere.
+			for i, row := range []struct {
+				status model.TaskStatus
+				group  string
+			}{{model.TaskStatusSubmitted, "acct"}, {model.TaskStatusInProgress, "old"}, {model.TaskStatusSuccess, "acct"}, {model.TaskStatusQueued, ""}} {
+				task := &model.Task{TaskID: fmt.Sprintf("t%d", i), ChannelId: 2, Status: row.status}
+				if row.group != "" {
+					task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{Model: "m", CapacityGroup: row.group}
+				}
+				require.NoError(t, database.Create(task).Error)
 			}
 			store := videoHealthStore()
+
+			// Before any successful calibration, a lock held elsewhere is not
+			// enough for readiness: the holder may still be counting or fail.
+			require.NoError(t, store.set(videoGroupInFlightKey("old"), 4))
+			ok, err := store.acquire(videoSchedCalibrationKey, "other-instance", time.Minute)
+			require.NoError(t, err)
+			require.True(t, ok)
+			calibrateVideoInFlight()
+			assert.False(t, VideoHealthReady())
+			if backend == "redis" {
+				require.NoError(t, common.RDB.Set(t.Context(), videoSchedCalibratedKey, 1, time.Minute).Err())
+				calibrateVideoInFlight()
+				assert.True(t, VideoHealthReady(), "another instance published a successful calibration")
+				videoHealthReady.Store(false)
+				require.NoError(t, common.RDB.Del(t.Context(), videoSchedCalibrationKey, videoSchedCalibratedKey).Err())
+			} else {
+				memoryVideoHealth.slots = map[string]memoryVideoSlot{}
+			}
 
 			// Channel 1: a quiet zombie count (capacity 1: redis 1, db 0) is
 			// within the drift threshold but resets after two identical rounds.
@@ -277,10 +308,15 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 			require.NoError(t, store.set(videoInFlightKey(1), 1))
 			require.NoError(t, store.set(videoInFlightKey(2), 9))
 			calibrateVideoInFlight()
-			values, err := store.get([]string{videoInFlightKey(1), videoInFlightKey(2), videoGroupInFlightKey("acct")})
+			values, err := store.get([]string{videoInFlightKey(1), videoInFlightKey(2), videoGroupInFlightKey("acct"), videoGroupInFlightKey("old")})
 			require.NoError(t, err)
-			assert.Equal(t, []int64{1, 2, 0}, values, "drifts within max(2, 10%) wait for a second round")
+			assert.Equal(t, []int64{1, 2, 0, 1}, values, "drifts within max(2, 10%) wait for a second round; groups follow saved ownership")
 			assert.True(t, VideoHealthReady())
+			if backend == "redis" {
+				marked, err := common.RDB.Exists(t.Context(), videoSchedCalibratedKey).Result()
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), marked, "a successful calibration is published to other instances")
+			}
 
 			require.NoError(t, store.release(videoSchedCalibrationKey, "")) // no-op: the lock is held by its own token
 			if backend == "redis" {
@@ -291,7 +327,7 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 			calibrateVideoInFlight()
 			values, err = store.get([]string{videoInFlightKey(1), videoGroupInFlightKey("acct")})
 			require.NoError(t, err)
-			assert.Equal(t, []int64{0, 2}, values, "the same drift twice resets the zombie count and the group")
+			assert.Equal(t, []int64{0, 1}, values, "the same drift twice resets the zombie count and the group")
 
 			// A failed count keeps the gauges instead of zeroing them.
 			require.NoError(t, store.set(videoInFlightKey(2), 5))
