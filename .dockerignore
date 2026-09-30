@@ -7,6 +7,9 @@ Makefile
 docs
 .eslintcache
 .gocache
+.scratch
+*.dump
+*.sql.gz
 /web/node_modules
 /web/dist
 !THIRD-PARTY-LICENSES.md
