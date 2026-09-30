@@ -50,6 +50,23 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestChannelValidateSettingsVideoSchedulingCostBound(t *testing.T) {
+	orig := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = orig })
+	common.QuotaPerUnit = 500 * 1000.0
+	bound := float64(common.MaxWalletQuota) / common.QuotaPerUnit
+
+	channelWithPrice := func(price float64) *Channel {
+		return &Channel{OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{"m":{"mode":"per_video","prices":{"*":%v}}}}}`, price)}
+	}
+	require.NoError(t, channelWithPrice(bound).ValidateSettings())
+	require.ErrorContains(t, channelWithPrice(bound*1.000001).ValidateSettings(), "price for tier")
+
+	common.QuotaPerUnit = 1e-300
+	require.ErrorContains(t, channelWithPrice(1).ValidateSettings(), "cost bound")
+	require.NoError(t, (&Channel{OtherSettings: `{"tool_loss_policy":"allow"}`}).ValidateSettings(), "channels without video_scheduling skip the bound")
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

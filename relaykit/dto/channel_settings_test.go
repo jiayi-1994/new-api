@@ -732,3 +732,56 @@ func TestChannelOtherSettingsValidateToolLossPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool_loss_policy")
 }
+
+func TestVideoSchedulingConfigValidate(t *testing.T) {
+	const bound = 100.0
+	valid := `{"quality":0.8,"capacity":3,"capacity_group":"acct-a","models":{"videos-mini":{
+		"mode":"per_second","prices":{"720p":0.05,"*":0.04},"min_seconds":4,"max_seconds":12,"allowed_seconds":[4,8,12],
+		"references":{"video":{"720p":{"mode":"per_input","value":0}},"image":{"*":{"mode":"included"}},"audio":{"*":{"mode":"multiplier","value":1.5}}}}}}`
+	tests := []struct {
+		name    string
+		json    string
+		wantErr string
+	}{
+		{name: "valid with explicit zero surcharge", json: valid},
+		{name: "references absent and price at bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":100}}}}`},
+		{name: "price just over bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":100.00000000000001}}}}`, wantErr: "price for tier"},
+		{name: "per second unit over bound", json: `{"models":{"m":{"mode":"per_second","prices":{"*":101}}}}`, wantErr: "price for tier"},
+		{name: "surcharge over bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"per_request","value":101}}}}}}`, wantErr: "value must be within"},
+		{name: "charging mode needs value", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"per_input"}}}}}}`, wantErr: "value must be within"},
+		{name: "included takes no value", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"image":{"*":{"mode":"included","value":0}}}}}}`, wantErr: "takes no value"},
+		{name: "multiplier below one", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"multiplier","value":0.9}}}}}}`, wantErr: "multiplier"},
+		{name: "unknown reference kind", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"file":{"*":{"mode":"included"}}}}}}`, wantErr: "reference kind"},
+		{name: "unknown reference mode", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"free"}}}}}}`, wantErr: "invalid mode"},
+		{name: "invalid base mode", json: `{"models":{"m":{"mode":"per_unit","prices":{"*":1}}}}`, wantErr: "invalid mode"},
+		{name: "empty prices", json: `{"models":{"m":{"mode":"per_video","prices":{}}}}`, wantErr: "prices are required"},
+		{name: "uppercase tier", json: `{"models":{"m":{"mode":"per_video","prices":{"720P":1}}}}`, wantErr: "lowercase"},
+		{name: "pixel size tier", json: `{"models":{"m":{"mode":"per_video","prices":{"1280x720":1}}}}`, wantErr: "pixel size"},
+		{name: "quality above one", json: `{"quality":1.1}`, wantErr: "quality"},
+		{name: "negative capacity", json: `{"capacity":-1}`, wantErr: "capacity"},
+		{name: "padded capacity group", json: `{"capacity_group":" a"}`, wantErr: "capacity_group"},
+		{name: "max seconds over host limit", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"max_seconds":3601}}}`, wantErr: "seconds"},
+		{name: "min above max", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"min_seconds":10,"max_seconds":5}}}`, wantErr: "min_seconds"},
+		{name: "non-positive allowed seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds":[0]}}}`, wantErr: "allowed_seconds"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg VideoSchedulingConfig
+			require.NoError(t, json.Unmarshal([]byte(tt.json), &cfg))
+			err := cfg.Validate(bound, 3600)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+
+	var cfg VideoSchedulingConfig
+	require.NoError(t, json.Unmarshal([]byte(valid), &cfg))
+	rules := cfg.Models["videos-mini"].References
+	require.NotNil(t, rules["video"]["720p"].Value, "explicit zero must stay distinct from a missing value")
+	assert.Zero(t, *rules["video"]["720p"].Value)
+	assert.Nil(t, rules["image"]["*"].Value)
+}

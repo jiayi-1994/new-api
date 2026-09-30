@@ -12,8 +12,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -1011,6 +1013,15 @@ func (channel *Channel) ValidateSettings() error {
 	}
 	if err := channelOtherSettings.ValidateToolLossPolicy(); err != nil {
 		return err
+	}
+	if channelOtherSettings.VideoScheduling != nil {
+		maxCostUSD, err := operation_setting.VideoSchedMaxCostUSD()
+		if err != nil {
+			return err
+		}
+		if err := channelOtherSettings.VideoScheduling.Validate(maxCostUSD, commonRelay.MaxTaskDurationSeconds); err != nil {
+			return err
+		}
 	}
 	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {
 		channelOtherSettings.AdvancedCustom = preset

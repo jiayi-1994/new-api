@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -127,6 +128,143 @@ type ChannelOtherSettings struct {
 	// rejection. Empty follows the default allow policy. Accepted values:
 	// "", "allow", "safe", "strict".
 	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
+	// VideoScheduling is the channel's purchase cost table for video task
+	// scheduling. Nil means the channel has no scheduling configuration.
+	VideoScheduling *VideoSchedulingConfig `json:"video_scheduling,omitempty"`
+}
+
+// Video scheduling cost modes. The values mirror pkg/videosched, which
+// relaykit cannot import.
+const (
+	VideoCostPerVideo  = "per_video"
+	VideoCostPerSecond = "per_second"
+
+	VideoRefUnsupported     = "unsupported"
+	VideoRefIncluded        = "included"
+	VideoRefPerRequest      = "per_request"
+	VideoRefPerInput        = "per_input"
+	VideoRefPerOutputSecond = "per_output_second"
+	VideoRefMultiplier      = "multiplier"
+
+	maxVideoCapacityGroupLength = 64
+)
+
+var videoReferenceKinds = []string{"video", "image", "audio"}
+
+type VideoSchedulingConfig struct {
+	Quality       float64 `json:"quality"`                  // [0,1]
+	Capacity      int     `json:"capacity"`                 // 0 = unlimited
+	CapacityGroup string  `json:"capacity_group,omitempty"` // quota lives in the global capacity_groups setting
+	// Models is keyed by the model name as spelled in the channel's models.
+	Models map[string]VideoModelCost `json:"models"`
+}
+
+// VideoModelCost is the purchase price of one model in USD. Prices exclude
+// reference media surcharges. Tier keys are stored lowercase and trimmed;
+// "*" means untiered.
+type VideoModelCost struct {
+	Mode           string             `json:"mode"`
+	Prices         map[string]float64 `json:"prices"`
+	MinSeconds     int                `json:"min_seconds,omitempty"`
+	MaxSeconds     int                `json:"max_seconds,omitempty"`
+	AllowedSeconds []int              `json:"allowed_seconds,omitempty"`
+	// References maps kind (video|image|audio) -> tier|"*" -> rule. A missing
+	// kind or tier is unpriced, never included.
+	References map[string]map[string]VideoReferenceCost `json:"references,omitempty"`
+}
+
+type VideoReferenceCost struct {
+	Mode  string   `json:"mode"`
+	Value *float64 `json:"value,omitempty"` // USD or dimensionless multiplier; nil is distinct from 0
+}
+
+// Validate checks the save-time shape of the scheduling config. maxCostUSD
+// bounds every USD amount that is known without a request; maxSeconds bounds
+// the seconds constraints. Request-dependent totals are checked at quote time.
+func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) error {
+	if c == nil {
+		return nil
+	}
+	if !(c.Quality >= 0 && c.Quality <= 1) {
+		return fmt.Errorf("video_scheduling: quality must be within [0,1]")
+	}
+	if c.Capacity < 0 {
+		return fmt.Errorf("video_scheduling: capacity must not be negative")
+	}
+	if c.CapacityGroup != strings.TrimSpace(c.CapacityGroup) || len(c.CapacityGroup) > maxVideoCapacityGroupLength {
+		return fmt.Errorf("video_scheduling: capacity_group must be trimmed and at most %d bytes", maxVideoCapacityGroupLength)
+	}
+	usd := func(v float64) bool { return v >= 0 && v <= maxCostUSD }
+	for model, cost := range c.Models {
+		if model == "" || model != strings.TrimSpace(model) {
+			return fmt.Errorf("video_scheduling: invalid model name %q", model)
+		}
+		if cost.Mode != VideoCostPerVideo && cost.Mode != VideoCostPerSecond {
+			return fmt.Errorf("video_scheduling: model %s: invalid mode %q", model, cost.Mode)
+		}
+		if len(cost.Prices) == 0 {
+			return fmt.Errorf("video_scheduling: model %s: prices are required", model)
+		}
+		for tier, price := range cost.Prices {
+			if err := validateVideoTierKey(tier); err != nil {
+				return fmt.Errorf("video_scheduling: model %s: %w", model, err)
+			}
+			if !usd(price) {
+				return fmt.Errorf("video_scheduling: model %s: price for tier %s must be within [0, %g] USD", model, tier, maxCostUSD)
+			}
+		}
+		if cost.MinSeconds < 0 || cost.MaxSeconds < 0 || cost.MinSeconds > maxSeconds || cost.MaxSeconds > maxSeconds {
+			return fmt.Errorf("video_scheduling: model %s: seconds must be within [0, %d]", model, maxSeconds)
+		}
+		if cost.MaxSeconds > 0 && cost.MinSeconds > cost.MaxSeconds {
+			return fmt.Errorf("video_scheduling: model %s: min_seconds exceeds max_seconds", model)
+		}
+		for _, seconds := range cost.AllowedSeconds {
+			if seconds <= 0 || seconds > maxSeconds {
+				return fmt.Errorf("video_scheduling: model %s: allowed_seconds must be within [1, %d]", model, maxSeconds)
+			}
+		}
+		for kind, rules := range cost.References {
+			if !slices.Contains(videoReferenceKinds, kind) {
+				return fmt.Errorf("video_scheduling: model %s: unknown reference kind %q", model, kind)
+			}
+			for tier, rule := range rules {
+				if err := validateVideoTierKey(tier); err != nil {
+					return fmt.Errorf("video_scheduling: model %s: reference %s: %w", model, kind, err)
+				}
+				switch rule.Mode {
+				case VideoRefUnsupported, VideoRefIncluded:
+					if rule.Value != nil {
+						return fmt.Errorf("video_scheduling: model %s: reference %s/%s: %s takes no value", model, kind, tier, rule.Mode)
+					}
+				case VideoRefPerRequest, VideoRefPerInput, VideoRefPerOutputSecond:
+					if rule.Value == nil || !usd(*rule.Value) {
+						return fmt.Errorf("video_scheduling: model %s: reference %s/%s: value must be within [0, %g] USD", model, kind, tier, maxCostUSD)
+					}
+				case VideoRefMultiplier:
+					if rule.Value == nil || !(*rule.Value >= 1) || math.IsInf(*rule.Value, 1) {
+						return fmt.Errorf("video_scheduling: model %s: reference %s/%s: multiplier must be a finite value >= 1", model, kind, tier)
+					}
+				default:
+					return fmt.Errorf("video_scheduling: model %s: reference %s/%s: invalid mode %q", model, kind, tier, rule.Mode)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateVideoTierKey requires tier keys in the form spec parsing produces:
+// lowercase and trimmed, and never a WxH pixel size (plugins' pixel sizes
+// become short-side tiers such as 720p, so such a key could never match).
+func validateVideoTierKey(tier string) error {
+	if tier == "" || tier != strings.ToLower(strings.TrimSpace(tier)) {
+		return fmt.Errorf("tier key %q must be non-empty, lowercase and trimmed", tier)
+	}
+	if w, h, ok := strings.Cut(strings.ReplaceAll(tier, "*", "x"), "x"); ok && w != "" && h != "" && strings.Trim(w+h, "0123456789") == "" {
+		return fmt.Errorf("tier key %q is a pixel size; use the short side such as 720p", tier)
+	}
+	return nil
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

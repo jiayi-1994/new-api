@@ -240,7 +240,7 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
-	return nil
+	return operation_setting.ValidateVideoSchedulingOption(key, value)
 }
 
 func UpdateOption(key string, value string) error {
