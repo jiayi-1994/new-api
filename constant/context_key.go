@@ -84,4 +84,7 @@ const (
 	// ContextKeyVideoSchedProbeLease holds a video scheduling probe slot the
 	// request owns until its task is persisted.
 	ContextKeyVideoSchedProbeLease ContextKey = "video_sched_probe_lease"
+	// ContextKeyVideoSchedDecision holds the request's frozen video scheduling
+	// decision (service.VideoSchedDecision).
+	ContextKeyVideoSchedDecision ContextKey = "video_sched_decision"
 )

@@ -13,6 +13,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -386,9 +387,19 @@ func VideoHealthReady() bool {
 func RunVideoHealthCalibration(ctx context.Context) {
 	ticker := time.NewTicker(videoSchedCalibrationTick)
 	defer ticker.Stop()
+	lastBlockerWarning := ""
 	for {
-		if operation_setting.GetVideoSchedulingSetting().Mode != operation_setting.VideoSchedulingModeOff {
+		setting := operation_setting.GetVideoSchedulingSetting()
+		if setting.Mode != operation_setting.VideoSchedulingModeOff {
 			calibrateVideoInFlight()
+			// Logged when it changes, so startup and later setting or plugin
+			// changes each report the static mixed-pool blockers once.
+			if warning := videoSchedBlockerWarning(ctx, jsplugin.DefaultRegistry.Generation(), setting.Models); warning != lastBlockerWarning {
+				if warning != "" {
+					logger.LogWarn(ctx, "%s", warning)
+				}
+				lastBlockerWarning = warning
+			}
 		}
 		select {
 		case <-ctx.Done():

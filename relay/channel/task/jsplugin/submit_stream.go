@@ -121,7 +121,7 @@ func (a *TaskAdaptor) readSubmitEvents(parent context.Context, resp *http.Respon
 		// isolated without parsing large strings again; codec-specific values
 		// (for example exported typed arrays) retain the old normalization.
 		var plainJSON bool
-		state, plainJSON = cloneJSONValue(nextState, 0)
+		state, plainJSON = pluginruntime.CloneJSONValue(nextState)
 		if !plainJSON {
 			if err = common.Unmarshal(encoded, &state); err != nil {
 				return nil, err

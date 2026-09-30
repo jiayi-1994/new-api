@@ -1772,10 +1772,10 @@ func TestPluginJSONValuesPreserveCodecNormalizationAndIsolation(t *testing.T) {
 		require.NoError(t, err)
 		var expected any
 		require.NoError(t, common.Unmarshal(encoded, &expected))
-		assert.Equal(t, expected, jsonValue(value))
+		assert.Equal(t, expected, pluginruntime.JSONValue(value))
 	}
 	source := map[string]any{"items": []any{map[string]any{"label": "original"}}}
-	copy := jsonValue(source).(map[string]any)
+	copy := pluginruntime.JSONValue(source).(map[string]any)
 	copy["items"].([]any)[0].(map[string]any)["label"] = "changed"
 	assert.Equal(t, "original", source["items"].([]any)[0].(map[string]any)["label"])
 }

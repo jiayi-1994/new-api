@@ -162,7 +162,7 @@ func channelMatchesExpectedTaskPlugin(c *gin.Context, channel *model.Channel, ex
 		return false
 	}
 	if c != nil {
-		if _, matched := pinnedEndpointCandidateForChannel(c, channel, expected); matched {
+		if _, matched := service.PinnedEndpointCandidateForChannel(c, channel, expected); matched {
 			return true
 		}
 	}
@@ -183,47 +183,6 @@ func channelMatchesExpectedTaskPlugin(c *gin.Context, channel *model.Channel, ex
 	}
 	plugin, ok := pinned.Generation.GetByChannelType(channel.Type)
 	return ok && plugin == pinned.Plugin
-}
-
-func pinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, expected string) (jsplugin.ProtocolBinding, bool) {
-	if c == nil || channel == nil || expected == "" {
-		return jsplugin.ProtocolBinding{}, false
-	}
-	value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint)
-	pinned, ok := value.(jsplugin.PinnedEndpoint)
-	if !exists || !ok || pinned.Generation == nil || pinned.Plugin == nil {
-		return jsplugin.ProtocolBinding{}, false
-	}
-	candidates := pinned.Candidates
-	if len(candidates) == 0 {
-		candidates = []jsplugin.ProtocolBinding{{Plugin: pinned.Plugin, Protocol: pinned.Protocol, Operation: pinned.Operation, Model: pinned.Model}}
-	}
-	expectedOwned := false
-	selected := jsplugin.ProtocolBinding{}
-	setting := channel.GetSetting()
-	for _, candidate := range candidates {
-		if candidate.Plugin == nil {
-			continue
-		}
-		if candidate.Plugin.Meta.Key == expected {
-			expectedOwned = true
-		}
-		if channel.Type == constant.ChannelTypeTaskPlugin || channel.Type == constant.ChannelTypeNewAPI {
-			// A New API channel may bind several candidates. The first bound
-			// candidate in generation order executes, so the billing provider
-			// depends only on the channel and the request, never on which
-			// channels an earlier retry attempt happened to try.
-			if selected.Plugin == nil && setting.BindsTaskPlugin(candidate.Plugin.Meta.Key) {
-				selected = candidate
-			}
-			continue
-		}
-		plugin, indexed := pinned.Generation.GetByChannelType(channel.Type)
-		if indexed && plugin == candidate.Plugin {
-			selected = candidate
-		}
-	}
-	return selected, expectedOwned && selected.Plugin != nil
 }
 
 // getModelFromRequest 从请求中读取模型信息
@@ -563,7 +522,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	if candidate, matched := pinnedEndpointCandidateForChannel(c, channel, expectedPlugin); matched {
+	if candidate, matched := service.PinnedEndpointCandidateForChannel(c, channel, expectedPlugin); matched {
 		if value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
 			if pinned, ok := value.(jsplugin.PinnedEndpoint); ok && candidate.Plugin != nil && candidate.Plugin != pinned.Plugin {
 				previousPlugin := pinned.Plugin.Meta.Key

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/logger"
@@ -118,6 +119,7 @@ type Engine struct {
 	module    *sobek.SourceTextModuleRecord
 	pool      chan *runtimeInstance
 	semaphore chan struct{}
+	hooks     sync.Map // export name -> bool, see HasCallableHook
 }
 
 type runtimeInstance struct {
@@ -292,6 +294,20 @@ func (e *Engine) HasCallablePath(ctx context.Context, exportName string, members
 	}
 	_, callable := sobek.AssertFunction(value)
 	return callable, nil
+}
+
+// HasCallableHook is HasCallablePath for a top-level export, remembered for
+// the engine's lifetime: an engine is one compiled plugin version, so its
+// exports never change. Errors are not remembered.
+func (e *Engine) HasCallableHook(ctx context.Context, exportName string) (bool, error) {
+	if known, ok := e.hooks.Load(exportName); ok {
+		return known.(bool), nil
+	}
+	found, err := e.HasCallablePath(ctx, exportName)
+	if err == nil {
+		e.hooks.Store(exportName, found)
+	}
+	return found, err
 }
 
 // Call invokes one named module export and returns its JSON-compatible value.

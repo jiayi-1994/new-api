@@ -256,6 +256,7 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 				abortTaskPluginRouteErrorDetail(c, intentErr.StatusCode, intentErr.Message)
 				return
 			}
+			service.DecideVideoSched(c)
 			_, bodyReplaced := resolved["requestBody"]
 			logger.LogDebug(
 				c,
@@ -653,6 +654,8 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 				rejectedPlugins[detail] = append(rejectedPlugins[detail], candidate.Plugin.Meta.Key)
 				continue
 			}
+			candidate.DecodedBody = result["requestBody"]
+			candidate.DecodedAction, _ = result["action"].(string)
 			accepted = append(accepted, candidate)
 			if resolved == nil {
 				resolved = result
@@ -717,6 +720,7 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 			abortWithOpenAiMessage(c, intentErr.StatusCode, intentErr.Message, types.ErrorCode(intentErr.Code))
 			return
 		}
+		service.DecideVideoSched(c)
 		logger.LogDebug(
 			c,
 			"task_plugin subsystem=endpoint event=prepared generation=%d plugin=%q protocol=%q claimed_model=%q resolved_model=%q action_present=%t stream=%t request_body_replaced=%t elapsed_ms=%d",

@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -1801,6 +1802,8 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 				pinned := c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
 				for _, candidate := range pinned.Candidates {
 					gotKeys = append(gotKeys, candidate.Plugin.Meta.Key)
+					// Each accepted candidate keeps its own decoder's action.
+					assert.Equal(t, strings.TrimPrefix(candidate.Plugin.Meta.Key, "decode-"), candidate.DecodedAction)
 				}
 				assert.Equal(t, tc.wantKeys[0], pinned.Plugin.Meta.Key)
 				assert.Equal(t, tc.wantKeys[0], c.GetString("task_plugin_key"))
@@ -1822,4 +1825,48 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// megabyai and seedance-hjmie are real built-in plugins sharing videos-fast.
+// Each accepted candidate carries its own decoded body, the first one's body
+// is still the request's task_request, and the frozen scheduling decision is
+// made before distribution.
+func TestPrepareTaskPluginEndpointKeepsEachSharedCandidateDecodedBody(t *testing.T) {
+	setting := operation_setting.GetVideoSchedulingSetting()
+	saved := *setting
+	t.Cleanup(func() { *setting = saved })
+	setting.Mode = operation_setting.VideoSchedulingModeOn
+	setting.Models = nil
+
+	var pinned jsplugin.PinnedEndpoint
+	var taskRequest any
+	var decision service.VideoSchedDecision
+	router := gin.New()
+	router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+		pinned = c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
+		taskRequest = c.MustGet("task_request")
+		decision = service.VideoSchedDecisionFrom(c)
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(
+		`{"model":"videos-fast","prompt":"cat","seconds":8,"size":"1280x720","images":["https://cdn.example/1.png"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	require.Len(t, pinned.Candidates, 2)
+	megabyai, seedance := pinned.Candidates[0], pinned.Candidates[1]
+	assert.Equal(t, "megabyai", megabyai.Plugin.Meta.Key)
+	assert.Equal(t, "seedance-hjmie", seedance.Plugin.Meta.Key)
+	megabyaiBody := megabyai.DecodedBody.(map[string]any)
+	seedanceBody := seedance.DecodedBody.(map[string]any)
+	assert.Equal(t, []any{"https://cdn.example/1.png"}, megabyaiBody["referenceImages"])
+	assert.NotContains(t, megabyaiBody, "images")
+	assert.Equal(t, []any{"https://cdn.example/1.png"}, seedanceBody["images"])
+	assert.NotContains(t, seedanceBody, "referenceImages")
+	assert.Equal(t, "reference_to_video", megabyai.DecodedAction)
+	assert.Equal(t, "reference_to_video", seedance.DecodedAction)
+	assert.Equal(t, megabyaiBody, taskRequest)
+	assert.Equal(t, service.VideoSchedDecision{Takeover: true}, decision)
 }

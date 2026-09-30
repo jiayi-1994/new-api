@@ -203,6 +203,52 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	return channel, selectGroup, nil
 }
 
+// PinnedEndpointCandidateForChannel returns the pinned endpoint candidate
+// that executes on channel. matched is false unless expected is one of the
+// pinned candidates and the channel runs one of them. Distribution and video
+// scheduling share it so the plugin that prices a channel is the plugin that
+// executes on it.
+func PinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, expected string) (jsplugin.ProtocolBinding, bool) {
+	if c == nil || channel == nil || expected == "" {
+		return jsplugin.ProtocolBinding{}, false
+	}
+	value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint)
+	pinned, ok := value.(jsplugin.PinnedEndpoint)
+	if !exists || !ok || pinned.Generation == nil || pinned.Plugin == nil {
+		return jsplugin.ProtocolBinding{}, false
+	}
+	candidates := pinned.Candidates
+	if len(candidates) == 0 {
+		candidates = []jsplugin.ProtocolBinding{{Plugin: pinned.Plugin, Protocol: pinned.Protocol, Operation: pinned.Operation, Model: pinned.Model}}
+	}
+	expectedOwned := false
+	selected := jsplugin.ProtocolBinding{}
+	setting := channel.GetSetting()
+	for _, candidate := range candidates {
+		if candidate.Plugin == nil {
+			continue
+		}
+		if candidate.Plugin.Meta.Key == expected {
+			expectedOwned = true
+		}
+		if channel.Type == constant.ChannelTypeTaskPlugin || channel.Type == constant.ChannelTypeNewAPI {
+			// A New API channel may bind several candidates. The first bound
+			// candidate in generation order executes, so the billing provider
+			// depends only on the channel and the request, never on which
+			// channels an earlier retry attempt happened to try.
+			if selected.Plugin == nil && setting.BindsTaskPlugin(candidate.Plugin.Meta.Key) {
+				selected = candidate
+			}
+			continue
+		}
+		plugin, indexed := pinned.Generation.GetByChannelType(channel.Type)
+		if indexed && plugin == candidate.Plugin {
+			selected = candidate
+		}
+	}
+	return selected, expectedOwned && selected.Plugin != nil
+}
+
 func pinnedTaskPluginIdentities(c *gin.Context, expected string) ([]int, []string) {
 	if c == nil || expected == "" {
 		return nil, nil
