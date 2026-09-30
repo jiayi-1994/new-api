@@ -9,7 +9,11 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 )
 
-//go:embed tasks
+// Only plugin sources ship in the binary; fixtures, offline tests and notes
+// beside them stay in the repository. A plugin that adds an icon.svg/icon.png
+// sidecar must add it to this pattern (a pattern matching nothing fails to build).
+//
+//go:embed tasks/*/plugin.js
 var taskPlugins embed.FS
 
 func init() {

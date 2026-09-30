@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -142,6 +143,17 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 				callable, callableErr := plugin.Engine.HasExport(t.Context(), hook)
 				require.NoError(t, callableErr)
 				assert.True(t, callable, hook)
+			}
+			// An icon sidecar on disk must be embedded; test and data files must not.
+			for _, name := range []string{"icon.svg", "icon.png"} {
+				if _, statErr := os.Stat("tasks/" + key + "/" + name); statErr == nil {
+					_, _, embedded := Icon(key)
+					assert.True(t, embedded, "%s/%s is not in the go:embed pattern", key, name)
+				}
+			}
+			for _, name := range []string{"fixture.json", "plugin.test.mjs", "test.mjs", "README.md"} {
+				_, openErr := fs.Stat(taskPlugins, "tasks/"+key+"/"+name)
+				assert.Error(t, openErr, "%s/%s must not ship in the binary", key, name)
 			}
 			// Only the third-party relays are schedulable; a pool holding an
 			// official plugin is never taken over.
