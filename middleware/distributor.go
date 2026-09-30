@@ -127,7 +127,8 @@ func Distribute() func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+		// Scheduling replaces session affinity for a taken-over request.
+		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest && !service.VideoSchedDecisionFrom(c).Takeover {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}

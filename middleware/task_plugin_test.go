@@ -1830,12 +1830,12 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 // megabyai and seedance-hjmie are real built-in plugins sharing videos-fast.
 // Each accepted candidate carries its own decoded body, the first one's body
 // is still the request's task_request, and the frozen scheduling decision is
-// made before distribution.
+// made before distribution, also on the legacy /v1/tasks/:key submit entry.
 func TestPrepareTaskPluginEndpointKeepsEachSharedCandidateDecodedBody(t *testing.T) {
 	setting := operation_setting.GetVideoSchedulingSetting()
 	saved := *setting
 	t.Cleanup(func() { *setting = saved })
-	setting.Mode = operation_setting.VideoSchedulingModeOn
+	setting.Mode = operation_setting.VideoSchedulingModeShadow
 	setting.Models = nil
 
 	var pinned jsplugin.PinnedEndpoint
@@ -1868,5 +1868,18 @@ func TestPrepareTaskPluginEndpointKeepsEachSharedCandidateDecodedBody(t *testing
 	assert.Equal(t, "reference_to_video", megabyai.DecodedAction)
 	assert.Equal(t, "reference_to_video", seedance.DecodedAction)
 	assert.Equal(t, megabyaiBody, taskRequest)
-	assert.Equal(t, service.VideoSchedDecision{Takeover: true}, decision)
+	assert.Equal(t, service.VideoSchedDecision{Shadow: true}, decision)
+
+	decision = service.VideoSchedDecision{}
+	router = gin.New()
+	router.POST("/v1/tasks/:key", PrepareTaskPluginSubmit(), func(c *gin.Context) {
+		decision = service.VideoSchedDecisionFrom(c)
+		c.Status(http.StatusNoContent)
+	})
+	request = httptest.NewRequest(http.MethodPost, "/v1/tasks/seedance-hjmie", strings.NewReader(`{"model":"videos-fast","prompt":"cat","duration":5,"resolution":"720p"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	assert.Equal(t, service.VideoSchedDecision{Shadow: true}, decision)
 }

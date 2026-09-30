@@ -95,8 +95,8 @@ func (s *RequestPolicyState) BeginAttempt(channel *model.Channel, group string) 
 }
 
 // RecordPolicyFailure appends the failed attempt and the retry decision made
-// for it. The health entry mirrors the check in ProcessChannelError, which
-// performs the actual disable.
+// for it. The health entry makes the same ShouldDisableChannelForRequest check
+// as ProcessChannelError, which performs the actual disable.
 func RecordPolicyFailure(c *gin.Context, channelID int, err *types.NewAPIError, decision PolicyDecision) {
 	if c == nil || err == nil {
 		return
@@ -117,7 +117,7 @@ func RecordPolicyFailure(c *gin.Context, channelID int, err *types.NewAPIError, 
 	}
 	state.AddEvent(event)
 	event.Decision, event.Health = decision, "unchanged"
-	if source != "local" && c.GetBool("auto_ban") && ShouldDisableChannel(err) {
+	if source != "local" && c.GetBool("auto_ban") && ShouldDisableChannelForRequest(c, err) {
 		event.Health = "channel_disable_requested"
 		if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
 			event.Health = "key_disable_requested"

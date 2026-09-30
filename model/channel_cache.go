@@ -15,6 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+
+	"github.com/gin-gonic/gin"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
@@ -114,7 +116,32 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
+// TierSelector, when set, may take over the choice among the channels that
+// satisfy a request. It returns ErrTierSelectorNotApplicable to keep the
+// priority/weight choice below, ErrTierSelectorNoCandidate when no channel is
+// eligible (the caller sees no channel, never a fallback), or the chosen
+// channel. It runs without channelSyncLock held, so it may call plugins and
+// Redis, and reads candidates through SatisfiedChannelSnapshot.
+var TierSelector func(c *gin.Context, group, modelName string, filters []dto.ChannelFilter) (*Channel, error)
+
+var (
+	ErrTierSelectorNotApplicable = errors.New("tier selector not applicable")
+	ErrTierSelectorNoCandidate   = errors.New("tier selector found no eligible channel")
+)
+
 func GetRandomSatisfiedChannel(
+	group string,
+	model string,
+	retry int,
+	filters []dto.ChannelFilter,
+) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithContext(nil, group, model, retry, filters)
+}
+
+// GetRandomSatisfiedChannelWithContext is GetRandomSatisfiedChannel with the
+// request context that TierSelector needs.
+func GetRandomSatisfiedChannelWithContext(
+	c *gin.Context,
 	group string,
 	model string,
 	retry int,
@@ -123,6 +150,20 @@ func GetRandomSatisfiedChannel(
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
 		return GetChannel(group, model, retry, filters)
+	}
+
+	if TierSelector != nil && c != nil {
+		selected, err := TierSelector(c, group, model, filters)
+		switch {
+		case errors.Is(err, ErrTierSelectorNotApplicable):
+		case errors.Is(err, ErrTierSelectorNoCandidate):
+			return nil, nil
+		case err != nil:
+			return nil, err
+		default:
+			// Hand back the live cached channel, not the selector's snapshot copy.
+			return CacheGetChannel(selected.Id)
+		}
 	}
 
 	channelSyncLock.RLock()
@@ -214,6 +255,29 @@ func GetRandomSatisfiedChannel(
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+// SatisfiedChannelSnapshot returns copies of the enabled channels that serve
+// model in group and pass filters, with the same exact-then-normalized model
+// lookup as GetRandomSatisfiedChannel. The copies are safe to read after the
+// cache lock is released.
+func SatisfiedChannelSnapshot(group, model string, filters []dto.ChannelFilter) ([]*Channel, error) {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	ids, _ := filterCandidateIDs(group2model2channels[group][model], model, filters)
+	if len(ids) == 0 {
+		ids, _ = filterCandidateIDs(group2model2channels[group][ratio_setting.RoutingMatchModelName(model)], model, filters)
+	}
+	snapshot := make([]*Channel, 0, len(ids))
+	for _, id := range ids {
+		channel, ok := channelsIDM[id]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", id)
+		}
+		copied := *channel
+		snapshot = append(snapshot, &copied)
+	}
+	return snapshot, nil
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

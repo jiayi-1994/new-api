@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -465,5 +466,55 @@ export function parseTaskResult() { return {status:"SUCCESS"}; }
 			assert.Equal(t, "job-42", result.UpstreamTaskID)
 			assert.JSONEq(t, `{"status":`+strconv.Itoa(tc.status)+`}`, string(result.TaskData))
 		})
+	}
+}
+
+// Video scheduling only reads sell prices: the reserved and settled quota of a
+// submission are the same whether scheduling is off, shadowing or has taken
+// over, and a reference video (a purchase surcharge) never changes the sale.
+func TestRelayTaskSubmitBillingIgnoresVideoScheduling(t *testing.T) {
+	service.InitHttpClient()
+	saveBillingConfig(t)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		billing_setting.PluginBillingExprOption: `{"seedance-hjmie::videos-fast":"u(\"seconds\") * 0.1"}`,
+	}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task_id":"upstream-1"}`))
+	}))
+	defer server.Close()
+	generation := pluginruntime.DefaultRegistry.Generation()
+	seedance, ok := generation.Get("seedance-hjmie")
+	require.True(t, ok)
+	wantQuota := common.QuotaRound(0.5 * common.QuotaPerUnit) // 5 seconds x $0.1, group ratio 1
+
+	for _, videos := range [][]any{nil, {"https://example.com/ref.mp4"}} {
+		for _, decision := range []service.VideoSchedDecision{
+			{Reason: service.VideoSchedReasonModeOff}, {Shadow: true}, {Takeover: true},
+		} {
+			t.Run(fmt.Sprintf("videos=%d/%+v", len(videos), decision), func(t *testing.T) {
+				body := map[string]any{"prompt": "cat", "duration": 5, "resolution": "720p"}
+				if videos != nil {
+					body["videos"] = videos
+				}
+				c, info := newTaskSubmitContext(t, "videos-fast", "")
+				common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, server.URL)
+				common.SetContextKey(c, constant.ContextKeyChannelKey, "k")
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+				c.Set("group", "default")
+				c.Set("task_request", body)
+				c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: generation, Plugin: seedance})
+				info.UserGroup, info.UsingGroup, info.OriginModelName = "default", "default", "videos-fast"
+				// An existing reservation skips pre-consume so the fixture reaches the upstream call.
+				info.Billing = &imageReservation{limit: 1 << 30}
+
+				result, taskErr := RelayTaskSubmit(c, info)
+				require.Nil(t, taskErr, "submission error: %+v", taskErr)
+				assert.Equal(t, wantQuota, info.PriceData.Quota, "reserved quota")
+				assert.Equal(t, wantQuota, result.Quota, "settled quota")
+				require.NotNil(t, info.TieredBillingSnapshot)
+				assert.Equal(t, map[string]any{"seconds": float64(5), "resolution": "720p"}, info.TieredBillingSnapshot.UsageFacts)
+			})
+		}
 	}
 }

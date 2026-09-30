@@ -15,12 +15,15 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -710,4 +713,102 @@ func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	assert.Equal(t, []string{"reserve", "refund"}, events)
 	assert.Equal(t, 1, billing.refunds)
 	assert.False(t, c.Writer.Written())
+}
+
+// A request video scheduling took over leaves an auto group only after
+// exhausting it, and its attempt budget does not restart in the next group.
+// Any other request keeps the retry-index flow, where each group switch resets
+// the index and the budget.
+func TestExecuteTaskSubmissionVideoSchedulingAutoGroupBudget(t *testing.T) {
+	events := make([]string, 0)
+	database := setupTaskSubmissionDatabase(t, true, &events)
+	require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	previousMemory, previousRetry, previousRedis, previousErrorLog := common.MemoryCacheEnabled, common.RetryTimes, common.RedisEnabled, constant.ErrorLogEnabled
+	previousSetting := *operation_setting.GetVideoSchedulingSetting()
+	previousGroups, previousMaxAuto := setting.UserUsableGroups2JSONString(), setting.GetMaxTokenAutoGroups()
+	previousRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled, common.RetryTimes, common.RedisEnabled, constant.ErrorLogEnabled = previousMemory, previousRetry, previousRedis, previousErrorLog
+		*operation_setting.GetVideoSchedulingSetting() = previousSetting
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+		require.NoError(t, setting.UpdateMaxTokenAutoGroups(fmt.Sprint(previousMaxAuto)))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+		require.NoError(t, database.Migrator().DropTable(&model.Channel{}, &model.Ability{}))
+	})
+	common.MemoryCacheEnabled, common.RetryTimes, common.RedisEnabled, constant.ErrorLogEnabled = true, 1, false, false
+	operation_setting.GetVideoSchedulingSetting().Mode = operation_setting.VideoSchedulingModeShadow
+	operation_setting.GetVideoSchedulingSetting().UnknownSellPolicy = "relative"
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
+	require.NoError(t, setting.UpdateMaxTokenAutoGroups("2"))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+	// The auto groups are vip then default; vip has one channel, default two.
+	base := 20000 + int(time.Now().UnixNano()%1_000_000)
+	for i, group := range []string{"vip", "default", "default"} {
+		priority, weight, autoBan := int64(0), uint(100), 0
+		binding := `{"task_plugin_key":"seedance-hjmie"}`
+		channel := &model.Channel{Id: base + i, Type: constant.ChannelTypeTaskPlugin, Key: "k", Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("video-%d", i),
+			Weight: &weight, Priority: &priority, AutoBan: &autoBan, Models: "videos-fast", Group: group, Setting: &binding,
+			OtherSettings: `{"video_scheduling":{"models":{"videos-fast":{"mode":"per_video","prices":{"*":1}}}}}`}
+		require.NoError(t, database.Create(channel).Error)
+		require.NoError(t, channel.AddAbilities(database))
+	}
+	model.InitChannelCache()
+	generation := pluginruntime.DefaultRegistry.Generation()
+	seedance, ok := generation.Get("seedance-hjmie")
+	require.True(t, ok)
+
+	for _, tc := range []struct {
+		name       string
+		decision   service.VideoSchedDecision
+		crossGroup bool
+		wantGroups []string
+		wantStop   string
+	}{
+		{"takeover crosses only an exhausted group within one budget", service.VideoSchedDecision{Takeover: true}, true, []string{"vip", "default"}, "attempt_budget_exhausted"},
+		{"takeover without cross-group retry stops in its group", service.VideoSchedDecision{Takeover: true}, false, []string{"vip"}, "retry_status_matched"},
+		{"shadow keeps the retry-index flow", service.VideoSchedDecision{Shadow: true}, true, []string{"auto", "vip", "default", "default"}, "retry_status_matched"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := taskSubmissionTestContext()
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "auto")
+			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
+			common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, tc.crossGroup)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, tc.decision)
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: generation, Plugin: seedance})
+			c.Set("expected_task_plugin_key", "seedance-hjmie")
+			c.Set("task_request", map[string]any{"prompt": "cat", "duration": 5, "resolution": "720p"})
+			// The distributor's first selection.
+			first, _, selectErr := service.SelectChannelForRequest(c, "videos-fast", &service.RetryParam{Ctx: c, TokenGroup: "auto", ModelName: "videos-fast", Retry: common.GetPointer(0)})
+			require.Nil(t, selectErr)
+			require.Nil(t, middleware.SetupContextForSelectedChannel(c, first, "videos-fast"))
+
+			info := taskSubmissionRelayInfo(&taskSubmissionTestBilling{events: &events})
+			info.ChannelMeta, info.LockedChannel = nil, nil
+			info.TokenGroup, info.UsingGroup, info.OriginModelName = "auto", "auto", "videos-fast"
+			_, taskErr := executeTaskSubmissionWith(c, info, func(_ *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+				info.ChannelMeta = &relaycommon.ChannelMeta{} // as the real submit does
+				return nil, service.TaskErrorWrapper(errors.New("bad gateway"), "fail_to_fetch_task", http.StatusBadGateway)
+			})
+			require.NotNil(t, taskErr)
+
+			var groups []string
+			tried := map[int]bool{}
+			lastDecision := ""
+			for _, event := range service.RequestPolicy(c).Events() {
+				switch event.Decision.Action {
+				case "attempt":
+					groups = append(groups, event.Group)
+					if tc.decision.Takeover {
+						assert.False(t, tried[event.ChannelID], "a taken-over request never retries a tried channel")
+					}
+					tried[event.ChannelID] = true
+				case "retry", "stop":
+					lastDecision = event.Decision.Reason
+				}
+			}
+			assert.Equal(t, tc.wantGroups, groups)
+			assert.Equal(t, tc.wantStop, lastDecision)
+		})
+	}
 }

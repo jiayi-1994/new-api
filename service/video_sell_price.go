@@ -53,7 +53,13 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 	if !special {
 		ratio = ratio_setting.GetGroupRatio(group)
 	}
-	return videoSellFromUSD(sell.USD*ratio, sell.Estimated)
+	usd := sell.USD * ratio
+	// A sale past the single-request quota ceiling saturates, and submission
+	// pre-consume rejects a saturated quota, so it can never be sold.
+	if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
+		return videosched.SellPrice{Kind: videosched.SellUnknown, Estimated: sell.Estimated}
+	}
+	return videoSellFromUSD(usd, sell.Estimated)
 }
 
 // videoSellBeforeGroup is the sell price before the group ratio: the task
@@ -150,6 +156,15 @@ func videoUsageFacts(c *gin.Context, plugin *jsplugin.LoadedPlugin, clientModel,
 // task_request, which belongs to the first accepted plugin.
 func videoUsageContext(c *gin.Context, clientModel, mappedModel string, body any, action, purpose string) map[string]any {
 	route, _ := c.Value(jsplugin.ContextKeyRouteRequest).(jsplugin.RouteRequestContext)
+	if route.Path == "" && c.Request != nil {
+		// The legacy /v1/tasks/:key entry prepares no route context; submission
+		// fills the same fields from the HTTP request.
+		route.Path, route.Method, route.Query = c.Request.URL.Path, c.Request.Method, c.Request.URL.Query()
+		route.Params = make(map[string]string, len(c.Params))
+		for _, param := range c.Params {
+			route.Params[param.Key] = param.Value
+		}
+	}
 	route.RequestBody = body
 	files := route.Files
 	if files == nil {

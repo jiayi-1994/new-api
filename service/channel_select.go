@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -117,6 +118,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 	filters := GetChannelConstraints(param.Ctx).Filters
+	// A request video scheduling took over leaves a group only once the
+	// scheduler finds nothing eligible in it, never by priority retry count.
+	takeover := VideoSchedDecisionFrom(param.Ctx).Takeover
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -147,13 +151,21 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(
+			channel, _ = model.GetRandomSatisfiedChannelWithContext(
+				param.Ctx,
 				autoGroup,
 				param.ModelName,
 				priorityRetry,
 				filters,
 			)
 			if channel == nil {
+				// A taken-over request that already attempted this group has
+				// exhausted it; only cross-group retry lets it move on.
+				if takeover && !crossGroupRetry && slices.ContainsFunc(RequestPolicy(param.Ctx).Events(), func(event PolicyEvent) bool {
+					return event.Decision.Action == "attempt" && event.Group == autoGroup
+				}) {
+					break
+				}
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
 				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, param.ModelName, priorityRetry)
@@ -171,7 +183,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 			// Prepare state for next retry
 			// 为下一次重试准备状态
-			if crossGroupRetry && priorityRetry >= common.RetryTimes {
+			if crossGroupRetry && priorityRetry >= common.RetryTimes && !takeover {
 				// Current group has exhausted all retries, prepare to switch to next group
 				// This request still uses current group, but next retry will use next group
 				// 当前分组已用完所有重试次数，准备切换到下一个分组
@@ -190,7 +202,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(
+		channel, err = model.GetRandomSatisfiedChannelWithContext(
+			param.Ctx,
 			param.TokenGroup,
 			param.ModelName,
 			param.GetRetry(),
@@ -355,7 +368,8 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	usingGroup := retry.TokenGroup
 	var channel *model.Channel
 	var selectGroup string
-	if retry.GetRetry() == 0 {
+	// Scheduling replaces session affinity for a taken-over request.
+	if retry.GetRetry() == 0 && !VideoSchedDecisionFrom(c).Takeover {
 		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found {
 			affinityUsable := false
 			preferred, err := model.CacheGetChannel(preferredChannelID)
@@ -392,6 +406,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		}
 	}
 
+	affinityHit := channel != nil
 	if channel == nil {
 		var err error
 		channel, selectGroup, err = CacheGetRandomSatisfiedChannel(retry)
@@ -419,6 +434,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			FilterKind: kind, Channel: channel, NoAvailableChannel: true,
 		}
 	}
+	ShadowObserveVideoSched(c, selectGroup, modelName, channel, affinityHit)
 	return channel, selectGroup, nil
 }
 

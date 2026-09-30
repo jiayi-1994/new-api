@@ -87,4 +87,7 @@ const (
 	// ContextKeyVideoSchedDecision holds the request's frozen video scheduling
 	// decision (service.VideoSchedDecision).
 	ContextKeyVideoSchedDecision ContextKey = "video_sched_decision"
+	// ContextKeyVideoSchedBoard holds every video scheduling selection of the
+	// request ([]service.VideoScheduleRecord), appended in selection order.
+	ContextKeyVideoSchedBoard ContextKey = "video_sched_board"
 )

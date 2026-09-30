@@ -1453,6 +1453,9 @@ func PrepareTaskPluginSubmit() gin.HandlerFunc {
 		c.Set("expected_task_plugin_key", pluginKey)
 		service.AppendTaskPluginIdentityFilter(c, pluginKey)
 		c.Set("relay_mode", relayconstant.RelayModeVideoSubmit)
+		// A submit entry like the native one: the pinned plugin sees the raw
+		// body as task_request, which is also what its usage hooks see.
+		service.DecideVideoSched(c)
 		logger.LogDebug(
 			c,
 			"task_plugin subsystem=route event=resolved generation=%d plugin=%q kind=submit model=%q distribute=true entry=legacy",

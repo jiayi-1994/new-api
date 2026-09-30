@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+
+	"github.com/gin-gonic/gin"
 )
 
 func formatNotifyType(channelId int, status int) string {
@@ -55,6 +58,19 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 }
 
 func ShouldDisableChannel(err *types.NewAPIError) bool {
+	return shouldDisableChannel(err, true)
+}
+
+// ShouldDisableChannelForRequest is ShouldDisableChannel for a relayed
+// request. A request video scheduling took over leaves 429 and 5xx to the
+// scheduler's health gate: they disable the channel only as channel errors or
+// disable-keyword matches (credential and quota class), never by status code.
+func ShouldDisableChannelForRequest(c *gin.Context, err *types.NewAPIError) bool {
+	transient := err != nil && (err.StatusCode == http.StatusTooManyRequests || err.StatusCode/100 == 5)
+	return shouldDisableChannel(err, !transient || !VideoSchedDecisionFrom(c).Takeover)
+}
+
+func shouldDisableChannel(err *types.NewAPIError, byStatusCode bool) bool {
 	if !common.AutomaticDisableChannelEnabled {
 		return false
 	}
@@ -67,7 +83,7 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if types.IsSkipRetryError(err) {
 		return false
 	}
-	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
+	if byStatusCode && operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
 		return true
 	}
 

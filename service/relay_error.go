@@ -66,7 +66,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		return
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
-	if ShouldDisableChannel(err) && channelError.AutoBan {
+	if ShouldDisableChannelForRequest(c, err) && channelError.AutoBan {
 		reason := err.MaskSensitiveErrorWithStatusCode()
 		gopool.Go(func() {
 			DisableChannel(channelError, reason)
@@ -89,6 +89,20 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		AppendRelayLogAdminInfo(c, relayInfo, other)
 		AppendResponseModelLogInfo(relayInfo, other)
 		AppendTaskPluginContextAuditInfo(c, other)
+		if records := VideoScheduleRecords(c); len(records) > 0 {
+			// Only this attempt's selections; admin_info keeps candidate
+			// channels, costs and plugins out of the user's log view.
+			attempt := RequestPolicy(c).Attempts
+			var selections []VideoScheduleRecord
+			for _, record := range records {
+				if record.AttemptSeq == attempt {
+					selections = append(selections, record)
+				}
+			}
+			if len(selections) > 0 {
+				other.SetAdmin("video_schedule", map[string]any{"attempts": selections})
+			}
+		}
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()

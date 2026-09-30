@@ -272,7 +272,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
 		}
-		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
+		group := info.UsingGroup
+		// A taken-over request counts attempts per expanded auto group.
+		if autoGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup); autoGroup != "" && service.VideoSchedDecisionFrom(c).Takeover {
+			group = autoGroup
+		}
+		service.RequestPolicy(c).BeginAttempt(channel, group)
 		return channel, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
@@ -285,6 +290,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
+	service.ShadowObserveVideoSched(c, selectGroup, retryParam.ModelName, channel, false)
 	service.RequestPolicy(c).BeginAttempt(channel, selectGroup)
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
 	if newAPIError != nil {
@@ -501,8 +507,11 @@ func executeTaskSubmissionWith(
 		Retry:       common.GetPointer(0),
 	}
 
+	// A request video scheduling took over leaves an auto group by exhausting
+	// it, which resets the retry index, so its budget counts attempts instead.
+	takeover := service.VideoSchedDecisionFrom(c).Takeover
 	var submittedChannel *model.Channel
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for ; (!takeover && retryParam.GetRetry() <= common.RetryTimes) || (takeover && policy.Attempts <= common.RetryTimes); retryParam.IncreaseRetry() {
 		stage = "select_channel"
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("before_attempt", retryParam.GetRetry()+1)
@@ -562,7 +571,11 @@ func executeTaskSubmissionWith(
 
 		taskAPIError := taskSubmissionAPIError(taskErr)
 		relayInfo.LastError = taskAPIError
-		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
+		retriesLeft := common.RetryTimes - retryParam.GetRetry()
+		if takeover {
+			retriesLeft = common.RetryTimes + 1 - policy.Attempts
+		}
+		decision := decideTaskRetry(c, taskErr, retriesLeft)
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
 		if !taskErr.LocalError {
 			processChannelError(c,

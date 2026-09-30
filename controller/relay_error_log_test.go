@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -60,6 +61,13 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	ctx.Set("channel_type", 9)
 	ctx.Set("use_channel", []string{"101"})
 	common.SetContextKey(ctx, constant.ContextKeyRequestStartTime, time.Now().Add(-time.Second))
+	// The second attempt failed; only its scheduling selection belongs to this row.
+	service.RequestPolicy(ctx).BeginAttempt(&model.Channel{Id: 100}, "default")
+	service.RequestPolicy(ctx).BeginAttempt(&model.Channel{Id: 101}, "default")
+	common.SetContextKey(ctx, constant.ContextKeyVideoSchedBoard, []service.VideoScheduleRecord{
+		{SelectionSeq: 1, AttemptSeq: 1, Mode: "on", Group: "default", Recommended: 100, Candidates: []service.VideoScheduleRow{{ID: 100, Name: "first"}}},
+		{SelectionSeq: 2, AttemptSeq: 2, Mode: "on", Group: "default", Recommended: 101, Candidates: []service.VideoScheduleRow{{ID: 100, Name: "first", Excluded: "tried"}, {ID: 101, Name: "snapshot-channel"}}},
+	})
 
 	channelSnapshot := types.ChannelError{
 		ChannelId:   101,
@@ -83,6 +91,13 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	adminInfo, ok := storedOther["admin_info"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []any{"101"}, adminInfo["use_channel"])
+	schedule, ok := adminInfo["video_schedule"].(map[string]any)
+	require.True(t, ok)
+	attempts, ok := schedule["attempts"].([]any)
+	require.True(t, ok)
+	require.Len(t, attempts, 1)
+	assert.Equal(t, float64(2), attempts[0].(map[string]any)["attempt_seq"])
+	assert.NotContains(t, storedOther, "video_schedule")
 
 	logs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "")
 	require.NoError(t, err)
@@ -93,6 +108,7 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	userOther, err := common.StrToMap(logs[0].Other)
 	require.NoError(t, err)
 	assert.NotContains(t, userOther, "admin_info")
+	assert.NotContains(t, userOther, "video_schedule")
 	for _, key := range []string{"channel_id", "channel_name", "channel_type"} {
 		assert.NotContains(t, userOther, key)
 	}
