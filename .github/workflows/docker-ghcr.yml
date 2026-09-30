@@ -88,8 +88,16 @@ jobs:
       - name: Resolve tags
         id: meta
         run: |
-          branch="${GITHUB_REF_NAME//\//-}"
           sha="$(git rev-parse --short HEAD)"
+          # Docker tags allow [A-Za-z0-9_.-], must not start with . or -, and
+          # are at most 128 chars; leave room for the "-<sha>" suffix.
+          branch=$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
+          branch=${branch:0:$((127 - ${#sha}))}
+          branch=$(printf '%s' "$branch" | sed -E 's/[.-]+$//')
+          if [ -z "$branch" ]; then
+            echo "::error::Branch '$GITHUB_REF_NAME' cannot be converted to a valid Docker tag"
+            exit 1
+          fi
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           # Keep :latest on the established release branch.

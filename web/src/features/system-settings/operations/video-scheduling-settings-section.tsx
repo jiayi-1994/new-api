@@ -262,8 +262,16 @@ export function VideoSchedulingSettingsSection(props: {
       saved.push(key)
       baseline[key] = next[key]
     }
+    // The form stays editable while saving: saved values become the clean
+    // baseline, and fields edited since submit keep their newer value, dirty.
+    const current = form.getValues()
     pristineRef.current = values
     form.reset(values)
+    for (const field of Object.keys(values) as (keyof typeof values)[]) {
+      if (JSON.stringify(current[field]) !== JSON.stringify(values[field])) {
+        form.setValue(field, current[field], { shouldDirty: true })
+      }
+    }
   }
 
   const numberField = (

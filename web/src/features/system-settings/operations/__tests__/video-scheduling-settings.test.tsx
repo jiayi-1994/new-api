@@ -225,3 +225,40 @@ test('the simulator snapshot carries unsaved edits but keeps the live window', a
     capacity_groups: { 'account-a': 5 },
   })
 })
+
+test('an edit made while the save is in flight survives its success and stays unsaved', async () => {
+  let finishSave = () => {}
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => {
+    const { key, value } = body as { key: string; value: string }
+    if (put.mock.calls.length === 1) {
+      await new Promise<void>((resolve) => {
+        finishSave = resolve
+      })
+    }
+    applyServerValue(key, value)
+    return { data: { success: true } }
+  })
+  const user = userEvent.setup()
+  render(<Harness />)
+
+  fireEvent.change(screen.getByLabelText('Price weight'), {
+    target: { value: '0.6' },
+  })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  fireEvent.change(screen.getByLabelText('Price weight'), {
+    target: { value: '0.7' },
+  })
+  finishSave()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+
+  expect(screen.getByLabelText('Price weight')).toHaveValue(0.7)
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
+  expect(put.mock.calls[1]?.[1]).toEqual({
+    key: 'video_scheduling_setting.price_weight',
+    value: '0.7',
+  })
+})
