@@ -732,7 +732,10 @@ func VideoScheduleBoard(scores []videosched.Score) []VideoScheduleRow {
 }
 
 // videoScheduleSelection finds the latest used selection feeding the request's
-// current submission attempt, and channelID's row on its board.
+// current submission attempt, and channelID's row on its board. The returned
+// record's Probe tells whether the attempt on channelID is a probe: only a
+// takeover that chose channelID as one acquired its slot. A shadow record's
+// probe is about its hypothetical recommendation and stays on the stored record.
 func videoScheduleSelection(c *gin.Context, channelID int) (VideoScheduleRecord, VideoScheduleRow, bool) {
 	records := VideoScheduleRecords(c)
 	attempt := RequestPolicy(c).Attempts
@@ -742,7 +745,9 @@ func videoScheduleSelection(c *gin.Context, channelID int) (VideoScheduleRecord,
 		}
 		for _, row := range records[i].Candidates {
 			if row.ID == channelID {
-				return records[i], row, true
+				record := records[i]
+				record.Probe = record.Probe && record.Mode == operation_setting.VideoSchedulingModeOn && record.Recommended == channelID
+				return record, row, true
 			}
 		}
 	}

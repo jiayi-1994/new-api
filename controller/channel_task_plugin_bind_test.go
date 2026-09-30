@@ -291,6 +291,9 @@ func TestVideoScheduleSimulateAndSchedulable(t *testing.T) {
 		return response["data"].(map[string]any)
 	}
 
+	// Every simulation, accepted or rejected by the entry, releases the body
+	// storage its prep middlewares created.
+	buffers := common.GetDiskCacheStats().ActiveMemoryBuffers
 	first := simulate(nil)
 	assert.Equal(t, "videos-fast", first["model"])
 	assert.Equal(t, "2026-10-01T12:00:00Z", first["now"])
@@ -354,6 +357,20 @@ func TestVideoScheduleSimulateAndSchedulable(t *testing.T) {
 		response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", body)
 		assert.Equal(t, false, response["success"], body)
 	}
+	assert.Equal(t, buffers, common.GetDiskCacheStats().ActiveMemoryBuffers)
+
+	// Health samples sit in buckets sized by the live window, so another window
+	// cannot be read back and is refused rather than silently ignored.
+	otherWindow := snapshot
+	otherWindow.WindowSeconds = snapshot.WindowSeconds * 2
+	encoded, err := common.Marshal(map[string]any{
+		"group": "default", "entry": "protocol", "protocol": "openai_video", "config_snapshot": otherWindow,
+		"request_body": map[string]any{"model": "videos-fast", "prompt": "cat", "seconds": 8, "size": "1280x720"},
+	})
+	require.NoError(t, err)
+	response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", string(encoded))
+	assert.Equal(t, false, response["success"])
+	assert.Contains(t, response["message"], "window_seconds")
 
 	schedulable := videoScheduleAdminRequest(t, GetVideoSchedulable, http.MethodGet, "/api/channel/video_schedule/schedulable?plugin=seedance-hjmie", "")
 	require.Equal(t, true, schedulable["success"])

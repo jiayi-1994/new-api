@@ -170,6 +170,12 @@ func SimulateVideoSchedule(c *gin.Context) {
 	}
 	setting := operation_setting.GetVideoSchedulingSetting()
 	if req.ConfigSnapshot != nil {
+		// Health samples are stored in buckets sized by the live window, so a
+		// different window cannot be read back from them.
+		if live := setting.WindowSeconds; req.ConfigSnapshot.WindowSeconds != live {
+			common.ApiErrorMsg(c, "config_snapshot.window_seconds must equal the live window_seconds "+strconv.Itoa(live)+": health samples are bucketed by the live window")
+			return
+		}
 		setting = req.ConfigSnapshot
 	}
 
@@ -177,6 +183,7 @@ func SimulateVideoSchedule(c *gin.Context) {
 	// happens in the terminal handler because gin recycles the context after
 	// ServeHTTP returns.
 	engine := gin.New()
+	engine.Use(middleware.BodyStorageCleanup())
 	var result gin.H
 	terminal := func(sc *gin.Context) {
 		common.SetContextKey(sc, constant.ContextKeyUserGroup, req.UserGroup)

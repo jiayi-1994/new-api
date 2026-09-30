@@ -585,6 +585,29 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		assert.Equal(t, before, snapshot())
 		_, leased := peekVideoProbeLease(c)
 		assert.False(t, leased)
+
+		// The probe is hypothetical: whichever channel ordinary selection
+		// submitted to, its task is no probe, while the recommendation keeps
+		// the flag.
+		if RequestPolicy(c).Attempts == 0 {
+			RequestPolicy(c).BeginAttempt(channel, selectGroup)
+		}
+		for _, id := range []int{3201, 3202, 3203} {
+			submitted, err := model.CacheGetChannel(id)
+			require.NoError(t, err)
+			summary := NewVideoSchedulingSummary(c, submitted, "videos-fast")
+			require.NotNil(t, summary)
+			assert.Equal(t, id, summary.Selected)
+			assert.False(t, summary.Probe, id)
+			assert.Nil(t, summary.ProbeSlot, id)
+			other := model.NewLogOther()
+			AppendVideoScheduleConsumeLog(c, &model.Task{ChannelId: id}, other)
+			schedule := other.Snapshot()["admin_info"].(map[string]any)["video_schedule"].(map[string]any)
+			assert.Equal(t, false, schedule["probe"], id)
+			attempts := schedule["attempts"].([]VideoScheduleRecord)
+			require.Len(t, attempts, 1)
+			assert.True(t, attempts[0].Probe, "the recommendation keeps its probe flag")
+		}
 	})
 
 	t.Run("takeover skips session affinity and shadow keeps it", func(t *testing.T) {
