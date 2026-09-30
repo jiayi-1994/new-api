@@ -253,3 +253,35 @@ test('an enabled draft stays editable after its plugin binding is gone, so its e
   ).toBeChecked()
   expect(put).not.toHaveBeenCalled()
 })
+
+test('an out-of-range quality on a hidden tab still reveals routing and focuses the field', async () => {
+  const put = vi.spyOn(api, 'put')
+  const user = await openRouting(
+    editingChannel({ ...pricedConfig(undefined), quality: 2 })
+  )
+  await screen.findByLabelText('Quality')
+  await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+  // Browsers refuse to submit a natively invalid form before the schema's
+  // invalid handler can reveal the hidden tab; jsdom does not, so check it.
+  const form = screen
+    .getByRole('dialog', { name: 'Edit Channel' })
+    .querySelector('form')
+  expect(form?.checkValidity()).toBe(true)
+
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+
+  const routing = screen.getByRole('tab', { name: /Routing & Mapping/ })
+  await waitFor(() => expect(routing).toHaveAttribute('aria-selected', 'true'))
+  const quality = await screen.findByLabelText('Quality')
+  await waitFor(() => expect(quality).toHaveFocus())
+  expect(quality).toHaveAttribute('aria-invalid', 'true')
+  expect(put).not.toHaveBeenCalled()
+})
+
+test('the only base price tier cannot be removed', async () => {
+  await openRouting(editingChannel(pricedConfig(undefined)))
+
+  expect(
+    await screen.findByRole('button', { name: 'Remove price tier' })
+  ).toBeDisabled()
+})

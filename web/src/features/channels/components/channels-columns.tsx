@@ -183,7 +183,10 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
 /** Video scheduling health; renders nothing for a channel without a scheduling config. */
 export function VideoHealthCell(props: { channel: Channel }) {
   const { t } = useTranslation()
-  const health = props.channel.video_health
+  // A tag row copies its first child's fields; health belongs to one channel.
+  const health = isTagAggregateRow(props.channel)
+    ? null
+    : props.channel.video_health
   if (!health) return null
   let variant: StatusBadgeProps['variant'] = 'success'
   if (health.submit.samples === 0 && health.gen.samples === 0) {

@@ -191,7 +191,6 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                       <InputGroupInput
                         {...field}
                         type='number'
-                        min={0}
                         step='any'
                         inputMode='decimal'
                         aria-label={t('Base price')}
@@ -210,6 +209,9 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
               variant='ghost'
               size='icon'
               aria-label={t('Remove price tier')}
+              // A model needs a base price; keeping one row avoids an error
+              // with no field to show it on.
+              disabled={item.prices.length === 1}
               onClick={() =>
                 update({
                   prices: item.prices.filter((__, i) => i !== rowIndex),
@@ -220,15 +222,6 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
             </Button>
           </div>
         ))}
-        <FormField
-          control={form.control}
-          name={`${base}.prices`}
-          render={() => (
-            <FormItem>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
         <Button
           type='button'
           variant='outline'
@@ -261,8 +254,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                   <Input
                     {...field}
                     type='number'
-                    min={0}
-                    step={1}
+                    step='any'
                     placeholder={t('No limit')}
                   />
                 </FormControl>
@@ -405,7 +397,6 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                                 <InputGroupInput
                                   {...field}
                                   type='number'
-                                  min={row.mode === 'multiplier' ? 1 : 0}
                                   step='any'
                                   inputMode='decimal'
                                   aria-label={t('Fee value')}
