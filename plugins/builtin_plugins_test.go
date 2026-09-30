@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,7 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
+var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sora", "sunoapi", "vertex-ai", "vidu"}
+
+// responsesKeys are the vendor plugins that also serve OpenAI Responses.
+var responsesKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
+
+// videoOnlyKeys are third-party relays that only speak the OpenAI video protocol.
+var videoOnlyKeys = []string{"meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -99,26 +106,35 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 			plugin, registerErr := registry.RegisterFactory(source, jsplugin.Options{Key: key})
 			require.NoError(t, registerErr)
 
-			var responsesClaim jsplugin.ProtocolClaim
-			foundResponses := false
-			for _, claim := range plugin.Meta.Protocols {
-				if claim.Name == "openai_responses" {
-					responsesClaim = claim
-					foundResponses = true
-					break
+			if slices.Contains(videoOnlyKeys, key) {
+				claims := make([]string, 0, len(plugin.Meta.Protocols))
+				for _, claim := range plugin.Meta.Protocols {
+					claims = append(claims, claim.Name)
 				}
-			}
-			require.True(t, foundResponses, "openai_responses claim must be present")
-			assert.Equal(t, []string{"stream", "sync", "background"}, responsesClaim.Supports)
-			for _, model := range plugin.Meta.Models {
-				binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/responses", model)
-				require.True(t, claimed, model)
-				assert.Same(t, plugin, binding.Plugin)
-			}
-			for _, hook := range []string{"decodeRequest", "renderEvents", "renderFinal"} {
-				callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_responses", hook)
-				require.NoError(t, callableErr)
-				assert.True(t, callable, hook)
+				assert.Equal(t, []string{"openai_video"}, claims)
+			} else {
+				require.Contains(t, responsesKeys, key)
+				var responsesClaim jsplugin.ProtocolClaim
+				foundResponses := false
+				for _, claim := range plugin.Meta.Protocols {
+					if claim.Name == "openai_responses" {
+						responsesClaim = claim
+						foundResponses = true
+						break
+					}
+				}
+				require.True(t, foundResponses, "openai_responses claim must be present")
+				assert.Equal(t, []string{"stream", "sync", "background"}, responsesClaim.Supports)
+				for _, model := range plugin.Meta.Models {
+					binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/responses", model)
+					require.True(t, claimed, model)
+					assert.Same(t, plugin, binding.Plugin)
+				}
+				for _, hook := range []string{"decodeRequest", "renderEvents", "renderFinal"} {
+					callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_responses", hook)
+					require.NoError(t, callableErr)
+					assert.True(t, callable, hook)
+				}
 			}
 			for _, hook := range []string{"extractUsage", "extractUsageOnComplete"} {
 				callable, callableErr := plugin.Engine.HasExport(t.Context(), hook)
@@ -135,7 +151,7 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 
 func TestBuiltInResponsesDecodersEchoChannelMappedAlias(t *testing.T) {
 	bodyOverrides := map[string]map[string]any{}
-	for _, key := range expectedKeys {
+	for _, key := range responsesKeys {
 		t.Run(key, func(t *testing.T) {
 			source, sourceErr := Source(key)
 			require.NoError(t, sourceErr)
