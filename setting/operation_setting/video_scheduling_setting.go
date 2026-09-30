@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -130,8 +131,8 @@ func ValidateVideoSchedulingOption(key, value string) error {
 			return fmt.Errorf("invalid capacity_groups: %w", err)
 		}
 		for name, quota := range groups {
-			if name == "" || name != strings.TrimSpace(name) || quota <= 0 {
-				return fmt.Errorf("capacity group %q needs a trimmed name and a quota > 0", name)
+			if name == "" || name != strings.TrimSpace(name) || len(name) > dto.MaxVideoCapacityGroupLength || quota <= 0 {
+				return fmt.Errorf("capacity group %q needs a trimmed name of at most %d bytes and a quota > 0", name, dto.MaxVideoCapacityGroupLength)
 			}
 		}
 		return nil

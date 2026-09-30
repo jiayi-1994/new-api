@@ -146,7 +146,7 @@ const (
 	VideoRefPerOutputSecond = "per_output_second"
 	VideoRefMultiplier      = "multiplier"
 
-	maxVideoCapacityGroupLength = 64
+	MaxVideoCapacityGroupLength = 64
 )
 
 var videoReferenceKinds = []string{"video", "image", "audio"}
@@ -191,8 +191,8 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 	if c.Capacity < 0 {
 		return fmt.Errorf("video_scheduling: capacity must not be negative")
 	}
-	if c.CapacityGroup != strings.TrimSpace(c.CapacityGroup) || len(c.CapacityGroup) > maxVideoCapacityGroupLength {
-		return fmt.Errorf("video_scheduling: capacity_group must be trimmed and at most %d bytes", maxVideoCapacityGroupLength)
+	if c.CapacityGroup != strings.TrimSpace(c.CapacityGroup) || len(c.CapacityGroup) > MaxVideoCapacityGroupLength {
+		return fmt.Errorf("video_scheduling: capacity_group must be trimmed and at most %d bytes", MaxVideoCapacityGroupLength)
 	}
 	usd := func(v float64) bool { return v >= 0 && v <= maxCostUSD }
 	for model, cost := range c.Models {

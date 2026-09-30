@@ -1,6 +1,7 @@
 package operation_setting
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -60,6 +61,7 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 	for field, value := range invalid {
 		assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting."+field, value), field)
 	}
+	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.capacity_groups", `{"`+strings.Repeat("g", 65)+`":1}`), "group names follow the channel-side length limit")
 	require.NoError(t, ValidateVideoSchedulingOption("other_setting.mode", "anything"))
 
 	require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "on"))
