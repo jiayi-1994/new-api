@@ -81,3 +81,17 @@ test('describeSpec keeps tiers for per-request models and reports fixed lengths'
     videos: ['https://cdn.example/1.mp4'], audio_urls: ['https://cdn.example/1.mp3'],
   }).references, { video: 1, image: 3, audio: 1 }, 'image_url plus reference_image_urls');
 });
+
+const REQUEST = { model: "veo-3.1-fast", prompt: "cat", seconds: 8, resolution: "1080p" };
+const BASE_URL = "https://pidoi.com";
+
+test("A raw channel key and a resolved Bearer header both reach upstream as one Bearer header", () => {
+  const intent = plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body: { kind: "json", value: REQUEST } });
+  const ctx = { model: REQUEST.model, upstreamModel: REQUEST.model, baseUrl: BASE_URL, requestBody: intent.requestBody, taskId: "task-1" };
+  // Vendor channels receive the raw key as authHeader; New API channels receive "Bearer <key>".
+  for (const authHeader of ["fixture-only-key", "Bearer fixture-only-key"]) {
+    const credentials = { authHeader, apiKey: "fixture-only-key" };
+    assert.equal(plugin.buildSubmitRequest({ ...ctx, ...credentials }).headers.Authorization, "Bearer fixture-only-key", authHeader);
+    assert.equal(plugin.buildQueryRequest({ ...ctx, ...credentials }).headers.Authorization, "Bearer fixture-only-key", authHeader);
+  }
+});

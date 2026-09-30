@@ -56,3 +56,26 @@ test("describeSpec counts each reference kind from the final body, independent o
   assert.deepEqual(plugin.describeSpec(plain).references, { video: 0, image: 0, audio: 0 });
   assert.throws(() => plugin.describeSpec({ model: value.model, requestBody: { prompt: "a cat", duration: 5 } }), /resolution/);
 });
+
+const REQUEST = { model: "videos-fast", prompt: "a cat", seconds: "8", size: "1280x720" };
+const BASE_URL = "https://newapi.megabyai.cc";
+
+test("A raw channel key and a resolved Bearer header both reach upstream as one Bearer header", () => {
+  const intent = plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body: { kind: "json", value: REQUEST } });
+  const ctx = { model: REQUEST.model, upstreamModel: REQUEST.model, baseUrl: BASE_URL, requestBody: intent.requestBody, taskId: "task-1" };
+  // Vendor channels receive the raw key as authHeader; New API channels receive "Bearer <key>".
+  for (const authHeader of ["fixture-only-key", "Bearer fixture-only-key"]) {
+    const credentials = { authHeader, apiKey: "fixture-only-key" };
+    assert.equal(plugin.buildSubmitRequest({ ...ctx, ...credentials }).headers.Authorization, "Bearer fixture-only-key", authHeader);
+    assert.equal(plugin.buildQueryRequest({ ...ctx, ...credentials }).headers.Authorization, "Bearer fixture-only-key", authHeader);
+  }
+});
+
+test("A cancelled upstream task is attributed as cancelled, not as a channel failure", () => {
+  for (const body of [{ status: "cancelled" }, { status: "CANCELED" }, { status: "cancelled", error: "quota exhausted" }]) {
+    const result = plugin.parseTaskResult({}, body);
+    assert.equal(result.status, "FAILURE", JSON.stringify(body));
+    assert.equal(plugin.classifyFailure(result.reason), "cancelled", JSON.stringify(body));
+  }
+  assert.equal(plugin.classifyFailure(plugin.parseTaskResult({}, { status: "failed" }).reason), "upstream");
+});

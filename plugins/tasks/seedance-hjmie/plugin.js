@@ -209,9 +209,13 @@ function upstreamModel(ctx) {
 }
 
 function authHeaders(ctx) {
-  const value = ctx.authHeader || (ctx.apiKey ? "Bearer " + ctx.apiKey : "");
-  if (!value) throw new Error("channel API key is required");
-  return { Authorization: value };
+  // The host passes a raw key as authHeader on vendor channels and a complete
+  // Bearer header on New API channels; normalize both to one Bearer header.
+  const credential = ctx.authHeader || ctx.apiKey;
+  if (typeof credential !== "string") throw new Error("channel API key is required");
+  const token = credential.trim().replace(/^Bearer\s+/i, "").trim();
+  if (!token || /\s/.test(token)) throw new Error("channel API key is required and must not contain whitespace");
+  return { Authorization: "Bearer " + token };
 }
 
 export function buildSubmitRequest(ctx) {
@@ -293,9 +297,12 @@ export function parseTaskResult(_ctx, body) {
   }
   if (mapped === "FAILURE") {
     const error = body.error;
-    result.reason = (error && typeof error === "object" && error.message) ||
+    const text = (error && typeof error === "object" && error.message) ||
       (typeof error === "string" && error) || body.fail_reason ||
-      (status.startsWith("failed:") && raw.slice(raw.indexOf(":") + 1).trim()) || "video generation failed";
+      (status.startsWith("failed:") && raw.slice(raw.indexOf(":") + 1).trim()) || "";
+    // classifyFailure only sees the reason, so a cancelled status must say so.
+    const cancelled = status === "cancelled" || status === "canceled";
+    result.reason = cancelled && !/cancel/i.test(text) ? (text ? "cancelled: " + text : "video generation cancelled") : text || "video generation failed";
   }
   return result;
 }

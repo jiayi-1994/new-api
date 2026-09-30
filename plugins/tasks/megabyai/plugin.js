@@ -196,9 +196,13 @@ function baseURL(ctx) {
 }
 
 function authHeaders(ctx) {
-  const authorization = ctx.authHeader || (ctx.apiKey ? "Bearer " + ctx.apiKey : "");
-  if (!authorization.trim()) throw new Error("channel API key is required");
-  return { Authorization: authorization };
+  // The host passes a raw key as authHeader on vendor channels and a complete
+  // Bearer header on New API channels; normalize both to one Bearer header.
+  const credential = ctx.authHeader || ctx.apiKey;
+  if (typeof credential !== "string") throw new Error("channel API key is required");
+  const token = credential.trim().replace(/^Bearer\s+/i, "").trim();
+  if (!token || /\s/.test(token)) throw new Error("channel API key is required and must not contain whitespace");
+  return { Authorization: "Bearer " + token };
 }
 
 function taskRecord(body) {
@@ -234,6 +238,10 @@ function taskResult(body) {
   const progress = typeof record.progress === "string" ? record.progress.replace(/%$/, "").trim() : record.progress;
   if ((typeof progress === "number" || (typeof progress === "string" && progress !== "")) && Number.isFinite(Number(progress)) && Number(progress) >= 0 && Number(progress) <= 100) result.progress = Number(progress) + "%";
   if (mapped === "FAILURE") result.reason = status.startsWith("failed:") ? raw.slice(raw.indexOf(":") + 1).trim() || taskFailure(record, body) : taskFailure(record, body);
+  // classifyFailure only sees the reason, so a cancelled status must say so.
+  if ((status === "cancelled" || status === "canceled") && !/cancel/i.test(result.reason)) {
+    result.reason = result.reason === "video generation failed" ? "video generation cancelled" : "cancelled: " + result.reason;
+  }
   return result;
 }
 
@@ -374,7 +382,7 @@ export const protocols = {
         const urls = videoURLs(task.data);
         if (urls.length) { output.video_url = urls[0]; output.url = urls[0]; }
       }
-      if (task.status === "FAILURE") output.error = { message: taskFailure(record, task.data) };
+      if (task.status === "FAILURE") output.error = { message: taskResult(task.data).reason || taskFailure(record, task.data) };
       return output;
     },
   },

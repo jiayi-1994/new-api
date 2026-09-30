@@ -231,9 +231,13 @@ function baseURL(ctx) {
 }
 
 function authHeaders(ctx) {
-  const authorization = ctx.authHeader || (ctx.apiKey ? "Bearer " + ctx.apiKey : "");
-  if (typeof authorization !== "string" || !authorization.trim()) throw new Error("channel API key is required");
-  return { Authorization: authorization };
+  // The host passes a raw key as authHeader on vendor channels and a complete
+  // Bearer header on New API channels; normalize both to one Bearer header.
+  const credential = ctx.authHeader || ctx.apiKey;
+  if (typeof credential !== "string") throw new Error("channel API key is required");
+  const token = credential.trim().replace(/^Bearer\s+/i, "").trim();
+  if (!token || /\s/.test(token)) throw new Error("channel API key is required and must not contain whitespace");
+  return { Authorization: "Bearer " + token };
 }
 
 function taskResult(body) {
@@ -252,7 +256,10 @@ function taskResult(body) {
   const result = { status: mapped };
   if (mapped === "FAILURE") {
     const reason = failed ? raw.replace(/^FAILED\s*[:：]\s*/i, "") : body.error || body.message;
-    result.reason = typeof reason === "string" && reason ? reason : isObject(reason) && typeof reason.message === "string" ? reason.message : "video generation failed";
+    const text = typeof reason === "string" && reason ? reason : isObject(reason) && typeof reason.message === "string" ? reason.message : "";
+    // classifyFailure only sees the reason, so a cancelled status must say so.
+    const cancelled = status === "CANCELLED" || status === "CANCELED";
+    result.reason = cancelled && !/cancel/i.test(text) ? (text ? "cancelled: " + text : "video generation cancelled") : text || "video generation failed";
   }
   if (typeof body.progress === "number" && Number.isFinite(body.progress) && body.progress >= 0 && body.progress <= 100) result.progress = body.progress + "%";
   return result;
