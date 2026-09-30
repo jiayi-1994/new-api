@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronRight,
   ListOrdered,
+  Radar,
   Shuffle,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -52,7 +53,7 @@ import {
   formatQuotaWithCurrency,
   getCurrencyLabel,
 } from '@/lib/currency'
-import { formatTimestampToDate } from '@/lib/format'
+import { formatPercent, formatTimestampToDate } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
@@ -176,6 +177,39 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
         />
       )}
     </div>
+  )
+}
+
+/** Video scheduling health; renders nothing for a channel without a scheduling config. */
+export function VideoHealthCell(props: { channel: Channel }) {
+  const { t } = useTranslation()
+  const health = props.channel.video_health
+  if (!health) return null
+  let variant: StatusBadgeProps['variant'] = 'success'
+  if (health.submit.samples === 0 && health.gen.samples === 0) {
+    variant = 'warning'
+  }
+  if (health.gated) variant = 'danger'
+  const probing = health.probe_slots_held > 0
+  return (
+    <StatusBadge
+      label={t(
+        'Submit {{submit}} / gen {{gen}} ({{samples}} samples) · in flight {{inFlight}}/{{capacity}}',
+        {
+          submit: formatPercent(health.submit.rate * 100),
+          gen: formatPercent(health.gen.rate * 100),
+          samples: health.submit.samples,
+          inFlight: health.in_flight,
+          capacity: health.capacity > 0 ? health.capacity : '∞',
+        }
+      )}
+      variant={variant}
+      icon={probing ? Radar : undefined}
+      title={probing ? t('Recovery probe in progress') : undefined}
+      size='sm'
+      copyable={false}
+      className='-ml-1.5'
+    />
   )
 }
 
@@ -1196,6 +1230,16 @@ export function useChannelsColumns(
           )
         },
         size: 110,
+      },
+
+      // Video scheduling health column
+      {
+        id: 'video_health',
+        header: t('Video health'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => <VideoHealthCell channel={row.original} />,
+        enableSorting: false,
+        size: 260,
       },
 
       // Test Time column

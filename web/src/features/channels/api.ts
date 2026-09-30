@@ -40,6 +40,7 @@ import type {
   SearchChannelsParams,
   SearchChannelsResponse,
   TagOperationParams,
+  VideoSchedulable,
 } from './types'
 
 const channelActionConfig = (
@@ -81,6 +82,17 @@ export async function getTaskPluginOptions(): Promise<TaskPluginOption[]> {
     success: boolean
     data: TaskPluginOption[]
   }>('/api/task_plugin_options')
+  return requireServerSuccess(response.data).data
+}
+
+/** Whether a task plugin exports describeSpec, with each model's mixed-pool blockers. */
+export async function getVideoSchedulable(
+  plugin: string
+): Promise<VideoSchedulable> {
+  const response = await api.get<{ success: boolean; data: VideoSchedulable }>(
+    '/api/channel/video_schedule/schedulable',
+    { params: { plugin } }
+  )
   return requireServerSuccess(response.data).data
 }
 

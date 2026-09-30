@@ -245,6 +245,7 @@ import {
   ChannelBasicSection,
   ChannelEditorLoadingState,
   ChannelModelsSection,
+  ChannelVideoSchedulingSection,
 } from './sections'
 
 type ChannelMutateDrawerProps = {
@@ -290,6 +291,7 @@ const SENSITIVE_FORM_FIELDS = [
   'settings',
   'setting',
   'advanced_custom',
+  'video_scheduling',
   'is_enterprise_account',
   'vertex_key_type',
   'aws_key_type',
@@ -787,6 +789,12 @@ export function ChannelMutateDrawer({
           (item) => item.key === currentTaskPluginKey
         )
       : undefined
+  let videoSchedulingPluginKeys: string[] = []
+  if (currentType === CHANNEL_TYPE_TASK_PLUGIN && currentTaskPluginKey) {
+    videoSchedulingPluginKeys = [currentTaskPluginKey]
+  } else if (currentType === CHANNEL_TYPE_NEW_API) {
+    videoSchedulingPluginKeys = currentTaskExtendPluginKeys ?? []
+  }
   const providerLabel =
     boundTaskPlugin?.name ||
     (currentType === CHANNEL_TYPE_TASK_PLUGIN && currentTaskPluginKey) ||
@@ -4629,6 +4637,15 @@ export function ChannelMutateDrawer({
           <>
             {redirectPanelActive ? redirectPanelNotice : modelMappingFields}
             {routingFields}
+            <ChannelVideoSchedulingSection
+              pluginKeys={videoSchedulingPluginKeys}
+              channelModels={currentModelsArray}
+              disabled={sensitiveLocked || isSubmitting}
+              status={configuration.blocks.videoScheduling}
+              className={channelConfigurationBlockClassName(
+                configuration.blocks.videoScheduling
+              )}
+            />
           </>
         }
         request={

@@ -387,6 +387,113 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+} & VideoSchedulingOptionValues
+
+// ============================================================================
+// Video scheduling (option keys video_scheduling_setting.<field>)
+// ============================================================================
+
+export type VideoSchedulingMode = 'off' | 'shadow' | 'on'
+
+/** Global video scheduling setting as the backend stores it. */
+export type VideoSchedulingSetting = {
+  mode: VideoSchedulingMode
+  models: string[]
+  price_weight: number
+  quality_weight: number
+  service_weight: number
+  min_submit_rate: number
+  min_gen_rate: number
+  min_samples: number
+  window_seconds: number
+  explore_share: number
+  explore_max_in_flight: number
+  probe_ratio: number
+  probe_cooldown_sec: number
+  probe_max_in_flight: number
+  unknown_sell_policy: 'exclude' | 'relative'
+  max_cost_to_sell_ratio: number
+  tie_epsilon: number
+  capacity_groups: Record<string, number>
+}
+
+/** Option values; capacity_groups stays a JSON string because options are flat. */
+export type VideoSchedulingOptionValues = {
+  [K in keyof VideoSchedulingSetting as `video_scheduling_setting.${K}`]: K extends 'capacity_groups'
+    ? string
+    : VideoSchedulingSetting[K]
+}
+
+export type VideoScheduleSimulateRequest = {
+  group: string
+  user_group?: string
+  entry: 'protocol' | 'native'
+  protocol?: string
+  path?: string
+  plugin_key?: string
+  request_body: unknown
+  health_override?: Record<string, unknown>
+  inflight_override?: Record<string, unknown>
+  slot_override?: Record<string, number>
+  config_snapshot?: VideoSchedulingSetting
+  seed?: number
+  now?: string
+}
+
+export type VideoScheduleSpec = {
+  output_seconds?: number
+  seconds_kind?: string
+  tier?: string
+  references: Partial<Record<'video' | 'image' | 'audio', number>>
+  missing?: string[]
+}
+
+export type VideoScheduleReferenceLine = {
+  kind: string
+  mode?: string
+  tier?: string
+  quantity?: number
+  value?: number
+  usd: number
+}
+
+/** One board row. Cost fields are absent for an invalid quote and must not render as 0. */
+export type VideoScheduleCandidate = {
+  id: number
+  name: string
+  plugin?: string
+  mapped_model?: string
+  spec?: VideoScheduleSpec
+  tier?: string
+  cost_usd?: number
+  base_cost_usd?: number
+  reference_cost_usd?: number
+  references?: VideoScheduleReferenceLine[]
+  sell_kind?: 'known' | 'free' | 'unknown'
+  /** Omitted when zero, which a free sell price is. */
+  sell_usd?: number
+  sell_estimated?: boolean
+  p: number
+  q: number
+  s: number
+  total: number
+  unproven?: boolean
+  excluded?: string
+}
+
+export type VideoScheduleSimulation = {
+  candidates: VideoScheduleCandidate[]
+  decision: { takeover: boolean; shadow: boolean; reason?: string }
+  group: string
+  model: string
+  group_ratio: number
+  recommended: number
+  probe: boolean
+  explore: boolean
+  now: string
+  seed: number
+  fingerprint: string
+  segments: Record<string, string>
 }
 
 export type SecuritySettings = {

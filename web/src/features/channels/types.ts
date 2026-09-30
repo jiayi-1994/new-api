@@ -71,9 +71,71 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  // Present only in list responses, for channels with a video_scheduling config.
+  video_health: z.custom<VideoHealth>().nullish(),
 })
 
 export type Channel = z.infer<typeof channelSchema>
+
+// ============================================================================
+// Video Scheduling Types (settings.video_scheduling and its endpoints)
+// ============================================================================
+
+export type VideoCostMode = 'per_video' | 'per_second'
+export type VideoReferenceKind = 'video' | 'image' | 'audio'
+export type VideoReferenceMode =
+  | 'unsupported'
+  | 'included'
+  | 'per_request'
+  | 'per_input'
+  | 'per_output_second'
+  | 'multiplier'
+
+export interface VideoReferenceCost {
+  mode: VideoReferenceMode
+  /** USD or a multiplier; absent for included/unsupported, never defaulted. */
+  value?: number
+}
+
+export interface VideoModelCost {
+  mode: VideoCostMode
+  prices: Record<string, number>
+  min_seconds?: number
+  max_seconds?: number
+  allowed_seconds?: number[]
+  references?: Partial<
+    Record<VideoReferenceKind, Record<string, VideoReferenceCost>>
+  >
+}
+
+export interface VideoSchedulingConfig {
+  quality: number
+  capacity: number
+  capacity_group?: string
+  models: Record<string, VideoModelCost>
+}
+
+export type VideoHealthStat = { rate: number; samples: number }
+
+export interface VideoHealth {
+  submit: VideoHealthStat
+  gen: VideoHealthStat
+  in_flight: number
+  probe: { last_probe_at: number; consecutive_fails: number }
+  gated: boolean
+  capacity: number
+  capacity_group?: string
+  group_capacity?: number
+  group_in_flight?: number
+  probe_slots_held: number
+  probe_cooldown_until?: number
+}
+
+export interface VideoSchedulable {
+  plugin: string
+  describe_spec: boolean
+  models: { model: string; static_blockers: string[] }[]
+}
 
 // ============================================================================
 // Channel Settings Types
@@ -113,6 +175,7 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+  video_scheduling?: VideoSchedulingConfig
 }
 
 export interface AdvancedCustomConfig {

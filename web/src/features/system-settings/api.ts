@@ -32,6 +32,8 @@ import type {
   UpdatePasskeyDomainsResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
+  VideoScheduleSimulateRequest,
+  VideoScheduleSimulation,
 } from './types'
 
 export async function getSystemOptions() {
@@ -123,5 +125,16 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
     '/api/ratio_sync/fetch',
     request
   )
+  return res.data
+}
+
+export async function simulateVideoSchedule(
+  request: VideoScheduleSimulateRequest
+) {
+  const res = await api.post<{
+    success: boolean
+    message?: string
+    data: VideoScheduleSimulation
+  }>('/api/channel/video_schedule/simulate', request)
   return res.data
 }

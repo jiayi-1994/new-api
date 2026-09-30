@@ -56,6 +56,25 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.flush_interval': 5,
   'perf_metrics_setting.bucket_time': 'hour',
   'perf_metrics_setting.retention_days': 0,
+  // Mirrors setting/operation_setting/video_scheduling_setting.go defaults.
+  'video_scheduling_setting.mode': 'off',
+  'video_scheduling_setting.models': [],
+  'video_scheduling_setting.price_weight': 0.5,
+  'video_scheduling_setting.quality_weight': 0.3,
+  'video_scheduling_setting.service_weight': 0.2,
+  'video_scheduling_setting.min_submit_rate': 0.8,
+  'video_scheduling_setting.min_gen_rate': 0.5,
+  'video_scheduling_setting.min_samples': 20,
+  'video_scheduling_setting.window_seconds': 1800,
+  'video_scheduling_setting.explore_share': 0.1,
+  'video_scheduling_setting.explore_max_in_flight': 2,
+  'video_scheduling_setting.probe_ratio': 0.02,
+  'video_scheduling_setting.probe_cooldown_sec': 300,
+  'video_scheduling_setting.probe_max_in_flight': 1,
+  'video_scheduling_setting.unknown_sell_policy': 'exclude',
+  'video_scheduling_setting.max_cost_to_sell_ratio': 0,
+  'video_scheduling_setting.tie_epsilon': 0,
+  'video_scheduling_setting.capacity_groups': '{}',
 }
 
 export function OperationsSettings() {
