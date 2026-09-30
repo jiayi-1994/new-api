@@ -218,14 +218,14 @@ func TestDoTaskApiRequestMarksSentFailuresOutcomeUnknown(t *testing.T) {
 	defer dropped.Close()
 	err := submit(dropped.URL)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrTaskSubmitOutcomeUnknown)
+	assert.ErrorIs(t, err, relaycommon.ErrTaskSubmitOutcomeUnknown)
 
 	refused := httptest.NewServer(http.NotFoundHandler())
 	refusedURL := refused.URL
 	refused.Close()
 	err = submit(refusedURL)
 	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrTaskSubmitOutcomeUnknown)
+	assert.NotErrorIs(t, err, relaycommon.ErrTaskSubmitOutcomeUnknown)
 }
 
 // TestDoTaskApiRequest_KeepsReplayableGetBody guards against reintroducing the

@@ -622,16 +622,12 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		if sent.Load() {
-			return nil, fmt.Errorf("do request failed: %w: %w", ErrTaskSubmitOutcomeUnknown, err)
+			return nil, fmt.Errorf("do request failed: %w: %w", common.ErrTaskSubmitOutcomeUnknown, err)
 		}
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
 }
-
-// ErrTaskSubmitOutcomeUnknown marks a task submission that failed after the
-// request was sent: the upstream may have created the task without answering.
-var ErrTaskSubmitOutcomeUnknown = errors.New("task submission outcome unknown")
 
 func newTaskAPIRequest(c *gin.Context, fullRequestURL string, requestBody io.Reader) (*http.Request, error) {
 	if c == nil || c.Request == nil {

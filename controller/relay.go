@@ -18,7 +18,6 @@ import (
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -796,7 +795,7 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 	switch {
 	case taskErr == nil:
 		stop.Reason = "request_completed"
-	case errors.Is(taskErr.Error, channel.ErrTaskSubmitOutcomeUnknown):
+	case errors.Is(taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown):
 		// The upstream may already hold the task; a retry could duplicate it.
 		stop.Reason = "submit_outcome_unknown"
 	case taskErr.NoRetry:

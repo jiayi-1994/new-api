@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -144,6 +145,10 @@ func validatePrompt(prompt string) *dto.TaskError {
 // as a billing multiplier (OtherRatio "seconds"); an unbounded value could
 // overflow quota calculation into a negative charge.
 const MaxTaskDurationSeconds = 3600
+
+// ErrTaskSubmitOutcomeUnknown marks a task submission that failed after the
+// request was sent: the upstream may have created the task without answering.
+var ErrTaskSubmitOutcomeUnknown = errors.New("task submission outcome unknown")
 
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
