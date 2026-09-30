@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
@@ -611,12 +613,25 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	// Once request bytes are on the wire the upstream may have accepted the
+	// task, so a later transport failure must not resend it elsewhere.
+	var sent atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { sent.Store(true) },
+	}))
 	resp, err := doRequest(c, req, info)
 	if err != nil {
+		if sent.Load() {
+			return nil, fmt.Errorf("do request failed: %w: %w", ErrTaskSubmitOutcomeUnknown, err)
+		}
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
 }
+
+// ErrTaskSubmitOutcomeUnknown marks a task submission that failed after the
+// request was sent: the upstream may have created the task without answering.
+var ErrTaskSubmitOutcomeUnknown = errors.New("task submission outcome unknown")
 
 func newTaskAPIRequest(c *gin.Context, fullRequestURL string, requestBody io.Reader) (*http.Request, error) {
 	if c == nil || c.Request == nil {

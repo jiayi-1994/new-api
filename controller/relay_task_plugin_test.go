@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -623,6 +625,14 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 func TestAcceptedSubmitStreamNeverRetries(t *testing.T) {
 	c := taskSubmissionTestContext()
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "task_accepted", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: 502, LocalError: true, NoRetry: true}, 3))
+}
+
+func TestSubmitWithUnknownOutcomeNeverRetries(t *testing.T) {
+	c := taskSubmissionTestContext()
+	sent := service.TaskErrorWrapper(fmt.Errorf("do request failed: %w: %w", channel.ErrTaskSubmitOutcomeUnknown, io.ErrUnexpectedEOF), "do_request_failed", http.StatusInternalServerError)
+	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "submit_outcome_unknown", Source: "system"}, decideTaskRetry(c, sent, 3))
+	unsent := service.TaskErrorWrapper(fmt.Errorf("do request failed: %w", io.ErrUnexpectedEOF), "do_request_failed", http.StatusInternalServerError)
+	assert.Equal(t, "retry", decideTaskRetry(c, unsent, 3).Action, "connection-phase failures still retry")
 }
 
 // Local task rejections carry a message but no cause; the response and the

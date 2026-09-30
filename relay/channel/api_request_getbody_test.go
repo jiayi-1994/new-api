@@ -195,6 +195,39 @@ func (s *stubTaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, 
 	return nil
 }
 
+// TestDoTaskApiRequestMarksSentFailuresOutcomeUnknown separates a failure after
+// the request reached the upstream (it may hold the task) from one that never
+// connected (safe to try another channel).
+func TestDoTaskApiRequestMarksSentFailuresOutcomeUnknown(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	submit := func(baseURL string) error {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+		_, err := DoTaskApiRequest(&stubTaskAdaptor{baseURL: baseURL}, ctx, info, bytes.NewReader([]byte(`{}`)))
+		return err
+	}
+
+	dropped := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		_ = conn.Close()
+	}))
+	defer dropped.Close()
+	err := submit(dropped.URL)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTaskSubmitOutcomeUnknown)
+
+	refused := httptest.NewServer(http.NotFoundHandler())
+	refusedURL := refused.URL
+	refused.Close()
+	err = submit(refusedURL)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrTaskSubmitOutcomeUnknown)
+}
+
 // TestDoTaskApiRequest_KeepsReplayableGetBody guards against reintroducing the
 // hand-rolled GetBody override that wrapped the already consumed request
 // reader: any transport-level retry would then have silently replayed an empty
