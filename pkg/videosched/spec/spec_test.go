@@ -42,27 +42,29 @@ func TestParseAccepts(t *testing.T) {
 		kind    string
 		tier    string
 		missing []string
+		ignored []string
 	}{
-		{"full spec", valid(nil), ptr(10), "exact", "720p", nil},
-		{"fractional seconds", valid(map[string]any{"output_seconds": 4.5}), ptr(4.5), "exact", "720p", nil},
-		{"fixed seconds", valid(map[string]any{"seconds_kind": "fixed"}), ptr(10), "fixed", "720p", nil},
-		{"seconds kind defaults to exact", valid(map[string]any{"seconds_kind": nil}), ptr(10), "exact", "720p", nil},
-		{"tier is lowercased and trimmed", valid(map[string]any{"resolution": " 1080P "}), ptr(10), "exact", "1080p", nil},
-		{"pixel size becomes the short side", valid(map[string]any{"resolution": "1280x720"}), ptr(10), "exact", "720p", nil},
-		{"portrait star size", valid(map[string]any{"resolution": "1080*1920"}), ptr(10), "exact", "1080p", nil},
-		{"any product key is a tier", valid(map[string]any{"resolution": "Pro"}), ptr(10), "exact", "pro", nil},
-		{"untiered model", valid(map[string]any{"resolution": "*"}), ptr(10), "exact", "*", nil},
-		{"unknown tier stays empty", valid(map[string]any{"resolution": nil}), ptr(10), "exact", "", []string{"resolution"}},
-		{"unknown seconds stay nil, not zero", valid(map[string]any{"output_seconds": nil, "seconds_kind": nil}), nil, "exact", "720p", []string{"output_seconds"}},
-		{"seconds at the host bound", valid(map[string]any{"output_seconds": int64(spec.MaxOutputSeconds)}), ptr(spec.MaxOutputSeconds), "exact", "720p", nil},
-		{"integral float version", valid(map[string]any{"spec_version": 1.0}), ptr(10), "exact", "720p", nil},
-		{"unsupported false", valid(map[string]any{"unsupported": false}), ptr(10), "exact", "720p", nil},
-		{"unknown descriptive key", valid(map[string]any{"note": "hd"}), ptr(10), "exact", "720p", nil},
+		{"full spec", valid(nil), ptr(10), "exact", "720p", nil, nil},
+		{"fractional seconds", valid(map[string]any{"output_seconds": 4.5}), ptr(4.5), "exact", "720p", nil, nil},
+		{"fixed seconds", valid(map[string]any{"seconds_kind": "fixed"}), ptr(10), "fixed", "720p", nil, nil},
+		{"seconds kind defaults to exact", valid(map[string]any{"seconds_kind": nil}), ptr(10), "exact", "720p", nil, nil},
+		{"tier is lowercased and trimmed", valid(map[string]any{"resolution": " 1080P "}), ptr(10), "exact", "1080p", nil, nil},
+		{"pixel size becomes the short side", valid(map[string]any{"resolution": "1280x720"}), ptr(10), "exact", "720p", nil, nil},
+		{"portrait star size", valid(map[string]any{"resolution": "1080*1920"}), ptr(10), "exact", "1080p", nil, nil},
+		{"any product key is a tier", valid(map[string]any{"resolution": "Pro"}), ptr(10), "exact", "pro", nil, nil},
+		{"untiered model", valid(map[string]any{"resolution": "*"}), ptr(10), "exact", "*", nil, nil},
+		{"unknown tier stays empty", valid(map[string]any{"resolution": nil}), ptr(10), "exact", "", []string{"resolution"}, nil},
+		{"unknown seconds stay nil, not zero", valid(map[string]any{"output_seconds": nil, "seconds_kind": nil}), nil, "exact", "720p", []string{"output_seconds"}, nil},
+		{"seconds at the host bound", valid(map[string]any{"output_seconds": int64(spec.MaxOutputSeconds)}), ptr(spec.MaxOutputSeconds), "exact", "720p", nil, nil},
+		{"integral float version", valid(map[string]any{"spec_version": 1.0}), ptr(10), "exact", "720p", nil, nil},
+		{"unsupported false", valid(map[string]any{"unsupported": false}), ptr(10), "exact", "720p", nil, nil},
+		{"unknown descriptive keys are returned sorted", valid(map[string]any{"note": "hd", "label": "fast"}), ptr(10), "exact", "720p", nil, []string{"label", "note"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := spec.Parse(tc.raw)
+			s, ignored, err := spec.Parse(tc.raw)
 			require.NoError(t, err)
+			assert.Equal(t, tc.ignored, ignored)
 			assert.Equal(t, tc.seconds, s.OutputSeconds)
 			assert.Equal(t, tc.kind, s.SecondsKind)
 			assert.Equal(t, tc.tier, s.Tier)
@@ -70,7 +72,7 @@ func TestParseAccepts(t *testing.T) {
 		})
 	}
 
-	s, err := spec.Parse(valid(map[string]any{"references": refs(int64(1), 0.0, int64(3))}))
+	s, _, err := spec.Parse(valid(map[string]any{"references": refs(int64(1), 0.0, int64(3))}))
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{"video": 1, "image": 0, "audio": 3}, s.References, "explicit zeros are kept")
 }
@@ -112,7 +114,7 @@ func TestParseRejects(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := spec.Parse(tc.raw)
+			_, _, err := spec.Parse(tc.raw)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
 		})
@@ -120,24 +122,24 @@ func TestParseRejects(t *testing.T) {
 }
 
 func TestParseVersionAndOptOut(t *testing.T) {
-	_, err := spec.Parse(valid(map[string]any{"spec_version": int64(2)}))
+	_, _, err := spec.Parse(valid(map[string]any{"spec_version": int64(2)}))
 	require.ErrorIs(t, err, spec.ErrVersion)
 	assert.Contains(t, err.Error(), "2")
 
-	_, err = spec.Parse(map[string]any{"unsupported": true})
+	_, _, err = spec.Parse(map[string]any{"unsupported": true})
 	require.ErrorIs(t, err, spec.ErrOptOut, "an opt-out needs no other field")
-	_, err = spec.Parse(valid(map[string]any{"unsupported": true, "spec_version": int64(9)}))
+	_, _, err = spec.Parse(valid(map[string]any{"unsupported": true, "spec_version": int64(9)}))
 	require.ErrorIs(t, err, spec.ErrOptOut)
 }
 
 func TestUnknownTierSpecIsNotQuotedAtTheCheapestTier(t *testing.T) {
-	s, err := spec.Parse(valid(map[string]any{"resolution": nil}))
+	s, _, err := spec.Parse(valid(map[string]any{"resolution": nil}))
 	require.NoError(t, err)
 	cost := videosched.CostConfig{Mode: videosched.ModePerSecond, Prices: map[string]float64{"480p": 0.01, "1080p": 0.1},
 		References: map[string]map[string]videosched.ReferenceCost{"image": {"*": {Mode: videosched.RefIncluded}}}}
 	assert.Equal(t, "tier unknown", videosched.Quote(cost, s).Reason)
 
-	s, err = spec.Parse(valid(map[string]any{"resolution": "1920x1080"}))
+	s, _, err = spec.Parse(valid(map[string]any{"resolution": "1920x1080"}))
 	require.NoError(t, err)
 	q := videosched.Quote(cost, s)
 	require.Empty(t, q.Reason)

@@ -243,8 +243,9 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			require.NoError(t, callErr)
 			raw, ok := value.(map[string]any)
 			require.True(t, ok, "describeSpec must return an object")
-			got, parseErr := spec.Parse(raw)
+			got, ignored, parseErr := spec.Parse(raw)
 			require.NoError(t, parseErr)
+			assert.Empty(t, ignored, "built-in plugins return only contract fields")
 			want := tc.want
 			want.OutputSeconds = &tc.seconds
 			if want.SecondsKind == "" {

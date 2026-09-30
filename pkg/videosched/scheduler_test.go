@@ -1388,4 +1388,13 @@ func TestEvaluateProbeOnlyRelaxesHealthGates(t *testing.T) {
 		p.MaxCostUSD = 0
 		assert.Equal(t, "invalid policy", EvaluateProbe([]Candidate{gated(1)}, p)[0].Reason)
 	})
+	t.Run("probing stays inside the priority layer", func(t *testing.T) {
+		high, low := edgeCandidate(1), gated(2)
+		high.Priority, low.Priority = 10, 0
+		scores := EvaluateProbe([]Candidate{high, low}, gatePolicy)
+		assert.Equal(t, "lower priority", byID(t, scores, 2).Reason, "a healthy higher layer is never bypassed by a probe")
+		high.Excluded = "tried"
+		scores = EvaluateProbe([]Candidate{high, low}, gatePolicy)
+		assert.Empty(t, byID(t, scores, 2).Reason, "an exhausted higher layer falls through to the gated lower one")
+	})
 }
