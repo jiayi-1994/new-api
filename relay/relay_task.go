@@ -347,6 +347,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		if errors.Is(err, service.ErrVideoHealthAdmission) {
+			code := "video_health_unavailable"
+			if errors.Is(err, model.ErrVideoHealthStateChanged) && !errors.Is(err, relaycommon.ErrTaskSubmitOutcomeUnknown) {
+				code = "video_health_admission_conflict"
+			}
+			local := service.TaskErrorWrapperLocal(err, code, http.StatusServiceUnavailable)
+			// Only the task controller's bounded pre-transport admission loop
+			// may retry a proven conflict; ordinary retry policy stays closed.
+			local.NoRetry = true
+			return nil, local
+		}
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if resp == nil {

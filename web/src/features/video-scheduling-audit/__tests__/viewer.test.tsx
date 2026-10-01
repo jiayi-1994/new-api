@@ -41,6 +41,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { AuditViewer } from '..'
 import { AuditExportButton } from '../components/audit-export-button'
+import { AuditOverview } from '../components/audit-overview'
 import {
   auditSearchSchema,
   type AuditDetail,
@@ -195,6 +196,59 @@ const detail: AuditDetail = {
     },
   ],
 }
+
+test('unsupported reliability filters report the limitation instead of zero success', () => {
+  render(
+    <AuditOverview
+      stats={{
+        ...stats,
+        reliability: {
+          supported: false,
+          reason: 'unsupported_health_filter',
+          as_of: 1,
+          attempts: {
+            version: 1,
+            source: 'window',
+            batch_start: 0,
+            batch_end: 1,
+            window_seconds: 1,
+            as_of: 1,
+            validated_at: 0,
+            expires_at: 0,
+            submitted: 0,
+            accepted: 0,
+            succeeded: 0,
+            rejected: 0,
+            generation_failed: 0,
+            user: 0,
+            cancelled: 0,
+            pending: 0,
+            unknown: 0,
+            missing: 0,
+          },
+          generation_success: rate,
+          channel_completion: rate,
+          request_completion: rate,
+          limited_share: rate,
+          requests: 0,
+          request_pending: 0,
+          request_unknown: 0,
+          request_missing: 0,
+          request_user: 0,
+          request_cancelled: 0,
+          collection_write_failures: 1,
+        },
+      }}
+    />
+  )
+  expect(
+    screen.getByText('Health metrics do not support these filters')
+  ).toBeVisible()
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Health collection failures: 1'
+  )
+  expect(screen.queryByText('Channel completion rate')).not.toBeInTheDocument()
+})
 
 function Harness() {
   const [current, setCurrent] = useState<AuditFilters>(filters)

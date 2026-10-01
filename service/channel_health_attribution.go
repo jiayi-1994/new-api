@@ -31,6 +31,8 @@ func videoSubmitOutcome(taskErr *taskdto.TaskError) VideoOutcome {
 		// Local rejections (including insufficient user quota) never reached
 		// the upstream.
 		return VideoOutcomeIgnored
+	case taskErr.SubmitFailureClass == VideoFailureUser || taskErr.SubmitFailureClass == VideoFailureCancelled:
+		return VideoOutcomeIgnored
 	case taskErr.StatusCode/100 == 5, taskErr.StatusCode == http.StatusTooManyRequests,
 		taskErr.StatusCode == http.StatusUnauthorized, taskErr.StatusCode == http.StatusForbidden:
 		// Upstream faults, rate limits and rejected channel credentials.

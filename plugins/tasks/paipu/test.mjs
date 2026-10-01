@@ -2,6 +2,23 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import * as plugin from "./plugin.js";
+// Explicit rejection is distinct from an unreadable/ambiguous accepted response.
+for (const reason of ["content policy violation", "quota exhausted"]) {
+  const result = plugin.parseSubmitResponse({}, { statusCode: 200, body: { success: false, error: { message: reason } } });
+  assert.deepEqual(result, { rejected: { reason } });
+  assert.equal(plugin.classifyFailure(result.rejected.reason), reason === "content policy violation" ? "user" : "upstream");
+}
+for (const body of [
+  {}, "not JSON",
+  { id: "created", error: { message: "content policy violation" } },
+  { id: 123, error: { message: "quota exhausted" } },
+  { task_id: " ", id: "created", error: { message: "quota exhausted" } },
+  { id: " ", task_id: "created", error: { message: "quota exhausted" } },
+  { status: "completed", error: { message: "quota exhausted" } },
+  { status: "processing", success: false, message: "quota exhausted" },
+]) {
+  assert.throws(() => plugin.parseSubmitResponse({}, { statusCode: 200, body }));
+}
 
 globalThis.utils = { unixNow: () => Math.floor(Date.now() / 1000) };
 const fixture = JSON.parse(await readFile(new URL("./fixture.json", import.meta.url), "utf8"));
@@ -64,6 +81,26 @@ for (const [reason, kind] of [
   ["job cancelled by provider due to internal error", "upstream"],
   ["constraint violation", "upstream"],
   ["content policy violation", "user"],
+    ["moderation service timeout", "upstream"],
+    ["content policy validation internal error", "upstream"],
+    ["sensitive data service unavailable", "upstream"],
+    ["unsupported video backend", "upstream"],
+    ["invalid input", "upstream"],
+    ["审核服务超时", "upstream"],
+    ["moderation rejected", "user"],
+    ["提示词包含敏感违规内容或参数格式错误", "user"],
+    // Anonymized terminal messages from this provider's task logs, 2026-10-01.
+    ["返回错误码 710082022，疑似包含侵权/违规内容", "user"],
+    ["生成内容中疑似包含侵权/违规内容，无法返回该内容，换个主题再试试，生成额度未扣除。", "user"],
+    ["抱歉，由于版权相关限制，暂时无法创作对应的内容，换其他主题试试吧。", "user"],
+    ["参考素材不符合上游要求，请检查格式、尺寸和宽高比后重试", "user"],
+    ["输入文本可能包含敏感信息，请修改提示词后重试", "user"],
+    ["上游要求修改提示词，本次未创建生成任务，请修改后重新提交", "user"],
+    ["参考图提交触发上游交互验证（710022004，类型未知），当前出口恢复未闭环", "upstream"],
+    ["图片未进入生成流程，正在更换账号重试", "upstream"],
+    ["task_not_exist", "upstream"],
+    ["当前模型服务暂不可用，请稍后重试", "upstream"],
+    ["我暂时无法生成你要求的内容。请尝试输入其他要求，我会尽力为你提供帮助。", "upstream"],
 ]) assert.equal(plugin.classifyFailure(reason), kind, reason);
 
 let failed = 0;

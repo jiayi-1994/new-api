@@ -31,6 +31,63 @@ const bound = 1e6
 
 var gatePolicy = Policy{Weights: DefaultWeights, MinSubmitRate: 0.5, MinGenRate: 0.5, MaxCostUSD: bound}
 
+func stabilityTestCandidate(id int, cost float64, successes int64) Candidate {
+	e := &ReliabilityEvidence{Version: 1, Source: "window", BatchStart: 1000, BatchEnd: 2800, WindowSeconds: 1800, AsOf: 3000, ValidatedAt: 3000, ExpiresAt: 89400, Submitted: 1000, Accepted: 1000, Succeeded: successes, GenerationFailed: 1000 - successes}
+	return Candidate{ID: id, Priority: 1, Weight: 1, Quality: .8, Spec: Spec{Tier: "*"}, Cost: CostConfig{Mode: ModePerVideo, Prices: map[string]float64{"*": cost}}, Sell: SellPrice{Kind: SellKnown, USD: 1}, Reliability: &ReliabilitySnapshot{Version: 1, Model: "video", State: HealthNormal, StateVersion: 2, Integrity: "complete", Qualification: e}}
+}
+
+func TestStabilityCostOrderAndMargin(t *testing.T) {
+	p := Policy{SelectionPolicy: PolicyStabilityCostV2, MinMarginRate: .1, MinGenRate: .8, MinOverallRate: .6, StabilityTolerance: .01, MinSamples: 20, Now: 4000, MaxCostUSD: bound, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800, TieEpsilon: 1}
+	for _, tc := range []struct {
+		name   string
+		change func([]Candidate)
+		want   int
+		reason string
+	}{
+		{"99_and_98_choose_cheaper", func(c []Candidate) {}, 2, ""},
+		{"97_9_is_not_close", func(c []Candidate) {
+			c[1].Reliability.Qualification.Succeeded = 979
+			c[1].Reliability.Qualification.GenerationFailed = 21
+		}, 1, "stability gap too large"},
+		{"tolerance_does_not_chain", func(c []Candidate) { c[2] = stabilityTestCandidate(3, .1, 970) }, 2, "stability gap too large"},
+		{"priority_before_cost", func(c []Candidate) { c[0].Priority = 2 }, 1, "lower priority"},
+		{"quality_before_cost", func(c []Candidate) { c[0].Quality = .9 }, 1, "lower quality tier"},
+		{"capacity_filters_without_scoring", func(c []Candidate) { c[0].Capacity = 10; c[0].InFlight = 9 }, 2, ""},
+		{"full_shared_group", func(c []Candidate) { c[1].GroupCapacity = 1; c[1].GroupInFlight = 1 }, 1, "at capacity"},
+		{"exact_ten_percent", func(c []Candidate) { c[1].Cost.Prices["*"] = .9; c[0].Excluded = "disabled" }, 2, ""},
+		{"below_ten_percent", func(c []Candidate) { c[1].Cost.Prices["*"] = .9001 }, 1, "margin below minimum"},
+		{"reference_cost_included", func(c []Candidate) {
+			c[1].Spec.References = map[string]int{"image": 1}
+			c[1].Cost.References = map[string]map[string]ReferenceCost{"image": {"*": rule(RefPerRequest, .401)}}
+		}, 1, "margin below minimum"},
+		{"effective_group_sell", func(c []Candidate) { c[1].Sell.USD = .5 }, 1, "margin below minimum"},
+		{"free_sell_rejected", func(c []Candidate) { c[1].Sell.Kind = SellFree; c[1].Sell.USD = 0 }, 1, "positive sell price required"},
+		{"unknown_sell_rejected", func(c []Candidate) { c[1].Sell.Kind = SellUnknown }, 1, "positive sell price required"},
+		{"invalid_sell_rejected", func(c []Candidate) { c[1].Sell.USD = math.Inf(1) }, 1, "invalid sell price"},
+		{"unknown_evidence", func(c []Candidate) { c[1].Reliability = nil }, 1, "health_state_unavailable"},
+		{"incomplete_cohort", func(c []Candidate) { q := c[1].Reliability.Qualification; q.Succeeded--; q.Pending++ }, 1, "health evidence incomplete"},
+		{"independent_overall_gate", func(c []Candidate) {
+			q := c[1].Reliability.Qualification
+			q.Accepted = 700
+			q.Succeeded = 560
+			q.GenerationFailed = 140
+			q.Rejected = 300
+		}, 1, "overall completion below minimum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := []Candidate{stabilityTestCandidate(1, .8, 990), stabilityTestCandidate(2, .5, 980), {ID: 3, Excluded: "disabled"}}
+			tc.change(c)
+			got, board, err := Select(c, p, rand.New(rand.NewPCG(19, 1)))
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tc.want, got.ID)
+			if tc.reason != "" {
+				assert.True(t, slices.ContainsFunc(board, func(s Score) bool { return s.Reason == tc.reason }), "missing reason %s: %+v", tc.reason, board)
+			}
+		})
+	}
+}
+
 func secs(v float64) *float64 { return &v }
 
 func healthy(rate float64) (HealthStat, HealthStat) {

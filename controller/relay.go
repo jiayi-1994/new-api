@@ -510,8 +510,9 @@ func executeTaskSubmissionWith(
 	// A request video scheduling took over leaves an auto group by exhausting
 	// it, which resets the retry index, so its budget counts attempts instead.
 	takeover := service.VideoSchedDecisionFrom(c).Takeover
+	admissionConflicts := 0
 	var submittedChannel *model.Channel
-	for ; (!takeover && retryParam.GetRetry() <= common.RetryTimes) || (takeover && policy.Attempts <= common.RetryTimes); retryParam.IncreaseRetry() {
+	for ; (!takeover && retryParam.GetRetry() <= common.RetryTimes) || (takeover && policy.Attempts-admissionConflicts <= common.RetryTimes); retryParam.IncreaseRetry() {
 		stage = "select_channel"
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("before_attempt", retryParam.GetRetry()+1)
@@ -563,6 +564,35 @@ func executeTaskSubmissionWith(
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
 		requestErr := c.Request.Context().Err()
+		if takeover && taskErr != nil && taskErr.LocalError && taskErr.Code == "video_health_admission_conflict" &&
+			errors.Is(taskErr.Error, service.ErrVideoHealthAdmission) && errors.Is(taskErr.Error, model.ErrVideoHealthStateChanged) &&
+			!errors.Is(taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown) {
+			// The final durable fence rejected this selection before transport.
+			// Keep monotonic attempt/selection IDs, but do not charge an unsent
+			// conflict to the upstream retry budget or record an upstream result.
+			service.RecordVideoHealthAdmissionConflict(c)
+			admissionConflicts++
+			decision := service.PolicyDecision{Action: "stop", Reason: "admission_conflict", Source: "video_scheduling"}
+			switch {
+			case requestErr != nil:
+				taskErr = service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
+				decision.Reason = "client_disconnected"
+			case admissionConflicts >= 3:
+				decision.Reason = "admission_budget_exhausted"
+			case relayInfo.LockedChannel != nil || service.GetChannelConstraints(c).SuppressesRetry():
+				decision.Reason = "pinned_channel"
+			default:
+				decision.Action = "retry"
+			}
+			localErr := types.NewErrorWithStatusCode(taskErr.Error, types.ErrorCode(taskErr.Code), taskErr.StatusCode, types.ErrOptionWithSkipRetry())
+			relayInfo.LastError = localErr
+			service.RecordPolicyFailure(c, channel.Id, localErr, decision)
+			diagnostics.attemptFailed(retryParam.GetRetry()+1, channel, taskErr, decision.Action == "retry")
+			if decision.Action == "retry" {
+				continue
+			}
+			break
+		}
 		if taskErr == nil {
 			submittedChannel = channel
 		}
@@ -571,6 +601,7 @@ func executeTaskSubmissionWith(
 		if taskErr == nil || requestErr == nil {
 			service.ObserveVideoSubmit(c, channel, relayInfo.OriginModelName, taskErr)
 		} else {
+			service.ObserveVideoReliabilitySubmit(c, taskErr, true)
 			policy.AddEvent(service.PolicyEvent{ChannelID: channel.Id, Decision: service.PolicyDecision{Action: "cancelled", Reason: "client_disconnected", Source: "local"}})
 			service.ReleaseUnpersistedVideoProbeLease(c)
 		}
@@ -588,7 +619,7 @@ func executeTaskSubmissionWith(
 		relayInfo.LastError = taskAPIError
 		retriesLeft := common.RetryTimes - retryParam.GetRetry()
 		if takeover {
-			retriesLeft = common.RetryTimes + 1 - policy.Attempts
+			retriesLeft = common.RetryTimes + 1 - (policy.Attempts - admissionConflicts)
 		}
 		decision := decideTaskRetry(c, taskErr, retriesLeft)
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
@@ -649,6 +680,10 @@ func executeTaskSubmissionWith(
 	stage = "insert"
 	task := model.InitTask(result.Platform, relayInfo)
 	task.PrivateData.Execution = service.TaskExecutionSnapshotFromContext(c)
+	task.PrivateData.VideoHealth = service.VideoHealthReference(c)
+	if task.PrivateData.VideoHealth != nil {
+		task.VideoHealthAttemptID = &task.PrivateData.VideoHealth.AttemptID
+	}
 	task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 	task.PrivateData.BillingSource = relayInfo.BillingSource
 	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId

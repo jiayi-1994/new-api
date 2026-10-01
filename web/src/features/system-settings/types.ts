@@ -394,10 +394,59 @@ export type OperationsSettings = {
 // ============================================================================
 
 export type VideoSchedulingMode = 'off' | 'shadow' | 'on'
+export type VideoSelectionPolicy = 'weighted_v1' | 'stability_cost_v2'
+
+export type VideoReliabilityEvidence = {
+  version: number
+  source: 'window' | 'cold_start' | 'revalidation' | 'recovery'
+  batch_start: number
+  batch_end: number
+  window_seconds: number
+  as_of: number
+  validated_at: number
+  expires_at: number
+  submitted: number
+  accepted: number
+  succeeded: number
+  rejected: number
+  generation_failed: number
+  user: number
+  cancelled: number
+  pending: number
+  unknown: number
+  missing: number
+}
+
+export type VideoReliability = {
+  version: number
+  model: string
+  state: 'unverified' | 'normal' | 'blocked' | 'recovering'
+  state_version: number
+  state_revision: number
+  validation_round: number
+  probe_failures: number
+  reason: string
+  integrity: 'complete' | 'uncertain' | 'unavailable'
+  blocked_at: number
+  recovery_started: number
+  recovery_expires: number
+  validation_started: number
+  validation_expires: number
+  last_validation_at: number
+  qualification: VideoReliabilityEvidence | null
+  current: VideoReliabilityEvidence | null
+  recovery: VideoReliabilityEvidence | null
+}
 
 /** Global video scheduling setting as the backend stores it. */
 export type VideoSchedulingSetting = {
   mode: VideoSchedulingMode
+  selection_policy?: VideoSelectionPolicy
+  min_margin_rate?: number
+  min_overall_rate?: number
+  stability_tolerance?: number
+  qualification_ttl_seconds?: number
+  validation_period_seconds?: number
   audit_enabled: boolean
   audit_retention_days: number
   models: string[]
@@ -481,6 +530,11 @@ export type VideoScheduleCandidate = {
   total: number
   unproven?: boolean
   excluded?: string
+  reliability?: VideoReliability
+  estimated_margin?: number
+  best_generation_rate?: number
+  validation_slots_held?: number
+  validation_slot_limit?: number
 }
 
 export type VideoScheduleSimulation = {
@@ -492,6 +546,11 @@ export type VideoScheduleSimulation = {
   recommended: number
   probe: boolean
   explore: boolean
+  selection_policy?: VideoSelectionPolicy
+  flow?: string
+  selection_reason?: string
+  slot_occupancy?: Record<number, number>
+  validation_limits?: { explore: number; recover: number }
   now: string
   seed: number
   fingerprint: string

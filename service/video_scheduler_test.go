@@ -35,6 +35,225 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func TestReliableVideoColdStartAndValidationOrder(t *testing.T) {
+	now := time.Unix(1800000000, 0).UTC()
+	p := videosched.Policy{SelectionPolicy: videosched.PolicyStabilityCostV2, MinMarginRate: .1, MinGenRate: .8, MinOverallRate: .6, StabilityTolerance: .01, MinSamples: 20, Now: now.Unix(), MaxCostUSD: 1000, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
+	fresh := func(id int) videosched.Candidate {
+		return videosched.Candidate{ID: id, Priority: 1, Quality: .8, Sell: videosched.SellPrice{Kind: videosched.SellKnown, USD: 1}, Spec: videosched.Spec{Tier: "*"}, Cost: videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": .5}}, Reliability: &videosched.ReliabilitySnapshot{Version: 1, Model: "video", State: videosched.HealthUnverified, StateVersion: 1, Integrity: "complete", Reason: "new_channel"}}
+	}
+	qualified := fresh(3)
+	qualified.Reliability.State = videosched.HealthNormal
+	qualified.Reliability.Qualification = &videosched.ReliabilityEvidence{Version: 1, Source: "window", BatchStart: now.Unix() - 3600, BatchEnd: now.Unix() - 1800, WindowSeconds: 1800, AsOf: now.Unix() - 900, ValidatedAt: now.Unix() - 900, ExpiresAt: now.Unix() + 85500, Submitted: 20, Accepted: 20, Succeeded: 20}
+	t.Run("larger_sample_policy_still_admits_revalidation", func(t *testing.T) {
+		changedPolicy := p
+		changedPolicy.MinSamples = 40
+		input := VideoDecisionInput{Candidates: []videosched.Candidate{qualified}, Policy: changedPolicy, Explore: VideoExploreSettings{ExploreMaxInFlight: 2}, Now: now}
+		choice := DecideVideoSchedule(input)
+		require.NotNil(t, choice.Best)
+		assert.Equal(t, qualified.ID, choice.Best.ID)
+		assert.Equal(t, "revalidate", choice.Flow)
+		assert.Equal(t, "no_normal_candidate", choice.Reason)
+	})
+	for _, tc := range []struct {
+		name         string
+		change       func(*VideoDecisionInput)
+		want         int
+		flow, reason string
+	}{
+		{"two_new_channels", func(in *VideoDecisionInput) { in.Candidates = in.Candidates[:2] }, 1, "explore", "no_normal_candidate"},
+		{"three_new_channels_zero_probabilities", func(in *VideoDecisionInput) {}, 1, "explore", "no_normal_candidate"},
+		{"single_channel_zero_probabilities", func(in *VideoDecisionInput) { in.Candidates = in.Candidates[:1] }, 1, "explore", "no_normal_candidate"},
+		{"oldest_validation_first", func(in *VideoDecisionInput) { in.Candidates[0].Reliability.LastValidationAt = now.Unix() - 50 }, 2, "explore", "no_normal_candidate"},
+		{"top_tier_full_can_descend", func(in *VideoDecisionInput) { in.Candidates[0].Priority = 2; in.SlotOccupancy[1] = 2 }, 2, "explore", "no_normal_candidate"},
+		{"all_validation_slots_full", func(in *VideoDecisionInput) { in.SlotOccupancy = map[int]int{1: 2, 2: 2, 3: 2} }, 0, "", "validation_slots_full"},
+		{"mixed_normal_zero_validation_budget", func(in *VideoDecisionInput) { in.Candidates[2] = qualified }, 3, "normal", ""},
+		{"mixed_normal_full_validation_budget", func(in *VideoDecisionInput) { in.Candidates[2] = qualified; in.Explore.ExploreShare = 1 }, 1, "explore", "validation_budget"},
+		{"normal_tier_does_not_validate_other_priorities", func(in *VideoDecisionInput) {
+			in.Candidates[2] = qualified
+			in.Candidates[0].Priority, in.Candidates[1].Priority = 2, 0
+			in.Explore.ExploreShare = 1
+		}, 3, "normal", ""},
+		{"blocked_is_not_new", func(in *VideoDecisionInput) {
+			for i := range in.Candidates {
+				in.Candidates[i].Reliability.State = videosched.HealthBlocked
+				in.Candidates[i].Reliability.BlockedAt = now.Unix()
+			}
+		}, 0, "", "recovery_cooldown"},
+		{"ready_recovery_ignores_zero_ratio", func(in *VideoDecisionInput) {
+			for i := range in.Candidates {
+				in.Candidates[i].Reliability.State = videosched.HealthBlocked
+				in.Candidates[i].Reliability.BlockedAt = now.Unix() - 600
+			}
+		}, 1, "recover", "no_normal_candidate"},
+		{"recovery_explicitly_disabled", func(in *VideoDecisionInput) {
+			in.Explore.ProbeMaxInFlight = 0
+			for i := range in.Candidates {
+				in.Candidates[i].Reliability.State = videosched.HealthBlocked
+			}
+		}, 0, "", "recovery_disabled"},
+		{"nonfault_before_recovery", func(in *VideoDecisionInput) {
+			in.Candidates[0].Reliability.State = videosched.HealthBlocked
+			in.Candidates[0].Reliability.BlockedAt = now.Unix() - 600
+		}, 2, "explore", "no_normal_candidate"},
+		{"no_history_is_not_new", func(in *VideoDecisionInput) {
+			for i := range in.Candidates {
+				in.Candidates[i].Reliability = nil
+			}
+		}, 0, "", "health_state_unavailable"},
+		{"margin_still_required", func(in *VideoDecisionInput) {
+			for i := range in.Candidates {
+				in.Candidates[i].Cost.Prices["*"] = .9001
+			}
+		}, 0, "", "hard_filter_exhausted"},
+		{"all_evidence_expired", func(in *VideoDecisionInput) {
+			for i := range in.Candidates {
+				h := in.Candidates[i].Reliability
+				h.State = videosched.HealthNormal
+				h.Qualification = &videosched.ReliabilityEvidence{Version: 1, Source: "window", BatchStart: now.Unix() - 90000, BatchEnd: now.Unix() - 88200, WindowSeconds: 1800, AsOf: now.Unix() - 88000, ValidatedAt: now.Unix() - 88000, ExpiresAt: now.Unix() - 1600, Submitted: 20, Accepted: 20, Succeeded: 20}
+			}
+		}, 1, "revalidate", "no_normal_candidate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := VideoDecisionInput{Candidates: []videosched.Candidate{fresh(1), fresh(2), fresh(3)}, Policy: p, Explore: VideoExploreSettings{ExploreMaxInFlight: 2, ProbeMaxInFlight: 1, ProbeCooldownSec: 300}, SlotOccupancy: map[int]int{}, Probe: map[int]VideoProbeState{}, Now: now, Seed: 7}
+			tc.change(&in)
+			result := DecideVideoSchedule(in)
+			if tc.want == 0 {
+				assert.Nil(t, result.Best)
+			} else {
+				require.NotNil(t, result.Best)
+				assert.Equal(t, tc.want, result.Best.ID)
+			}
+			assert.Equal(t, tc.flow, result.Flow)
+			assert.Equal(t, tc.reason, result.Reason)
+		})
+	}
+}
+
+func TestReliableVideoAdmissionReselectsStaleState(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	useVideoHealthBackend(t, "memory")
+	t.Cleanup(func() { videoReliabilityCache.Clear() })
+	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Task{}))
+	s := operation_setting.GetVideoSchedulingSetting()
+	s.Mode, s.SelectionPolicy = "on", videosched.PolicyStabilityCostV2
+	s.MinSamples, s.MinGenRate, s.MinOverallRate, s.MinMarginRate = 20, .8, .6, .1
+	s.QualificationTTLSeconds, s.ValidationPeriodSeconds = 86400, 604800
+	s.ExploreMaxInFlight, s.ExploreShare, s.ProbeRatio = 1, 0, 0
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices)) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"videos-fast":2}`))
+	plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
+	require.NoError(t, err)
+	for _, id := range []int{3311, 3312} {
+		createVideoSchedChannel(t, db, id, "default", "spec-probe", 1, `{"video_scheduling":{"quality":0.8,"models":{"videos-fast":{"mode":"per_video","prices":{"*":1}}}}}`, "")
+		require.NoError(t, model.EnsureVideoHealthState(t.Context(), id, "videos-fast"))
+		publishPersistedVideoReliability(t.Context(), id, "videos-fast")
+	}
+	model.InitChannelCache()
+	// A competing node changes the first choice after its cached snapshot.
+	// Admission must release that reservation and choose the other channel.
+	require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", 3311).Update("version", 2).Error)
+	c := newVideoSchedTestContext(t)
+	c.Set(common.RequestIdKey, "v2-admission-reselection")
+	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+	c.Set("task_request", map[string]any{"prompt": "fixture"})
+	common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+	common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, s)
+	t.Cleanup(func() { releaseVideoValidationLease(c) })
+	selected, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 3312, selected.Id)
+	records := VideoScheduleRecords(c)
+	require.Len(t, records, 2)
+	assert.Equal(t, 3311, records[0].Recommended)
+	assert.Equal(t, "health_state_unavailable", records[0].Admission)
+	assert.Equal(t, "explore", records[1].Flow)
+	assert.Equal(t, []int{1, 1}, []int{records[0].AttemptSeq, records[1].AttemptSeq})
+	assert.NotEqual(t, records[0].Fingerprint, records[1].Fingerprint)
+	held, err := videoHealthStore().held(videoValidationKeys(3311))
+	require.NoError(t, err)
+	assert.Zero(t, held)
+	var attempts int64
+	require.NoError(t, db.Model(&model.VideoHealthAttempt{}).Count(&attempts).Error)
+	assert.Zero(t, attempts, "selection and failed admission never count as submissions")
+	RequestPolicy(c).BeginAttempt(selected, "default")
+	require.NoError(t, BeginVideoHealthTransmission(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: selected.Id}, OriginModelName: "videos-fast"}))
+	t.Cleanup(func() { stopVideoHealthSubmissionOwner(c) })
+	facts, err := model.ListVideoHealthAttempts(t.Context(), "v2-admission-reselection")
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	assert.Equal(t, 3312, facts[0].ChannelID)
+	assert.Equal(t, 1, facts[0].AttemptSeq)
+}
+
+func TestVideoScheduleAuditVersionFiltersUseFrozenRequestPolicy(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	setting := operation_setting.GetVideoSchedulingSetting()
+	previousPolicy := setting.SelectionPolicy
+	t.Cleanup(func() { setting.SelectionPolicy = previousPolicy })
+
+	for _, tc := range []struct {
+		name, policy, wantVersion     string
+		withDecision, assemblyFailure bool
+	}{
+		{"legacy_missing_policy", "", "1", true, false},
+		{"legacy_weighted_policy", videosched.PolicyWeightedV1, "1", true, false},
+		{"stability_selection", videosched.PolicyStabilityCostV2, videosched.PolicyStabilityCostV2, true, false},
+		{"stability_no_candidate", videosched.PolicyStabilityCostV2, videosched.PolicyStabilityCostV2, false, false},
+		{"stability_assembly_failure", videosched.PolicyStabilityCostV2, videosched.PolicyStabilityCostV2, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(common.RequestIdKey, tc.name)
+			decision := VideoSchedDecision{Takeover: true}
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+			frozen := *setting
+			frozen.SelectionPolicy = tc.policy
+			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &frozen)
+			freezeVideoScheduleAudit(c, decision, true)
+			// A concurrent settings change must not relabel the in-flight request.
+			setting.SelectionPolicy = videosched.PolicyStabilityCostV2
+			if tc.policy == videosched.PolicyStabilityCostV2 {
+				setting.SelectionPolicy = videosched.PolicyWeightedV1
+			}
+			if tc.withDecision {
+				input := VideoDecisionInput{Now: time.Now().UTC(), Policy: videosched.Policy{SelectionPolicy: tc.policy}}
+				fingerprint, _, err := VideoDecisionFingerprint(input)
+				require.NoError(t, err)
+				common.SetContextKey(c, constant.ContextKeyVideoSchedBoard, []VideoScheduleRecord{{SelectionSeq: 1, AttemptSeq: 1, Input: &input, Fingerprint: fingerprint}})
+			}
+			if tc.assemblyFailure {
+				recordVideoAuditAssemblyError(c)
+			}
+			audit, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantVersion, audit.Run.SchedulerVersion)
+			require.NoError(t, model.InsertVideoScheduleAudit(t.Context(), audit))
+			filter := model.VideoScheduleAuditFilter{Start: audit.Run.StartedAt - 1, End: audit.Run.EndedAt + 1, Version: tc.wantVersion, RequestID: tc.name}
+			runs, total, err := model.ListVideoScheduleAudits(t.Context(), filter)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, total)
+			assert.Len(t, runs, 1)
+			stats, err := model.GetVideoScheduleAuditStats(t.Context(), filter)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, stats.Total)
+			exported, err := model.ExportVideoScheduleAudits(t.Context(), filter, "")
+			require.NoError(t, err)
+			assert.Contains(t, string(exported), `"type":"request"`)
+		})
+	}
+}
+
 func TestVideoScheduleAuditKeepsShadowTerminalAfterOffAndPreservesLogs(t *testing.T) {
 	previousErrorLogs, previousConsumeLogs := constant.ErrorLogEnabled, common.LogConsumeEnabled
 	constant.ErrorLogEnabled, common.LogConsumeEnabled = false, false
@@ -464,6 +683,30 @@ func TestVideoScheduleAuditWriterCapacity(t *testing.T) {
 
 // Measures the request-end observer separately from upstream network latency.
 // The fixed 20-candidate / 3-selection workload matches the P5.1 capacity gate.
+func BenchmarkVideoStabilitySelection(b *testing.B) {
+	for _, count := range []int{20, 200} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			input := videoDecisionTestInput()
+			input.Policy.SelectionPolicy = videosched.PolicyStabilityCostV2
+			input.Policy.MinGenRate, input.Policy.MinOverallRate = .8, .6
+			input.Policy.MinMarginRate, input.Policy.StabilityTolerance = .1, .01
+			input.Policy.MinSamples = 20
+			input.Policy.QualificationTTLSeconds, input.Policy.ValidationPeriodSeconds = 86400, 604800
+			now := input.Now.Unix()
+			input.Candidates = nil
+			for id := range count {
+				c := videoDecisionTestCandidate(id+1, 1, videosched.HealthStat{}, videosched.HealthStat{})
+				c.Reliability = &videosched.ReliabilitySnapshot{Version: 1, Model: "video", State: videosched.HealthNormal, StateVersion: 1, Integrity: "complete", Qualification: &videosched.ReliabilityEvidence{Version: 1, Source: "window", WindowSeconds: 1800, BatchStart: now - 3600, BatchEnd: now - 1800, AsOf: now, ValidatedAt: now, ExpiresAt: now + 86400, Submitted: 100, Accepted: 100, Succeeded: 100}}
+				input.Candidates = append(input.Candidates, c)
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				require.NotNil(b, DecideVideoSchedule(input).Best)
+			}
+		})
+	}
+}
+
 func BenchmarkVideoScheduleAuditCapture(b *testing.B) {
 	gin.SetMode(gin.TestMode)
 	input := videoDecisionTestInput()
@@ -597,6 +840,73 @@ func TestDecideVideoSchedFreezesOneRequestLevelAnswer(t *testing.T) {
 		assert.Equal(t, VideoSchedDecision{}, VideoSchedDecisionFrom(newVideoSchedTestContext(t)))
 		assert.Equal(t, VideoSchedDecision{}, VideoSchedDecisionFrom(nil))
 	})
+	t.Run("readiness validates the frozen configuration", func(t *testing.T) {
+		setVideoSchedulingForTest(t, operation_setting.VideoSchedulingModeOn)
+		setting := operation_setting.GetVideoSchedulingSetting()
+		frozen := *setting
+		frozen.SelectionPolicy = videosched.PolicyStabilityCostV2
+		frozen.MinGenRate, frozen.MinOverallRate = .8, .6
+		frozen.MinMarginRate, frozen.StabilityTolerance = .1, .01
+		frozen.MinSamples, frozen.ExploreMaxInFlight = 20, 1
+		frozen.QualificationTTLSeconds, frozen.ValidationPeriodSeconds = 86400, 604800
+		setting.SelectionPolicy, setting.MinGenRate = videosched.PolicyStabilityCostV2, .79
+		common.MemoryCacheEnabled, common.IsMasterNode = true, true
+		videoHealthReady.Store(true)
+		c := newVideoSchedTestContext(t)
+		c.Set("resolved_task_model", "videos-fast")
+		common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &frozen)
+		native(c)
+		assert.Equal(t, VideoSchedDecision{Takeover: true}, DecideVideoSched(c))
+	})
+
+	for _, tc := range []struct {
+		name  string
+		cause string
+		mode  string
+		entry func(*gin.Context)
+		want  VideoSchedDecision
+	}{
+		{"v2 before calibration rejects", "uncalibrated", operation_setting.VideoSchedulingModeOn, protocol(megabyai, seedance), VideoSchedDecision{Takeover: true, Reason: VideoSchedReasonNotReady}},
+		{"v2 without memory cache rejects", "cache", operation_setting.VideoSchedulingModeOn, native, VideoSchedDecision{Takeover: true, Reason: VideoSchedReasonNotReady}},
+		{"v2 slave without Redis rejects", "redis", operation_setting.VideoSchedulingModeOn, native, VideoSchedDecision{Takeover: true, Reason: VideoSchedReasonNotReady}},
+		{"v2 invalid configuration rejects", "settings", operation_setting.VideoSchedulingModeOn, native, VideoSchedDecision{Takeover: true, Reason: VideoSchedReasonNotReady}},
+		{"v2 off remains exempt", "uncalibrated", operation_setting.VideoSchedulingModeOff, native, VideoSchedDecision{Reason: VideoSchedReasonModeOff}},
+		{"v2 origin continuation remains exempt", "uncalibrated", operation_setting.VideoSchedulingModeOn, originTask, VideoSchedDecision{Reason: VideoSchedReasonNotSubmit}},
+		{"v2 mixed pool remains exempt", "uncalibrated", operation_setting.VideoSchedulingModeOn, protocol(megabyai, sora), VideoSchedDecision{Reason: VideoSchedReasonMixedPool}},
+		{"v2 unlisted model remains exempt", "model", operation_setting.VideoSchedulingModeOn, native, VideoSchedDecision{Reason: VideoSchedReasonModelNotListed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setVideoSchedulingForTest(t, tc.mode)
+			s := operation_setting.GetVideoSchedulingSetting()
+			s.SelectionPolicy = videosched.PolicyStabilityCostV2
+			s.MinGenRate, s.MinOverallRate = .8, .6
+			s.MinMarginRate, s.StabilityTolerance = .1, .01
+			s.MinSamples, s.ExploreMaxInFlight = 20, 1
+			s.QualificationTTLSeconds, s.ValidationPeriodSeconds = 86400, 604800
+			priorRedis, priorMaster := common.RedisEnabled, common.IsMasterNode
+			t.Cleanup(func() { common.RedisEnabled, common.IsMasterNode = priorRedis, priorMaster })
+			common.RedisEnabled, common.IsMasterNode = false, true
+			common.MemoryCacheEnabled = tc.cause != "cache"
+			videoHealthReady.Store(tc.cause != "uncalibrated" && tc.cause != "model")
+			switch tc.cause {
+			case "redis":
+				common.IsMasterNode = false
+			case "settings":
+				s.MinGenRate = .79
+			case "model":
+				s.Models = []string{"videos-mini"}
+			}
+			c := newVideoSchedTestContext(t)
+			c.Set("resolved_task_model", "videos-fast")
+			tc.entry(c)
+			assert.Equal(t, tc.want, DecideVideoSched(c))
+			if tc.want.Takeover {
+				channel, err := selectVideoChannel(c, "default", "videos-fast", nil)
+				assert.Nil(t, channel)
+				assert.ErrorIs(t, err, model.ErrTierSelectorNoCandidate)
+			}
+		})
+	}
 }
 
 func TestVideoSchedStaticBlockersNameHooklessPluginsSharingAModel(t *testing.T) {
@@ -1451,6 +1761,12 @@ func TestVideoDecisionFingerprintPinsEveryInput(t *testing.T) {
 		{"explore share", "settings", func(input *VideoDecisionInput) { input.Explore.ExploreShare = 0.2 }},
 		{"explore cap", "settings", func(input *VideoDecisionInput) { input.Explore.ExploreMaxInFlight = 3 }},
 		{"cost bound", "settings", func(input *VideoDecisionInput) { input.Policy.MaxCostUSD = 2e6 }},
+		{"selection policy", "settings", func(input *VideoDecisionInput) { input.Policy.SelectionPolicy = videosched.PolicyStabilityCostV2 }},
+		{"qualification lifetime", "settings", func(input *VideoDecisionInput) { input.Policy.QualificationTTLSeconds = 86400 }},
+		{"validation period", "settings", func(input *VideoDecisionInput) { input.Policy.ValidationPeriodSeconds = 604800 }},
+		{"reliability state", "candidates", func(input *VideoDecisionInput) {
+			input.Candidates[1].Reliability = &videosched.ReliabilitySnapshot{Version: 1, State: videosched.HealthUnverified, StateVersion: 2, ValidationRound: 3, Integrity: "complete", Model: "video", Reason: "insufficient_samples"}
+		}},
 		{"slot occupancy", "slots", func(input *VideoDecisionInput) { input.SlotOccupancy[2] = 1 }},
 		{"clock", "now", func(input *VideoDecisionInput) { input.Now = input.Now.Add(time.Second) }},
 		{"seed", "seed", func(input *VideoDecisionInput) { input.Seed = 8 }},

@@ -88,6 +88,7 @@ type VideoScheduleDecision struct {
 	Recommended      int                `json:"recommended"`
 	Selected         int                `json:"selected"`
 	ChoiceKind       string             `json:"choice_kind" gorm:"type:varchar(24)"`
+	SelectionReason  string             `json:"selection_reason,omitempty" gorm:"type:varchar(32)"`
 	AffinityHit      bool               `json:"affinity_hit"`
 	Admission        string             `json:"admission" gorm:"type:varchar(32)"`
 	SubmitOutcome    string             `json:"submit_outcome" gorm:"type:varchar(32)"`
@@ -371,38 +372,39 @@ func videoAuditRate(n, d int64) VideoAuditRate {
 }
 
 type VideoScheduleAuditStats struct {
-	AsOf                int64            `json:"as_of"`
-	Total               int64            `json:"total"`
-	Pending             int64            `json:"pending"`
-	Unknown             int64            `json:"unknown"`
-	Cancelled           int64            `json:"cancelled"`
-	Missing             int64            `json:"missing"`
-	SubmitUnknown       int64            `json:"submit_unknown"`
-	SubmitCancelled     int64            `json:"submit_cancelled"`
-	SubmitLocal         int64            `json:"submit_local"`
-	HealthIgnored       int64            `json:"health_ignored"`
-	HealthUnknown       int64            `json:"health_unknown"`
-	Timeouts            int64            `json:"timeouts"`
-	MaturityWaitMS      int64            `json:"maturity_wait_ms"`
-	RequestSuccess      VideoAuditRate   `json:"request_success"`
-	SubmitAcceptance    VideoAuditRate   `json:"submit_acceptance"`
-	GenerationSuccess   VideoAuditRate   `json:"generation_success"`
-	HealthSuccess       VideoAuditRate   `json:"health_success"`
-	Retry               VideoAuditRate   `json:"retry"`
-	NoCandidate         VideoAuditRate   `json:"no_candidate"`
-	P50MS               *int64           `json:"p50_ms"`
-	P95MS               *int64           `json:"p95_ms"`
-	DurationSamples     int              `json:"duration_samples"`
-	OldestPendingMS     *int64           `json:"oldest_pending_ms"`
-	CostSamples         int64            `json:"cost_samples"`
-	CostMissing         int64            `json:"cost_missing"`
-	MeanCostUSD         *float64         `json:"mean_cost_usd"`
-	Selections          int64            `json:"selections"`
-	Candidates          int64            `json:"candidates"`
-	ShadowDifference    VideoAuditRate   `json:"shadow_difference"`
-	ShadowCostSamples   int64            `json:"shadow_cost_samples"`
-	MeanShadowCostDelta *float64         `json:"mean_shadow_cost_delta"`
-	Exclusions          map[string]int64 `json:"exclusions"`
+	Reliability         *VideoReliabilityStats `json:"reliability,omitempty"`
+	AsOf                int64                  `json:"as_of"`
+	Total               int64                  `json:"total"`
+	Pending             int64                  `json:"pending"`
+	Unknown             int64                  `json:"unknown"`
+	Cancelled           int64                  `json:"cancelled"`
+	Missing             int64                  `json:"missing"`
+	SubmitUnknown       int64                  `json:"submit_unknown"`
+	SubmitCancelled     int64                  `json:"submit_cancelled"`
+	SubmitLocal         int64                  `json:"submit_local"`
+	HealthIgnored       int64                  `json:"health_ignored"`
+	HealthUnknown       int64                  `json:"health_unknown"`
+	Timeouts            int64                  `json:"timeouts"`
+	MaturityWaitMS      int64                  `json:"maturity_wait_ms"`
+	RequestSuccess      VideoAuditRate         `json:"request_success"`
+	SubmitAcceptance    VideoAuditRate         `json:"submit_acceptance"`
+	GenerationSuccess   VideoAuditRate         `json:"generation_success"`
+	HealthSuccess       VideoAuditRate         `json:"health_success"`
+	Retry               VideoAuditRate         `json:"retry"`
+	NoCandidate         VideoAuditRate         `json:"no_candidate"`
+	P50MS               *int64                 `json:"p50_ms"`
+	P95MS               *int64                 `json:"p95_ms"`
+	DurationSamples     int                    `json:"duration_samples"`
+	OldestPendingMS     *int64                 `json:"oldest_pending_ms"`
+	CostSamples         int64                  `json:"cost_samples"`
+	CostMissing         int64                  `json:"cost_missing"`
+	MeanCostUSD         *float64               `json:"mean_cost_usd"`
+	Selections          int64                  `json:"selections"`
+	Candidates          int64                  `json:"candidates"`
+	ShadowDifference    VideoAuditRate         `json:"shadow_difference"`
+	ShadowCostSamples   int64                  `json:"shadow_cost_samples"`
+	MeanShadowCostDelta *float64               `json:"mean_shadow_cost_delta"`
+	Exclusions          map[string]int64       `json:"exclusions"`
 }
 
 // Exact aggregates use scalar columns only. The bounded Go percentile pass

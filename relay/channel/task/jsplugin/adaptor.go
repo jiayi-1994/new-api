@@ -455,7 +455,16 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	streaming := a.submit != nil && a.submit.ResponseType == "sse"
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	acceptedStream := streaming || mediaType == "text/event-stream"
+	explicitRejection := false
 	defer func() {
+		if taskErr != nil && resp.StatusCode/100 == 2 && !explicitRejection {
+			// A parser exception or invalid result does not prove that the
+			// upstream rejected the work. Only the explicit rejection result does.
+			if !errors.Is(taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown) {
+				taskErr.Error = fmt.Errorf("%w: %w", relaycommon.ErrTaskSubmitOutcomeUnknown, taskErr.Error)
+			}
+			taskErr.NoRetry = true
+		}
 		if acceptedStream && taskErr != nil {
 			taskErr.NoRetry = true
 		}
@@ -490,13 +499,6 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	headers := make(map[string][]string, len(resp.Header))
 	maps.Copy(headers, resp.Header)
 	value, err := a.plugin.Engine.Call(c.Request.Context(), "parseSubmitResponse", a.submitContext(c, info), map[string]any{"statusCode": resp.StatusCode, "headers": headers, "body": responseBody})
-	var hookErr *pluginruntime.HookError
-	if err != nil && resp.StatusCode/100 == 2 && !errors.As(err, &hookErr) {
-		// A timeout, cancellation or admission failure left a 2xx answer
-		// unread, so the upstream may hold the task. A thrown plugin error
-		// stays retryable: plugins use it for business error envelopes.
-		err = fmt.Errorf("%w: %w", relaycommon.ErrTaskSubmitOutcomeUnknown, err)
-	}
 	if err != nil {
 		logger.LogDebug(
 			c,
@@ -510,6 +512,23 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	if object, ok := value.(map[string]any); ok {
 		if _, forbidden := object["clientResponse"]; forbidden {
 			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("parseSubmitResponse must not return clientResponse"), "plugin_submit_response_invalid", http.StatusBadGateway)
+		}
+		if rejection, present := object["rejected"]; present {
+			rejected, valid := rejection.(map[string]any)
+			reason, _ := rejected["reason"].(string)
+			if !valid || len(object) != 1 || len(rejected) != 1 || strings.TrimSpace(reason) == "" || resp.StatusCode/100 != 2 {
+				return nil, service.TaskErrorWrapperLocal(errors.New("plugin returned an invalid submission rejection"), "plugin_submit_response_invalid", http.StatusBadGateway)
+			}
+			explicitRejection = true
+			failure := service.TaskErrorWrapper(errors.New(reason), "plugin_submit_rejected", http.StatusBadGateway)
+			failure.SubmitFailureClass = service.VideoFailureUpstream
+			if class, valid := a.ClassifyFailure(reason); valid {
+				failure.SubmitFailureClass = class
+				if class == service.VideoFailureUser || class == service.VideoFailureCancelled {
+					failure.NoRetry = true
+				}
+			}
+			return nil, failure
 		}
 	}
 	var parsed submitResponse

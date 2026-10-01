@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
@@ -22,47 +23,59 @@ const (
 // VideoSchedulingSetting is the global video task scheduling configuration.
 // Channel cost tables live in each channel's video_scheduling settings.
 type VideoSchedulingSetting struct {
-	Mode               string         `json:"mode"` // off | shadow | on
-	AuditEnabled       bool           `json:"audit_enabled"`
-	AuditRetentionDays int            `json:"audit_retention_days"`
-	Models             []string       `json:"models"` // allow list; empty = every model of plugins exporting describeSpec
-	PriceWeight        float64        `json:"price_weight"`
-	QualityWeight      float64        `json:"quality_weight"`
-	ServiceWeight      float64        `json:"service_weight"`
-	MinSubmitRate      float64        `json:"min_submit_rate"`
-	MinGenRate         float64        `json:"min_gen_rate"`
-	MinSamples         int            `json:"min_samples"`
-	WindowSeconds      int            `json:"window_seconds"`
-	ExploreShare       float64        `json:"explore_share"`         // target probability for unproven channels, not a hard cap
-	ExploreMaxInFlight int            `json:"explore_max_in_flight"` // per unproven channel
-	ProbeRatio         float64        `json:"probe_ratio"`           // probe probability for gated channels
-	ProbeCooldownSec   int            `json:"probe_cooldown_sec"`    // doubles on consecutive failures, capped at one day
-	ProbeMaxInFlight   int            `json:"probe_max_in_flight"`
-	UnknownSellPolicy  string         `json:"unknown_sell_policy"`    // exclude | relative
-	MaxCostToSellRatio float64        `json:"max_cost_to_sell_ratio"` // 0 = no loss threshold
-	TieEpsilon         float64        `json:"tie_epsilon"`
-	CapacityGroups     map[string]int `json:"capacity_groups"` // shared upstream account group -> quota; channels reference the name only
+	Mode                    string         `json:"mode"` // off | shadow | on
+	SelectionPolicy         string         `json:"selection_policy"`
+	MinMarginRate           float64        `json:"min_margin_rate"`
+	MinOverallRate          float64        `json:"min_overall_rate"`
+	StabilityTolerance      float64        `json:"stability_tolerance"`
+	QualificationTTLSeconds int            `json:"qualification_ttl_seconds"`
+	ValidationPeriodSeconds int            `json:"validation_period_seconds"`
+	AuditEnabled            bool           `json:"audit_enabled"`
+	AuditRetentionDays      int            `json:"audit_retention_days"`
+	Models                  []string       `json:"models"` // allow list; empty = every model of plugins exporting describeSpec
+	PriceWeight             float64        `json:"price_weight"`
+	QualityWeight           float64        `json:"quality_weight"`
+	ServiceWeight           float64        `json:"service_weight"`
+	MinSubmitRate           float64        `json:"min_submit_rate"`
+	MinGenRate              float64        `json:"min_gen_rate"`
+	MinSamples              int            `json:"min_samples"`
+	WindowSeconds           int            `json:"window_seconds"`
+	ExploreShare            float64        `json:"explore_share"`         // target probability for unproven channels, not a hard cap
+	ExploreMaxInFlight      int            `json:"explore_max_in_flight"` // per unproven channel
+	ProbeRatio              float64        `json:"probe_ratio"`           // probe probability for gated channels
+	ProbeCooldownSec        int            `json:"probe_cooldown_sec"`    // doubles on consecutive failures, capped at one day
+	ProbeMaxInFlight        int            `json:"probe_max_in_flight"`
+	UnknownSellPolicy       string         `json:"unknown_sell_policy"`    // exclude | relative
+	MaxCostToSellRatio      float64        `json:"max_cost_to_sell_ratio"` // 0 = no loss threshold
+	TieEpsilon              float64        `json:"tie_epsilon"`
+	CapacityGroups          map[string]int `json:"capacity_groups"` // shared upstream account group -> quota; channels reference the name only
 }
 
 var videoSchedulingSetting = VideoSchedulingSetting{
-	Mode:               VideoSchedulingModeOff,
-	AuditEnabled:       true,
-	AuditRetentionDays: 30,
-	Models:             []string{},
-	PriceWeight:        0.5,
-	QualityWeight:      0.3,
-	ServiceWeight:      0.2,
-	MinSubmitRate:      0.8,
-	MinGenRate:         0.5,
-	MinSamples:         20,
-	WindowSeconds:      1800,
-	ExploreShare:       0.10,
-	ExploreMaxInFlight: 2,
-	ProbeRatio:         0.02,
-	ProbeCooldownSec:   300,
-	ProbeMaxInFlight:   1,
-	UnknownSellPolicy:  "exclude",
-	CapacityGroups:     map[string]int{},
+	Mode:                    VideoSchedulingModeOff,
+	SelectionPolicy:         videosched.PolicyWeightedV1,
+	MinMarginRate:           .10,
+	MinOverallRate:          .60,
+	StabilityTolerance:      .01,
+	QualificationTTLSeconds: 86400,
+	ValidationPeriodSeconds: 604800,
+	AuditEnabled:            true,
+	AuditRetentionDays:      30,
+	Models:                  []string{},
+	PriceWeight:             0.5,
+	QualityWeight:           0.3,
+	ServiceWeight:           0.2,
+	MinSubmitRate:           0.8,
+	MinGenRate:              0.5,
+	MinSamples:              20,
+	WindowSeconds:           1800,
+	ExploreShare:            0.10,
+	ExploreMaxInFlight:      2,
+	ProbeRatio:              0.02,
+	ProbeCooldownSec:        300,
+	ProbeMaxInFlight:        1,
+	UnknownSellPolicy:       "exclude",
+	CapacityGroups:          map[string]int{},
 }
 
 func init() {
@@ -110,9 +123,41 @@ func ValidateVideoSchedulingSnapshot(setting *VideoSchedulingSetting) error {
 		if field == "mode" || field == "audit_enabled" || field == "audit_retention_days" {
 			continue
 		}
-		if err := ValidateVideoSchedulingOption(videoSchedulingSettingName+"."+field, value); err != nil {
+		// Older weighted snapshots have no v2 time fields. Keep their original
+		// defaults and fingerprint instead of backfilling current settings.
+		if setting.SelectionPolicy != videosched.PolicyStabilityCostV2 && value == "0" && (field == "qualification_ttl_seconds" || field == "validation_period_seconds") {
+			continue
+		}
+		if field == "selection_policy" {
+			if value != "" && value != videosched.PolicyWeightedV1 && value != videosched.PolicyStabilityCostV2 {
+				return fmt.Errorf("invalid selection_policy %q", value)
+			}
+			continue
+		}
+		if err := validateVideoSchedulingOption(videoSchedulingSettingName+"."+field, value, false); err != nil {
 			return err
 		}
+	}
+	return ValidateVideoReliabilitySetting(setting)
+}
+
+// ValidateVideoReliabilitySetting is shared by activation, runtime and
+// simulation. Staged changes are allowed while off/shadow; activation is not.
+func ValidateVideoReliabilitySetting(s *VideoSchedulingSetting) error {
+	if s.SelectionPolicy != videosched.PolicyStabilityCostV2 {
+		return nil
+	}
+	if !(s.MinGenRate >= .8 && s.MinGenRate <= 1) || !(s.MinOverallRate >= .6 && s.MinOverallRate <= 1) {
+		return fmt.Errorf("stability_cost_v2 requires min_gen_rate >= 0.8 and min_overall_rate >= 0.6")
+	}
+	if !(s.MinMarginRate >= 0 && s.MinMarginRate < 1) || !(s.StabilityTolerance >= 0 && s.StabilityTolerance <= 1) {
+		return fmt.Errorf("invalid stability_cost_v2 margin or tolerance")
+	}
+	if s.MinSamples < 1 || s.ExploreMaxInFlight < 1 || s.ExploreMaxInFlight > maxVideoProbeSlots {
+		return fmt.Errorf("stability_cost_v2 requires min_samples >= 1 and explore_max_in_flight within [1,16]")
+	}
+	if s.QualificationTTLSeconds <= 0 || s.QualificationTTLSeconds > 7*86400 || s.ValidationPeriodSeconds <= 0 || s.ValidationPeriodSeconds > 30*86400 {
+		return fmt.Errorf("invalid stability_cost_v2 evidence lifetime")
 	}
 	return nil
 }
@@ -120,11 +165,33 @@ func ValidateVideoSchedulingSnapshot(setting *VideoSchedulingSetting) error {
 // ValidateVideoSchedulingOption validates one video_scheduling_setting.* option
 // so a saved value can never make the runtime policy invalid.
 func ValidateVideoSchedulingOption(key, value string) error {
+	return validateVideoSchedulingOption(key, value, true)
+}
+
+func validateVideoSchedulingOption(key, value string, live bool) error {
 	field, ok := strings.CutPrefix(key, videoSchedulingSettingName+".")
 	if !ok {
 		return nil
 	}
 	switch field {
+	case "selection_policy":
+		if value != "" && value != videosched.PolicyWeightedV1 && value != videosched.PolicyStabilityCostV2 {
+			return fmt.Errorf("invalid selection_policy %q", value)
+		}
+		if live && videoSchedulingSetting.Mode == VideoSchedulingModeOn && value != videoSchedulingSetting.SelectionPolicy {
+			return fmt.Errorf("save selection_policy in off or shadow mode before enabling it")
+		}
+		return nil
+	case "qualification_ttl_seconds", "validation_period_seconds":
+		limit := 7 * 86400
+		if field == "validation_period_seconds" {
+			limit = 30 * 86400
+		}
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > limit {
+			return fmt.Errorf("%s must be within [1,%d]", field, limit)
+		}
+		return nil
 	case "audit_enabled":
 		if value != "true" && value != "false" {
 			return fmt.Errorf("audit_enabled must be true or false")
@@ -141,6 +208,11 @@ func ValidateVideoSchedulingOption(key, value string) error {
 		case VideoSchedulingModeOff:
 			return nil
 		case VideoSchedulingModeShadow, VideoSchedulingModeOn:
+			if value == VideoSchedulingModeOn {
+				if err := ValidateVideoReliabilitySetting(&videoSchedulingSetting); err != nil {
+					return err
+				}
+			}
 			// Candidates are read from the in-memory channel cache.
 			if !common.MemoryCacheEnabled {
 				return fmt.Errorf("video scheduling mode %s requires MEMORY_CACHE_ENABLED", value)
@@ -189,6 +261,9 @@ func ValidateVideoSchedulingOption(key, value string) error {
 		if err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer", field)
 		}
+		if live && videoSchedulingSetting.Mode == VideoSchedulingModeOn && videoSchedulingSetting.SelectionPolicy == videosched.PolicyStabilityCostV2 && (n < 1 || field == "explore_max_in_flight" && n > 16) {
+			return fmt.Errorf("invalid stability_cost_v2 %s", field)
+		}
 		return nil
 	case "probe_max_in_flight":
 		// Every selection reads each candidate's slots one key per slot.
@@ -205,10 +280,16 @@ func ValidateVideoSchedulingOption(key, value string) error {
 			return fmt.Errorf("%s must be an integer within [1,%d]", field, maxVideoSchedulingSeconds)
 		}
 		return nil
-	case "min_submit_rate", "min_gen_rate", "explore_share", "probe_ratio":
+	case "min_submit_rate", "min_gen_rate", "min_overall_rate", "min_margin_rate", "stability_tolerance", "explore_share", "probe_ratio":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil || !(f >= 0 && f <= 1) {
 			return fmt.Errorf("%s must be within [0,1]", field)
+		}
+		if field == "min_margin_rate" && f == 1 {
+			return fmt.Errorf("min_margin_rate must be below 1")
+		}
+		if live && videoSchedulingSetting.Mode == VideoSchedulingModeOn && videoSchedulingSetting.SelectionPolicy == videosched.PolicyStabilityCostV2 && (field == "min_gen_rate" && f < .8 || field == "min_overall_rate" && f < .6) {
+			return fmt.Errorf("stability_cost_v2 requires generation >= 0.8 and overall >= 0.6")
 		}
 		return nil
 	case "price_weight", "quality_weight", "service_weight", "max_cost_to_sell_ratio", "tie_epsilon":

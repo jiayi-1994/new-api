@@ -519,7 +519,7 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo, taskSubmit ...bool) (*http.Response, error) {
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -561,6 +561,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	if len(taskSubmit) > 0 && taskSubmit[0] {
+		if err := req.Context().Err(); err != nil {
+			return nil, err
+		}
+		if err := service.BeginVideoHealthTransmission(c, info); err != nil {
+			return nil, err
+		}
+	}
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -619,7 +627,7 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
 		WroteHeaders: func() { sent.Store(true) },
 	}))
-	resp, err := doRequest(c, req, info)
+	resp, err := doRequest(c, req, info, true)
 	if err != nil {
 		if sent.Load() {
 			return nil, fmt.Errorf("do request failed: %w: %w", common.ErrTaskSubmitOutcomeUnknown, err)

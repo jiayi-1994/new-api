@@ -93,7 +93,14 @@ func GetVideoScheduleAudit(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"run": audit.Run, "decisions": audit.Decisions, "attempts": attempts})
+	healthAttempts, healthErr := model.ListVideoHealthAttempts(ctx, requestID)
+	healthStatus := "supported"
+	if healthErr != nil {
+		healthStatus = "unavailable"
+	} else if len(healthAttempts) == 0 {
+		healthStatus = "no_health_facts"
+	}
+	common.ApiSuccess(c, gin.H{"run": audit.Run, "decisions": audit.Decisions, "attempts": attempts, "health_attempts": healthAttempts, "health_status": healthStatus})
 }
 
 func GetVideoScheduleAuditStats(c *gin.Context) {
@@ -110,6 +117,12 @@ func GetVideoScheduleAuditStats(c *gin.Context) {
 		return
 	}
 	stats.MaturityWaitMS = int64(constant.TaskTimeoutMinutes) * 60000
+	health, healthErr := model.GetVideoReliabilityStats(ctx, filter)
+	if healthErr != nil {
+		health = model.VideoReliabilityStats{Reason: "health_state_unavailable"}
+	}
+	health.CollectionWriteFailures = service.VideoReliabilityCollectionFailures()
+	stats.Reliability = &health
 	common.ApiSuccess(c, stats)
 }
 

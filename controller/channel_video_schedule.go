@@ -105,9 +105,10 @@ func GetVideoSchedulable(c *gin.Context) {
 }
 
 type videoHealthOverride struct {
-	Submit *videosched.HealthStat   `json:"submit"`
-	Gen    *videosched.HealthStat   `json:"gen"`
-	Probe  *service.VideoProbeState `json:"probe"`
+	Submit      *videosched.HealthStat          `json:"submit"`
+	Gen         *videosched.HealthStat          `json:"gen"`
+	Probe       *service.VideoProbeState        `json:"probe"`
+	Reliability *videosched.ReliabilitySnapshot `json:"reliability"`
 }
 
 type videoScheduleSimulateRequest struct {
@@ -205,9 +206,19 @@ func SimulateVideoSchedule(c *gin.Context) {
 		}
 		input := service.AssembleVideoDecision(sc, setting, req.Group, modelName, channels, seed)
 		input.Now = now
+		if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+			input.Policy.Now = now.Unix()
+		}
 		for i := range input.Candidates {
 			candidate := &input.Candidates[i]
 			if override, ok := req.HealthOverride[candidate.ID]; ok {
+				if override.Reliability != nil {
+					if err := override.Reliability.Validate(); err != nil || override.Reliability.Model != modelName {
+						result = gin.H{"error": "invalid reliability override"}
+						return
+					}
+					candidate.Reliability = override.Reliability
+				}
 				if override.Submit != nil {
 					candidate.Submit = *override.Submit
 				}
@@ -227,6 +238,10 @@ func SimulateVideoSchedule(c *gin.Context) {
 				}
 			}
 			if n, ok := req.SlotOverride[candidate.ID]; ok {
+				if n < 0 || n > 16 {
+					result = gin.H{"error": "invalid validation slot count"}
+					return
+				}
 				delete(input.SlotOccupancy, candidate.ID)
 				if n > 0 {
 					input.SlotOccupancy[candidate.ID] = n
@@ -244,18 +259,23 @@ func SimulateVideoSchedule(c *gin.Context) {
 			recommended = choice.Best.ID
 		}
 		result = gin.H{
-			"decision":    service.VideoSchedDecisionFrom(sc),
-			"group":       req.Group,
-			"model":       modelName,
-			"group_ratio": service.VideoEffectiveGroupRatio(sc, req.Group),
-			"recommended": recommended,
-			"probe":       choice.Probe,
-			"explore":     choice.Explore,
-			"candidates":  service.VideoScheduleBoard(choice.Board),
-			"now":         input.Now.Format(time.RFC3339),
-			"seed":        seed,
-			"fingerprint": fingerprint,
-			"segments":    segments,
+			"selection_policy":  setting.SelectionPolicy,
+			"slot_occupancy":    input.SlotOccupancy,
+			"validation_limits": gin.H{"explore": input.Explore.ExploreMaxInFlight, "recover": input.Explore.ProbeMaxInFlight},
+			"decision":          service.VideoSchedDecisionFrom(sc),
+			"group":             req.Group,
+			"model":             modelName,
+			"group_ratio":       service.VideoEffectiveGroupRatio(sc, req.Group),
+			"recommended":       recommended,
+			"probe":             choice.Probe,
+			"explore":           choice.Explore,
+			"flow":              choice.Flow,
+			"selection_reason":  choice.Reason,
+			"candidates":        service.VideoScheduleBoard(choice.Board),
+			"now":               input.Now.Format(time.RFC3339),
+			"seed":              seed,
+			"fingerprint":       fingerprint,
+			"segments":          segments,
 		}
 	}
 	identify := func(sc *gin.Context) {

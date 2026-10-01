@@ -26,6 +26,7 @@ import * as z from 'zod'
 
 import { JsonEditor } from '@/components/json-editor'
 import { TagInput } from '@/components/tag-input'
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -97,37 +98,71 @@ const positive = z
   .int('Enter a positive whole number')
   .min(1, 'Enter a positive whole number')
 
-const videoSchedulingSchema = z.object({
-  mode: z.enum(['off', 'shadow', 'on']),
-  audit_enabled: z.boolean(),
-  audit_retention_days: z
-    .number()
-    .int()
-    .min(7, 'Audit retention must be between 7 and 180 days')
-    .max(180, 'Audit retention must be between 7 and 180 days'),
-  models: z.array(z.string()),
-  price_weight: nonNegative,
-  quality_weight: nonNegative,
-  service_weight: nonNegative,
-  min_submit_rate: rate,
-  min_gen_rate: rate,
-  min_samples: count,
-  window_seconds: positive,
-  explore_share: rate,
-  explore_max_in_flight: count,
-  probe_ratio: rate,
-  probe_cooldown_sec: positive,
-  probe_max_in_flight: count,
-  unknown_sell_policy: z.enum(['exclude', 'relative']),
-  max_cost_to_sell_ratio: nonNegative,
-  tie_epsilon: nonNegative,
-  capacity_groups: z
-    .string()
-    .refine(
-      (value) => parseCapacityGroups(value) !== null,
-      'Each capacity group needs a trimmed name of at most 64 bytes and a whole-number quota above 0'
-    ),
-})
+const videoSchedulingSchema = z
+  .object({
+    mode: z.enum(['off', 'shadow', 'on']),
+    selection_policy: z.enum(['weighted_v1', 'stability_cost_v2']),
+    min_margin_rate: rate.lt(1),
+    min_overall_rate: rate,
+    stability_tolerance: rate,
+    qualification_ttl_seconds: positive.max(604800),
+    validation_period_seconds: positive.max(2592000),
+    audit_enabled: z.boolean(),
+    audit_retention_days: z
+      .number()
+      .int()
+      .min(7, 'Audit retention must be between 7 and 180 days')
+      .max(180, 'Audit retention must be between 7 and 180 days'),
+    models: z.array(z.string()),
+    price_weight: nonNegative,
+    quality_weight: nonNegative,
+    service_weight: nonNegative,
+    min_submit_rate: rate,
+    min_gen_rate: rate,
+    min_samples: count,
+    window_seconds: positive.max(86400),
+    explore_share: rate,
+    explore_max_in_flight: count,
+    probe_ratio: rate,
+    probe_cooldown_sec: positive.max(86400),
+    probe_max_in_flight: count.max(16),
+    unknown_sell_policy: z.enum(['exclude', 'relative']),
+    max_cost_to_sell_ratio: nonNegative,
+    tie_epsilon: nonNegative,
+    capacity_groups: z
+      .string()
+      .refine(
+        (value) => parseCapacityGroups(value) !== null,
+        'Each capacity group needs a trimmed name of at most 64 bytes and a whole-number quota above 0'
+      ),
+  })
+  .superRefine((value, ctx) => {
+    if (value.selection_policy !== 'stability_cost_v2') return
+    for (const field of [
+      'min_gen_rate',
+      'min_overall_rate',
+      'min_samples',
+      'explore_max_in_flight',
+    ] as const) {
+      const minimum = {
+        min_gen_rate: 0.8,
+        min_overall_rate: 0.6,
+        min_samples: 1,
+        explore_max_in_flight: 1,
+      }[field]
+      if (
+        value[field] < minimum ||
+        (field === 'explore_max_in_flight' && value[field] > 16)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message:
+            'Stability policy requires generation ≥80%, completion ≥60%, positive samples and 1–16 validation slots',
+        })
+      }
+    }
+  })
 
 type VideoSchedulingFormValues = z.infer<typeof videoSchedulingSchema>
 type SettingField = keyof VideoSchedulingSetting
@@ -171,6 +206,12 @@ function toFormValues(settings: OperationsSettings): VideoSchedulingFormValues {
   const groups = parseCapacityGroups(values.capacity_groups) ?? {}
   return {
     ...values,
+    selection_policy: values.selection_policy || 'weighted_v1',
+    min_margin_rate: values.min_margin_rate ?? 0.1,
+    min_overall_rate: values.min_overall_rate ?? 0.6,
+    stability_tolerance: values.stability_tolerance ?? 0.01,
+    qualification_ttl_seconds: values.qualification_ttl_seconds ?? 86400,
+    validation_period_seconds: values.validation_period_seconds ?? 604800,
     audit_enabled: values.audit_enabled ?? true,
     audit_retention_days: values.audit_retention_days ?? 30,
     capacity_groups: Object.keys(groups).length
@@ -221,6 +262,11 @@ export function VideoSchedulingSettingsSection(props: {
     control: form.control,
     name: ['price_weight', 'quality_weight', 'service_weight'],
   })
+  const selectionPolicy = useWatch({
+    control: form.control,
+    name: 'selection_policy',
+  })
+  const isV2 = selectionPolicy === 'stability_cost_v2'
   const weightSum = weights.reduce(
     (sum, weight) => sum + (Number(weight) || 0),
     0
@@ -322,6 +368,10 @@ export function VideoSchedulingSettingsSection(props: {
     { value: 'exclude', label: t('Exclude the candidate') },
     { value: 'relative', label: t('Score price relative to other candidates') },
   ]
+  const policyItems = [
+    { value: 'weighted_v1', label: t('Weighted score (legacy)') },
+    { value: 'stability_cost_v2', label: t('Stability and cost') },
+  ]
 
   return (
     <SettingsSection title={t('Video Smart Scheduling')}>
@@ -389,6 +439,97 @@ export function VideoSchedulingSettingsSection(props: {
             />
           </SettingsFormGrid>
 
+          <FormField
+            control={form.control}
+            name='selection_policy'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Selection policy')}</FormLabel>
+                <Select
+                  items={policyItems}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  disabled={liveSetting.mode === 'on'}
+                >
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent alignItemWithTrigger={false}>
+                    {policyItems.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  {t(
+                    'Save off or shadow mode before changing the policy. Existing routes keep their saved policy.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <Button
+            type='button'
+            variant='outline'
+            className='self-start'
+            disabled={liveSetting.mode === 'on'}
+            onClick={() => {
+              const preset = {
+                selection_policy: 'stability_cost_v2',
+                min_margin_rate: 0.1,
+                min_gen_rate: 0.8,
+                min_overall_rate: 0.6,
+                stability_tolerance: 0.01,
+                qualification_ttl_seconds: 86400,
+                validation_period_seconds: 604800,
+                min_samples: 20,
+                explore_max_in_flight: 2,
+              } as const
+              for (const field of Object.keys(
+                preset
+              ) as (keyof typeof preset)[]) {
+                form.setValue(field, preset[field], { shouldDirty: true })
+              }
+            }}
+          >
+            {t('Apply stability and cost preset')}
+          </Button>
+          {isV2 && (
+            <>
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  'Margin and reliability qualify channels first. Within priority, compare stability, quality, then total purchase cost.'
+                )}
+              </p>
+              <SettingsFormGrid>
+                {numberField('min_margin_rate', t('Minimum estimated margin'))}
+                {numberField(
+                  'min_overall_rate',
+                  t('Minimum channel completion rate')
+                )}
+                {numberField(
+                  'stability_tolerance',
+                  t('Generation rate tolerance')
+                )}
+                {numberField(
+                  'qualification_ttl_seconds',
+                  t('Qualification lifetime (seconds)'),
+                  { step: 1 }
+                )}
+                {numberField(
+                  'validation_period_seconds',
+                  t('Validation accumulation period (seconds)'),
+                  { step: 1 }
+                )}
+              </SettingsFormGrid>
+            </>
+          )}
+
           <h4 className='font-medium'>{t('Video scheduling audit')}</h4>
           <SettingsFormGrid>
             <FormField
@@ -421,28 +562,33 @@ export function VideoSchedulingSettingsSection(props: {
             {t('Open scheduling audit')}
           </Link>
 
-          <h4 className='font-medium'>{t('Score weights')}</h4>
-          <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
-            {numberField('price_weight', t('Price weight'), {
-              description: t('Normalized: {{value}}', {
-                value: normalizedWeight(weights[0]),
-              }),
-            })}
-            {numberField('quality_weight', t('Quality weight'), {
-              description: t('Normalized: {{value}}', {
-                value: normalizedWeight(weights[1]),
-              }),
-            })}
-            {numberField('service_weight', t('Service weight'), {
-              description: t('Normalized: {{value}}', {
-                value: normalizedWeight(weights[2]),
-              }),
-            })}
-          </div>
+          {!isV2 && (
+            <>
+              <h4 className='font-medium'>{t('Score weights')}</h4>
+              <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
+                {numberField('price_weight', t('Price weight'), {
+                  description: t('Normalized: {{value}}', {
+                    value: normalizedWeight(weights[0]),
+                  }),
+                })}
+                {numberField('quality_weight', t('Quality weight'), {
+                  description: t('Normalized: {{value}}', {
+                    value: normalizedWeight(weights[1]),
+                  }),
+                })}
+                {numberField('service_weight', t('Service weight'), {
+                  description: t('Normalized: {{value}}', {
+                    value: normalizedWeight(weights[2]),
+                  }),
+                })}
+              </div>
+            </>
+          )}
 
           <h4 className='font-medium'>{t('Health gates')}</h4>
           <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
-            {numberField('min_submit_rate', t('Minimum submit success rate'))}
+            {!isV2 &&
+              numberField('min_submit_rate', t('Minimum submit success rate'))}
             {numberField('min_gen_rate', t('Minimum generation success rate'))}
             {numberField('min_samples', t('Minimum samples'), { step: 1 })}
             {numberField('window_seconds', t('Window (seconds)'), { step: 1 })}
@@ -451,6 +597,13 @@ export function VideoSchedulingSettingsSection(props: {
           <h4 className='font-medium'>
             {t('Exploration and recovery probes')}
           </h4>
+          {isV2 && (
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'Probabilities apply only when normal candidates exist. Otherwise, eligible channels receive limited validation traffic, even at zero probability. Recovery still requires cooldown and an available slot.'
+              )}
+            </p>
+          )}
           <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
             {numberField('explore_share', t('Exploration share'), {
               description: t('Target probability for unproven channels'),
@@ -474,45 +627,49 @@ export function VideoSchedulingSettingsSection(props: {
             })}
           </div>
 
-          <h4 className='font-medium'>{t('Pricing')}</h4>
-          <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
-            <FormField
-              control={form.control}
-              name='unknown_sell_policy'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Unknown sell price')}</FormLabel>
-                  <Select
-                    items={sellPolicyItems}
-                    value={field.value}
-                    onValueChange={field.onChange}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent alignItemWithTrigger={false}>
-                      {sellPolicyItems.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            {numberField(
-              'max_cost_to_sell_ratio',
-              t('Max cost to sell ratio'),
-              {
-                description: t('0 means no loss threshold'),
-              }
-            )}
-            {numberField('tie_epsilon', t('Tie epsilon'))}
-          </div>
+          {!isV2 && (
+            <>
+              <h4 className='font-medium'>{t('Pricing')}</h4>
+              <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
+                <FormField
+                  control={form.control}
+                  name='unknown_sell_policy'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Unknown sell price')}</FormLabel>
+                      <Select
+                        items={sellPolicyItems}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          {sellPolicyItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {numberField(
+                  'max_cost_to_sell_ratio',
+                  t('Max cost to sell ratio'),
+                  {
+                    description: t('0 means no loss threshold'),
+                  }
+                )}
+                {numberField('tie_epsilon', t('Tie epsilon'))}
+              </div>
+            </>
+          )}
 
           <FormField
             control={form.control}

@@ -821,6 +821,7 @@ export const STATIC_I18N_KEYS = [
   'Shown',
   'Not shown',
   // Video scheduling validation messages, translated by FormMessage.
+  'Stability policy requires generation ≥80%, completion ≥60%, positive samples and 1–16 validation slots',
   'Enter a quality between 0 and 1',
   'Enter a non-negative whole number',
   'Capacity group name must be at most 64 bytes',

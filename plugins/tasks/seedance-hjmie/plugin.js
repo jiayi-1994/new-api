@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.0",
+  version: "1.0.2",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -242,7 +242,15 @@ export function buildSubmitRequest(ctx) {
 export function parseSubmitResponse(_ctx, response) {
   const body = response.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("upstream create response must be an object");
-  const taskId = body.task_id || body.id;
+  const ids = [body.task_id, body.id];
+  if (ids.some(value => value != null && typeof value !== "string")) throw new Error("upstream create response has an invalid task id");
+  const taskId = ids.find(value => typeof value === "string" && value.trim());
+  if (body.error || body.success === false) {
+    const acceptedStatus = [body.status].some(value => value != null && String(value).trim() !== "" && !/^(failed|failure|cancelled|canceled)(?:[:：].*)?$/i.test(String(value).trim()));
+    if (taskId || acceptedStatus) throw new Error("upstream create response has conflicting acceptance and rejection signals");
+    const reason = body.error && typeof body.error === "object" ? body.error.message || body.message : body.error || body.message;
+    return { rejected: { reason: typeof reason === "string" && reason ? reason : "upstream rejected video creation" } };
+  }
   if (typeof taskId !== "string" || !taskId.trim()) throw new Error("upstream create response has no task id");
   return { taskId: taskId.trim(), taskData: body };
 }
@@ -357,7 +365,10 @@ export function classifyFailure(reason) {
   // Only the marker this plugin writes for a cancelled status, or an explicit
   // user cancellation, is neutral; a provider-side cancellation is upstream.
   if (/^cancelled: |cancell?ed by (the )?user\b/.test(text)) return "cancelled";
-  if (/moderat|sensitive|content policy|policy violation|content violation|violates (the )?(content|usage) polic|prohibit|nsfw|inappropriate|审核|违规|敏感|不合规|invalid (image|video|audio|input|prompt|url)|unsupported (image|video|audio)/.test(text)) return "user";
+  // Mentioning moderation or validation infrastructure is not a user rejection.
+  // Keep service failures upstream even if their message contains these words.
+  if (/timeout|timed out|service (is temporarily )?unavailable|internal (server )?error|quota (exhausted|exceeded)|insufficient (quota|balance)|rate limit|connection|authentication|permission denied|超时|服务(暂)?不可用|内部错误|额度(不足|耗尽)|限流/.test(text)) return "upstream";
+  if (/content policy violation|content violation|violates (the )?(content|usage) polic|moderation (rejected|blocked)|rejected by (the )?(content )?moderation|审核(未通过|不通过|拒绝)|未通过(内容)?审核|内容.{0,12}(违规|敏感|不合规)|(提示词|素材|图片|视频|输入文本).{0,12}(敏感|违规)|触发敏感词|invalid (image|video|audio|prompt|url)\b|unsupported (image|video|audio) (format|type)\b/.test(text)) return "user";
   return "upstream";
 }
 

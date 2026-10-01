@@ -40,6 +40,47 @@ export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `
 
+func TestDistributeRejectsUnreadyVideoAdmissionBeforeOrdinaryRouting(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.VideoHealthRequest{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	previousDB, previousMemoryCache := model.DB, common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		model.DB, common.MemoryCacheEnabled = previousDB, previousMemoryCache
+		require.NoError(t, sqlDB.Close())
+	})
+	model.DB, common.MemoryCacheEnabled = db, false
+
+	called := false
+	router := gin.New()
+	router.POST("/v1/videos", func(c *gin.Context) {
+		c.Set(common.RequestIdKey, "unready-video-request")
+		c.Set("resolved_task_model", "videos-fast")
+		common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &operation_setting.VideoSchedulingSetting{
+			Mode: operation_setting.VideoSchedulingModeOn, SelectionPolicy: videosched.PolicyStabilityCostV2,
+		})
+		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true, Reason: service.VideoSchedReasonNotReady})
+	}, Distribute(), func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"videos-fast"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"code":"video_health_unavailable"`)
+	assert.False(t, called, "unready v2 requests must stop before ordinary DB selection and submission")
+	var outcome model.VideoHealthRequest
+	require.NoError(t, db.First(&outcome, "request_id = ?", "unready-video-request").Error)
+	assert.Equal(t, "failure", outcome.Outcome)
+	assert.Zero(t, outcome.ChannelID, "a rejected request has not been submitted to any channel")
+}
+
 func TestPrepareTaskPluginSubmitRejectsMissingModel(t *testing.T) {
 	_, err := jsplugin.DefaultRegistry.Register(genericTaskPluginSource, jsplugin.Options{})
 	require.NoError(t, err)

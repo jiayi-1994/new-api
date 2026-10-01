@@ -28,14 +28,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Reasons a request is neither taken over nor shadowed by video scheduling.
+// Reasons video scheduling skips or rejects a request.
 const (
 	VideoSchedReasonModeOff        = "mode_off"
 	VideoSchedReasonNotSubmit      = "not_submit"
 	VideoSchedReasonModelNotListed = "model_not_listed"
 	VideoSchedReasonMixedPool      = "mixed_pool"
-	// Mode on without its runtime prerequisites (memory cache, Redis when
-	// multi-instance, a first in-flight calibration) keeps ordinary selection.
+	// A configured v2 takeover rejects locally until its runtime prerequisites
+	// are ready. The legacy policy keeps its original selection fallback.
 	VideoSchedReasonNotReady = "not_ready"
 )
 
@@ -48,14 +48,13 @@ const videoSchedSpecHook = "describeSpec"
 // context, so every later reader (affinity, retry budget, selector, AutoBan)
 // sees the same answer even if the global mode changes mid-request.
 type VideoSchedDecision struct {
-	Takeover bool   `json:"takeover"`         // mode on: the scheduler chooses the channel
+	Takeover bool   `json:"takeover"`         // mode on: the scheduler owns channel admission
 	Shadow   bool   `json:"shadow"`           // mode shadow: the scheduler only scores and logs
-	Reason   string `json:"reason,omitempty"` // why neither applies; empty when one does
+	Reason   string `json:"reason,omitempty"` // why scheduling skips or locally rejects the request
 }
 
 // DecideVideoSched freezes the decision for a prepared task submit request.
-// Takeover (mode on, with its runtime prerequisites met) and Shadow (mode
-// shadow) both require a listed model
+// Takeover (mode on) and Shadow (mode shadow) both require a listed model
 // (an empty allow list lists every model), a fresh submission rather than a
 // continuation of an origin task, and a describeSpec hook on every accepted
 // candidate plugin. A single hook-less candidate keeps the whole request on
@@ -64,6 +63,11 @@ func DecideVideoSched(c *gin.Context) (decision VideoSchedDecision) {
 	setting := operation_setting.GetVideoSchedulingSetting()
 	if snapshot, ok := common.GetContextKeyType[*operation_setting.VideoSchedulingSetting](c, constant.ContextKeyVideoSchedSetting); ok && snapshot != nil {
 		setting = snapshot
+	} else {
+		copy := *setting
+		copy.Models, copy.CapacityGroups = slices.Clone(setting.Models), maps.Clone(setting.CapacityGroups)
+		setting = &copy
+		common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, setting)
 	}
 	auditEnabled := setting.AuditEnabled
 	defer func() {
@@ -83,8 +87,11 @@ func DecideVideoSched(c *gin.Context) (decision VideoSchedDecision) {
 	// A saved mode can bypass option validation (startup load), so the
 	// prerequisites are checked again per request. Both modes read candidates
 	// from the memory cache; only on also needs calibrated in-flight gauges.
-	if err := operation_setting.ValidateVideoSchedulingOption("video_scheduling_setting.mode", setting.Mode); err != nil ||
-		(setting.Mode == operation_setting.VideoSchedulingModeOn && !VideoHealthReady()) {
+	notReady := !common.MemoryCacheEnabled ||
+		operation_setting.ValidateVideoReliabilitySetting(setting) != nil ||
+		(setting.Mode == operation_setting.VideoSchedulingModeOn && (!VideoHealthReady() || !common.RedisEnabled && !common.IsMasterNode))
+	strict := setting.Mode == operation_setting.VideoSchedulingModeOn && setting.SelectionPolicy == videosched.PolicyStabilityCostV2
+	if notReady && !strict {
 		return VideoSchedDecision{Reason: VideoSchedReasonNotReady}
 	}
 
@@ -116,6 +123,11 @@ func DecideVideoSched(c *gin.Context) (decision VideoSchedDecision) {
 		return VideoSchedDecision{Reason: VideoSchedReasonMixedPool}
 	}
 	if setting.Mode == operation_setting.VideoSchedulingModeOn {
+		if notReady {
+			// Scope exemptions above still use ordinary routing. In-scope v2
+			// traffic must not bypass reliability or margin gates during startup.
+			return VideoSchedDecision{Takeover: true, Reason: VideoSchedReasonNotReady}
+		}
 		return VideoSchedDecision{Takeover: true}
 	}
 	return VideoSchedDecision{Shadow: true}
@@ -241,6 +253,8 @@ type VideoScheduleChoice struct {
 	Board   []videosched.Score    // the board the choice was made on
 	Probe   bool                  // Best is a gated channel drawn for a recovery probe
 	Explore bool                  // Best is an unproven channel drawn for exploration
+	Flow    string                `json:",omitempty"`
+	Reason  string                `json:",omitempty"`
 }
 
 // DecideVideoSchedule makes the scheduling choice from input alone, so live
@@ -257,6 +271,9 @@ type VideoScheduleChoice struct {
 // channel with the fewest submit+generation samples is chosen (ties by score),
 // and otherwise unproven channels are left out of the argmax.
 func DecideVideoSchedule(input VideoDecisionInput) VideoScheduleChoice {
+	if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		return decideReliableVideoSchedule(input)
+	}
 	rnd := rand.New(rand.NewPCG(input.Seed, 0))
 	policy, explore := input.Policy, input.Explore
 
@@ -347,10 +364,15 @@ func VideoDecisionFingerprint(input VideoDecisionInput) (string, map[string]stri
 // channels of a request that video scheduling took over, ignoring the legacy
 // priority retry index. Every other request keeps ordinary selection.
 func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskdto.ChannelFilter) (*model.Channel, error) {
-	if !VideoSchedDecisionFrom(c).Takeover {
+	decision := VideoSchedDecisionFrom(c)
+	if !decision.Takeover {
 		return nil, model.ErrTierSelectorNotApplicable
 	}
-	// Slot TTL only backstops a lost release, so it covers the longest task.
+	if decision.Reason == VideoSchedReasonNotReady {
+		return nil, model.ErrTierSelectorNoCandidate
+	}
+	// Cache leases backstop a lost release. Durable live submission/task
+	// owners still occupy the validation limit after this TTL expires.
 	probeTTL := time.Duration(constant.TaskTimeoutMinutes) * time.Minute
 	if probeTTL <= 0 {
 		probeTTL = videoSchedProbeCooldownMax
@@ -362,18 +384,26 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 	// the rest of the selection instead of costing the request its channel.
 	// The bound only guards against a store that keeps failing.
 	probeOff := false
+	admissionFailed := map[int]bool{}
 	for range videoSchedProbeRounds {
 		channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
 		if err != nil {
 			recordVideoAuditAssemblyError(c)
 			return nil, err
 		}
-		input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, rand.Uint64())
+		input := AssembleVideoDecision(c, frozenVideoSetting(c), group, modelName, channels, rand.Uint64())
 		if probeOff {
 			input.Explore.ProbeMaxInFlight = 0
 		}
+		if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+			for i := range input.Candidates {
+				if admissionFailed[input.Candidates[i].ID] {
+					input.Candidates[i].Excluded = "admission_conflict"
+				}
+			}
+		}
 		choice := DecideVideoSchedule(input)
-		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore, Input: &input}
+		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore, Flow: choice.Flow, SelectionReason: choice.Reason, Input: &input}
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 		if choice.Best == nil {
 			appendVideoScheduleRecord(c, record, choice.Board)
@@ -389,7 +419,18 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 			appendVideoScheduleRecord(c, record, choice.Board)
 			continue
 		}
-		if choice.Probe {
+		if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+			acquired, admissionErr := admitVideoReliability(c, choice, input, probeTTL)
+			if admissionErr != nil || !acquired {
+				record.Admission = "admission_conflict"
+				if admissionErr != nil {
+					record.Admission = "health_state_unavailable"
+				}
+				admissionFailed[choice.Best.ID] = true
+				appendVideoScheduleRecord(c, record, choice.Board)
+				continue
+			}
+		} else if choice.Probe {
 			acquired := false
 			for n := range input.Explore.ProbeMaxInFlight {
 				acquired, err = acquireVideoProbeSlot(c, choice.Best.ID, n, probeTTL)
@@ -432,9 +473,9 @@ func ShadowObserveVideoSched(c *gin.Context, group, modelName string, selected *
 	// Seeded per request so probe and explore draws sample their ratios across
 	// requests, without drawing from the global random source.
 	seed := uint64(RequestPolicy(c).StartedAt.UnixNano())
-	input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, seed)
+	input := AssembleVideoDecision(c, frozenVideoSetting(c), group, modelName, channels, seed)
 	choice := DecideVideoSchedule(input)
-	record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeShadow, Group: group, Selected: selected.Id, AffinityHit: affinityHit, Probe: choice.Probe, Explore: choice.Explore, Input: &input}
+	record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeShadow, Group: group, Selected: selected.Id, AffinityHit: affinityHit, Probe: choice.Probe, Explore: choice.Explore, Flow: choice.Flow, SelectionReason: choice.Reason, Input: &input}
 	record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 	if choice.Best != nil {
 		record.Recommended = choice.Best.ID
@@ -477,6 +518,12 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		Now:           time.Now().UTC().Truncate(time.Second),
 		Seed:          seed,
 	}
+	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		input.Policy.SelectionPolicy, input.Policy.MinMarginRate, input.Policy.MinOverallRate = setting.SelectionPolicy, setting.MinMarginRate, setting.MinOverallRate
+		input.Policy.StabilityTolerance, input.Policy.Now = setting.StabilityTolerance, input.Now.Unix()
+		input.Policy.QualificationTTLSeconds, input.Policy.ValidationPeriodSeconds = setting.QualificationTTLSeconds, setting.ValidationPeriodSeconds
+		input.Policy.WindowSeconds = setting.WindowSeconds
+	}
 	tried := make(map[int]bool)
 	for _, event := range RequestPolicy(c).Events() {
 		if event.Decision.Action == "attempt" {
@@ -487,14 +534,17 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		candidate, probe := assembleVideoCandidate(c, group, modelName, channel, tried[channel.Id], setting)
 		input.Candidates = append(input.Candidates, candidate)
 		input.Probe[channel.Id] = probe
-		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 {
+		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 && setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
 			continue
 		}
 		held, err := VideoProbeSlotsHeld(channel.Id, setting.ProbeMaxInFlight)
+		if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+			held, err = videoHealthStore().held(videoValidationKeys(channel.Id))
+		}
 		if err != nil {
 			// An unreadable slot is treated as held: never probe blind.
 			logger.LogWarn(c, "video scheduling probe slot read failed: channel=%d error=%v", channel.Id, err)
-			held = setting.ProbeMaxInFlight
+			held = 16
 		}
 		if held > 0 {
 			input.SlotOccupancy[channel.Id] = held
@@ -542,6 +592,9 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.InFlight = candidate.Capacity
 	} else {
 		candidate.Submit, candidate.Gen, candidate.InFlight, probe = health.Submit, health.Gen, health.InFlight, health.Probe
+	}
+	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		candidate.Reliability = health.Reliability
 	}
 	// An unregistered group name is no group.
 	if quota := setting.CapacityGroups[cfg.CapacityGroup]; cfg.CapacityGroup != "" && quota > 0 {
@@ -682,43 +735,48 @@ func describeVideoSpec(c *gin.Context, plugin *jsplugin.LoadedPlugin, clientMode
 // candidate with its score or exclusion. A request records one per selection;
 // empty auto groups share an attempt_seq, so selection_seq tells them apart.
 type VideoScheduleRecord struct {
-	Input        *VideoDecisionInput `json:"-"`
-	SelectionSeq int                 `json:"selection_seq"`
-	AttemptSeq   int                 `json:"attempt_seq"` // the submission attempt this selection feeds, from 1
-	Mode         string              `json:"mode"`        // on | shadow
-	Group        string              `json:"group"`
-	Recommended  int                 `json:"recommended,omitempty"` // best candidate; 0 when none is eligible
-	Selected     int                 `json:"selected,omitempty"`    // shadow: the channel ordinary selection used
-	AffinityHit  bool                `json:"affinity_hit,omitempty"`
-	Probe        bool                `json:"probe,omitempty"`     // Recommended was drawn as a recovery probe
-	Explore      bool                `json:"explore,omitempty"`   // Recommended was drawn to explore an unproven channel
-	Admission    string              `json:"admission,omitempty"` // probe_slot_taken: the choice was not used
-	Fingerprint  string              `json:"fingerprint,omitempty"`
-	Candidates   []VideoScheduleRow  `json:"candidates"`
+	Input           *VideoDecisionInput `json:"-"`
+	SelectionSeq    int                 `json:"selection_seq"`
+	AttemptSeq      int                 `json:"attempt_seq"` // the submission attempt this selection feeds, from 1
+	Mode            string              `json:"mode"`        // on | shadow
+	Group           string              `json:"group"`
+	Recommended     int                 `json:"recommended,omitempty"` // best candidate; 0 when none is eligible
+	Selected        int                 `json:"selected,omitempty"`    // shadow: the channel ordinary selection used
+	AffinityHit     bool                `json:"affinity_hit,omitempty"`
+	Probe           bool                `json:"probe,omitempty"`   // Recommended was drawn as a recovery probe
+	Explore         bool                `json:"explore,omitempty"` // Recommended was drawn to explore an unproven channel
+	Flow            string              `json:"flow,omitempty"`
+	SelectionReason string              `json:"selection_reason,omitempty"`
+	Admission       string              `json:"admission,omitempty"` // probe_slot_taken: the choice was not used
+	Fingerprint     string              `json:"fingerprint,omitempty"`
+	Candidates      []VideoScheduleRow  `json:"candidates"`
 }
 
 // VideoScheduleRow is one candidate on the board. Cost amounts are nil when
 // the quote is invalid or was never made, so a missing price never reads as 0.
 type VideoScheduleRow struct {
-	ID               int                      `json:"id"`
-	Name             string                   `json:"name"`
-	Plugin           string                   `json:"plugin,omitempty"`
-	MappedModel      string                   `json:"mapped_model,omitempty"`
-	Spec             *model.VideoSpecView     `json:"spec,omitempty"`
-	Tier             string                   `json:"tier,omitempty"`
-	CostUSD          *float64                 `json:"cost_usd,omitempty"` // total: base plus reference surcharges
-	BaseCostUSD      *float64                 `json:"base_cost_usd,omitempty"`
-	ReferenceCostUSD *float64                 `json:"reference_cost_usd,omitempty"`
-	References       []VideoScheduleReference `json:"references,omitempty"`
-	SellKind         string                   `json:"sell_kind,omitempty"`
-	SellUSD          float64                  `json:"sell_usd,omitempty"`
-	SellEstimated    bool                     `json:"sell_estimated,omitempty"`
-	P                float64                  `json:"p"`
-	Q                float64                  `json:"q"`
-	S                float64                  `json:"s"`
-	Total            float64                  `json:"total"`
-	Unproven         bool                     `json:"unproven,omitempty"`
-	Excluded         string                   `json:"excluded,omitempty"`
+	ID                 int                             `json:"id"`
+	Name               string                          `json:"name"`
+	Plugin             string                          `json:"plugin,omitempty"`
+	MappedModel        string                          `json:"mapped_model,omitempty"`
+	Spec               *model.VideoSpecView            `json:"spec,omitempty"`
+	Tier               string                          `json:"tier,omitempty"`
+	CostUSD            *float64                        `json:"cost_usd,omitempty"` // total: base plus reference surcharges
+	BaseCostUSD        *float64                        `json:"base_cost_usd,omitempty"`
+	ReferenceCostUSD   *float64                        `json:"reference_cost_usd,omitempty"`
+	References         []VideoScheduleReference        `json:"references,omitempty"`
+	SellKind           string                          `json:"sell_kind,omitempty"`
+	SellUSD            float64                         `json:"sell_usd,omitempty"`
+	SellEstimated      bool                            `json:"sell_estimated,omitempty"`
+	P                  float64                         `json:"p"`
+	Q                  float64                         `json:"q"`
+	S                  float64                         `json:"s"`
+	Total              float64                         `json:"total"`
+	Unproven           bool                            `json:"unproven,omitempty"`
+	Excluded           string                          `json:"excluded,omitempty"`
+	Reliability        *videosched.ReliabilitySnapshot `json:"reliability,omitempty"`
+	EstimatedMargin    *float64                        `json:"estimated_margin,omitempty"`
+	BestGenerationRate *float64                        `json:"best_generation_rate,omitempty"`
 }
 
 type VideoScheduleReference struct {
@@ -734,6 +792,19 @@ type VideoScheduleReference struct {
 func VideoScheduleRecords(c *gin.Context) []VideoScheduleRecord {
 	records, _ := common.GetContextKeyType[[]VideoScheduleRecord](c, constant.ContextKeyVideoSchedBoard)
 	return records
+}
+
+// RecordVideoHealthAdmissionConflict rejects a selected channel before any
+// transport occurred. Its reservation is released and its existing selection
+// remains visible as a local admission conflict, with no submit observation.
+func RecordVideoHealthAdmissionConflict(c *gin.Context) {
+	releaseVideoValidationLease(c)
+	c.Set(videoHealthAdmissionKey, nil)
+	records := VideoScheduleRecords(c)
+	if last := len(records) - 1; last >= 0 && records[last].AttemptSeq == RequestPolicy(c).Attempts {
+		records[last].Admission = "admission_conflict"
+		common.SetContextKey(c, constant.ContextKeyVideoSchedBoard, records)
+	}
 }
 
 // appendVideoScheduleRecord numbers record, fills its board from scores and
@@ -759,6 +830,7 @@ func VideoScheduleBoard(scores []videosched.Score) []VideoScheduleRow {
 		row := VideoScheduleRow{
 			ID: candidate.ID, Name: candidate.Name, Plugin: candidate.PluginKey, MappedModel: candidate.MappedModel,
 			P: score.PriceScore, Q: score.Quality, S: score.Service, Total: score.Total, Unproven: score.Unproven, Excluded: score.Reason,
+			Reliability: candidate.Reliability, EstimatedMargin: score.EstimatedMargin, BestGenerationRate: score.BestGenerationRate,
 		}
 		if candidate.Spec.References != nil {
 			spec := candidate.Spec

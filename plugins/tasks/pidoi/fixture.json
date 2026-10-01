@@ -3782,7 +3782,7 @@
           }
         }
       ],
-      "expectedError": "rejected"
+      "expectedError": "conflicting acceptance and rejection signals"
     },
     {
       "name": "Missing task ID is rejected",

@@ -37,6 +37,8 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { VideoReliabilityDetails } from '@/features/channels/components/video-reliability-details'
+import { videoReliabilityLabel } from '@/features/channels/lib/video-reliability'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatNumber, formatPercent } from '@/lib/format'
@@ -69,6 +71,9 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
     })
   let candidates: AuditCandidate[] = []
   let inputs: CandidateInput[] = []
+  let slots: Record<number, number> = {}
+  let limits: { ExploreMaxInFlight?: number; ProbeMaxInFlight?: number } = {}
+  const isV2 = decision.scheduler_version === 'stability_cost_v2'
   let invalid = false
   try {
     const board: unknown = JSON.parse(decision.board_json || '[]')
@@ -81,8 +86,12 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
     candidates = board as AuditCandidate[]
     const input = JSON.parse(decision.input_json || '{}') as {
       Candidates?: CandidateInput[]
+      SlotOccupancy?: Record<number, number>
+      Explore?: typeof limits
     }
     inputs = Array.isArray(input.Candidates) ? input.Candidates : []
+    slots = input.SlotOccupancy ?? {}
+    limits = input.Explore ?? {}
   } catch {
     invalid = true
   }
@@ -106,7 +115,7 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
       id: 'result',
       header: t('Selection'),
       cell: (row) =>
-        row.excluded ||
+        (row.excluded && videoReliabilityLabel(row.excluded, t)) ||
         (row.id === decision.recommended ? t('Recommended channel') : '—'),
     },
     {
@@ -144,29 +153,65 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
     },
     {
       id: 'score',
-      header: t('Score'),
-      cell: (row) => (
-        <span>
-          {formatNumber(row.total, locale)}
-          <span className='text-muted-foreground block text-xs'>
-            P {formatNumber(row.p, locale)} · Q {formatNumber(row.q, locale)} ·
-            S {formatNumber(row.s, locale)}
+      header: isV2 ? t('Margin / quality / best generation rate') : t('Score'),
+      cell: (row) =>
+        isV2 ? (
+          <span>
+            {row.estimated_margin == null
+              ? '—'
+              : formatPercent(row.estimated_margin * 100)}{' '}
+            / {formatNumber(row.q, locale)} /{' '}
+            {row.best_generation_rate == null
+              ? '—'
+              : formatPercent(row.best_generation_rate * 100)}
           </span>
-        </span>
-      ),
+        ) : (
+          <span>
+            {formatNumber(row.total, locale)}
+            <span className='text-muted-foreground block text-xs'>
+              P {formatNumber(row.p, locale)} · Q {formatNumber(row.q, locale)}{' '}
+              · S {formatNumber(row.s, locale)}
+            </span>
+          </span>
+        ),
     },
     {
       id: 'health',
       header: t('Health samples'),
       cell: (row) => {
+        if (isV2) {
+          return (
+            <>
+              <VideoReliabilityDetails
+                health={row.reliability}
+                asOf={decision.selected_at / 1000}
+              />
+              <p className='mt-2 text-xs'>
+                {t('Validation slots')}:{' '}
+                {formatNumber(slots[row.id] ?? 0, locale)} /{' '}
+                {formatNumber(
+                  (row.reliability?.state === 'blocked' ||
+                  row.reliability?.state === 'recovering'
+                    ? limits.ProbeMaxInFlight
+                    : limits.ExploreMaxInFlight) ?? 0,
+                  locale
+                )}
+              </p>
+            </>
+          )
+        }
         const input = byID.get(row.id)
         return input ? (
           <span>
-            {formatPercent(input.Submit.rate * 100)} (
-            {formatNumber(input.Submit.samples, locale)})
+            {input.Submit.samples > 0
+              ? formatPercent(input.Submit.rate * 100)
+              : t('Unknown')}{' '}
+            ({formatNumber(input.Submit.samples, locale)})
             <span className='block'>
-              {formatPercent(input.Gen.rate * 100)} (
-              {formatNumber(input.Gen.samples, locale)})
+              {input.Gen.samples > 0
+                ? formatPercent(input.Gen.rate * 100)
+                : t('Unknown')}{' '}
+              ({formatNumber(input.Gen.samples, locale)})
             </span>
           </span>
         ) : (
@@ -206,6 +251,15 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
           [t('Health attribution'), decision.health_outcome || '—'],
           [t('Error source'), decision.error_source || '—'],
           [t('Status code'), decision.status_code || '—'],
+          ...(isV2
+            ? [
+                [t('Selection policy'), t('Stability and cost')],
+                [
+                  t('Selection reason'),
+                  videoReliabilityLabel(decision.selection_reason, t),
+                ],
+              ]
+            : []),
         ].map(([label, value]) => (
           <div key={label}>
             <dt className='text-muted-foreground'>{label}</dt>
@@ -213,6 +267,11 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
           </div>
         ))}
       </dl>
+      {!isV2 && (
+        <p className='text-muted-foreground text-xs'>
+          {t('Legacy snapshot has no reliability evidence')}
+        </p>
+      )}
       <StaticDataTable
         data={candidates}
         getRowKey={(row) => row.id}
@@ -384,6 +443,61 @@ export function AuditDetailDialog({
               },
             ]}
           />
+          {query.data.health_attempts?.length ? (
+            <section className='space-y-2'>
+              <h3 className='font-medium'>{t('Actual health attempts')}</h3>
+              <StaticDataTable
+                data={query.data.health_attempts}
+                getRowKey={(row) => row.attempt_seq}
+                columns={[
+                  {
+                    id: 'attempt',
+                    header: t('Attempt'),
+                    cell: (row) => formatNumber(row.attempt_seq, locale),
+                  },
+                  {
+                    id: 'channel',
+                    header: t('Channel'),
+                    cell: (row) =>
+                      `${formatNumber(row.channel_id, locale)} · ${row.model}`,
+                  },
+                  {
+                    id: 'flow',
+                    header: t('Selection'),
+                    cell: (row) => videoReliabilityLabel(row.flow, t),
+                  },
+                  {
+                    id: 'submit',
+                    header: t('Submit result'),
+                    cell: (row) => videoReliabilityLabel(row.submit_outcome, t),
+                  },
+                  {
+                    id: 'result',
+                    header: t('Terminal result'),
+                    cell: (row) =>
+                      row.final_outcome
+                        ? videoReliabilityLabel(row.final_outcome, t)
+                        : t('Pending'),
+                  },
+                  {
+                    id: 'attribution',
+                    header: t('Health attribution'),
+                    cell: (row) =>
+                      row.missing
+                        ? t('Data incomplete')
+                        : row.attribution || '—',
+                  },
+                ]}
+              />
+            </section>
+          ) : (
+            <p className='text-muted-foreground text-xs'>
+              {videoReliabilityLabel(
+                query.data.health_status ?? 'no_health_facts',
+                t
+              )}
+            </p>
+          )}
           {query.data.decisions.length === 0 ? (
             <EmptyState title={t('No recorded selections')} />
           ) : (
@@ -407,6 +521,8 @@ export function AuditDetailDialog({
                         normal: t('Selection'),
                         probe: t('Probe'),
                         explore: t('Exploration'),
+                        revalidate: t('Revalidation'),
+                        recover: t('Recovery verification'),
                       }[decision.choice_kind] || t('Unknown')}{' '}
                       {decision.affinity_hit && `· ${t('Affinity hit')}`}
                     </span>

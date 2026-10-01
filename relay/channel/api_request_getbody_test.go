@@ -14,14 +14,87 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+	"gorm.io/gorm"
 )
+
+func TestTaskTransportVideoHealthAdmission(t *testing.T) {
+	service.InitHttpClient()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	oldDB, oldRedis := model.DB, common.RedisEnabled
+	model.DB, common.RedisEnabled = db, false
+	t.Cleanup(func() { model.DB, common.RedisEnabled = oldDB, oldRedis; require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}))
+	for _, tc := range []struct {
+		name                string
+		decision            service.VideoSchedDecision
+		cancelled           bool
+		wantSent, wantFacts int
+	}{
+		{"off", service.VideoSchedDecision{}, false, 1, 0},
+		{"shadow", service.VideoSchedDecision{Shadow: true}, false, 1, 1},
+		{"strict_without_admission", service.VideoSchedDecision{Takeover: true}, false, 0, 0},
+		{"cancelled_before_transport", service.VideoSchedDecision{Shadow: true}, true, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var fact model.VideoHealthAttempt
+				_ = db.Where("request_id = ?", tc.name).First(&fact).Error
+				seen <- fact.SubmitOutcome
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(`{"id":"task"}`))
+			}))
+			defer server.Close()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil).WithContext(ctx)
+			if tc.cancelled {
+				cancel()
+			}
+			c.Set(common.RequestIdKey, tc.name)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, tc.decision)
+			defer service.FinishVideoReliabilityRequest(c, false)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &operation_setting.VideoSchedulingSetting{Mode: "shadow", SelectionPolicy: videosched.PolicyStabilityCostV2, WindowSeconds: 1800})
+			service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: 7}, "default")
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 7}, OriginModelName: "video"}
+			response, err := DoTaskApiRequest(&stubTaskAdaptor{baseURL: server.URL}, c, info, strings.NewReader(`{}`))
+			if tc.wantSent == 0 {
+				require.Error(t, err)
+				assert.Empty(t, seen, "admission failure never reaches the upstream")
+				if !tc.cancelled {
+					assert.ErrorIs(t, err, service.ErrVideoHealthAdmission)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+				outcome := <-seen
+				if tc.wantFacts > 0 {
+					assert.Equal(t, "dispatching", outcome, "journal exists before upstream receives the request")
+				}
+			}
+			facts, err := model.ListVideoHealthAttempts(t.Context(), tc.name)
+			require.NoError(t, err)
+			assert.Len(t, facts, tc.wantFacts)
+		})
+	}
+}
 
 func TestApplyUpstreamBodyMetadataSetsReplayableMetadata(t *testing.T) {
 	t.Parallel()

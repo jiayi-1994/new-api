@@ -98,6 +98,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.FailReason = reason
 		}
 
+		if task.VideoHealthAttemptID != nil {
+			task.VideoHealthAttribution = "host"
+		}
 		won, err := task.UpdateWithStatus(oldStatus)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
@@ -815,6 +818,9 @@ func failTaskFromPoll(ctx context.Context, adaptor TaskPollingAdaptor, task *mod
 		task.FinishTime = now
 	}
 	task.FailReason = reason
+	if task.VideoHealthAttemptID != nil {
+		task.VideoHealthAttribution = "host"
+	}
 	won, err := task.UpdateWithStatus(fromStatus)
 	if err != nil {
 		return err

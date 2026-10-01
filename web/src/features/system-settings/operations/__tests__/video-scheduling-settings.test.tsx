@@ -43,6 +43,12 @@ import { VideoSchedulingSettingsSection } from '../video-scheduling-settings-sec
 
 const liveSettings = {
   'video_scheduling_setting.mode': 'shadow',
+  'video_scheduling_setting.selection_policy': 'weighted_v1',
+  'video_scheduling_setting.min_margin_rate': 0.1,
+  'video_scheduling_setting.min_overall_rate': 0.6,
+  'video_scheduling_setting.stability_tolerance': 0.01,
+  'video_scheduling_setting.qualification_ttl_seconds': 86400,
+  'video_scheduling_setting.validation_period_seconds': 604800,
   'video_scheduling_setting.audit_enabled': true,
   'video_scheduling_setting.audit_retention_days': 30,
   'video_scheduling_setting.models': [],
@@ -119,6 +125,66 @@ async function chooseMode(
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+})
+
+test('the stability preset shows its gates and saves configuration before activation', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  await user.click(
+    screen.getByRole('button', { name: 'Apply stability and cost preset' })
+  )
+  expect(screen.queryByLabelText('Price weight')).not.toBeInTheDocument()
+  expect(
+    screen.queryByLabelText('Minimum submit success rate')
+  ).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Minimum generation success rate')).toHaveValue(
+    0.8
+  )
+  expect(screen.getByLabelText('Minimum channel completion rate')).toHaveValue(
+    0.6
+  )
+  expect(screen.getByLabelText('Qualification lifetime (seconds)')).toHaveValue(
+    86400
+  )
+  expect(
+    screen.getByText(/Probabilities apply only when normal candidates exist/)
+  ).toBeVisible()
+  await chooseMode(user, 'On')
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(put.mock.calls.at(-1)?.[1]).toEqual({
+      key: 'video_scheduling_setting.mode',
+      value: 'on',
+    })
+  )
+  expect(put.mock.calls.map((call) => call[1])).toContainEqual({
+    key: 'video_scheduling_setting.selection_policy',
+    value: 'stability_cost_v2',
+  })
+  expect(
+    screen.getByRole('combobox', { name: 'Selection policy' })
+  ).toBeDisabled()
+})
+
+test('stability policy rejects insufficient generation rate and unbounded validation slots', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  await user.click(
+    screen.getByRole('button', { name: 'Apply stability and cost preset' })
+  )
+  fireEvent.change(screen.getByLabelText('Minimum generation success rate'), {
+    target: { value: '0.79' },
+  })
+  fireEvent.change(screen.getByLabelText('Exploration max in flight'), {
+    target: { value: '0' },
+  })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(
+    (await screen.findAllByText(/Stability policy requires generation/)).length
+  ).toBe(2)
+  expect(put).not.toHaveBeenCalled()
 })
 
 test('audit collection and retention save independently and reject retention below seven days', async () => {

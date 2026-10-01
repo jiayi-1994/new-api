@@ -25,9 +25,12 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 const mockPlugin = `
@@ -83,7 +86,7 @@ func TestTaskAdaptorRejectsDeprecatedClientResponse(t *testing.T) {
 
 // An accepted submission rejected locally (oversized body or task data, an
 // interrupted parse hook) may still hold an upstream task, so it must not be
-// retried on another channel. A plugin's own thrown error stays retryable.
+// retried on another channel. Only an explicit rejection proves no work exists.
 func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.T) {
 	const parse = `export function parseSubmitResponse(ctx, resp) {
   return {
@@ -96,20 +99,48 @@ func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.
 		name, parse, body string
 		cancel            bool
 		unknown           bool
+		class             string
+		noRetry           bool
 	}{
-		{name: "oversized body", parse: parse, body: `{"id":"upstream","pad":"` + pad + `"}`, unknown: true},
-		{name: "oversized task data", parse: strings.Replace(parse, "accepted: true", `accepted: "`+pad+`"`, 1), body: `{"id":"upstream"}`, unknown: true},
-		{name: "interrupted parse hook", parse: `export function parseSubmitResponse() { for (;;) {} }`, body: `{"id":"upstream"}`, cancel: true, unknown: true},
-		{name: "plugin error", parse: `export function parseSubmitResponse() { throw new Error("upstream said no"); }`, body: `{"id":"upstream"}`},
+		{name: "oversized body", parse: parse, body: `{"id":"upstream","pad":"` + pad + `"}`, unknown: true, noRetry: true},
+		{name: "oversized task data", parse: strings.Replace(parse, "accepted: true", `accepted: "`+pad+`"`, 1), body: `{"id":"upstream"}`, unknown: true, noRetry: true},
+		{name: "interrupted parse hook", parse: `export function parseSubmitResponse() { for (;;) {} }`, body: `{"id":"upstream"}`, cancel: true, unknown: true, noRetry: true},
+		{name: "plugin exception", parse: `export function parseSubmitResponse() { throw new Error("upstream create response has no task id"); }`, body: `{}`, unknown: true, noRetry: true},
+		{name: "missing task id", parse: parse, body: `{}`, unknown: true, noRetry: true},
+		{name: "non JSON response", parse: parse, body: `not JSON`, unknown: true, noRetry: true},
+		{name: "explicit upstream rejection", parse: `export function parseSubmitResponse() { return {rejected:{reason:"quota exhausted"}}; }`, body: `{}`, class: service.VideoFailureUpstream},
+		{name: "explicit user rejection", parse: `export function parseSubmitResponse() { return {rejected:{reason:"content policy violation"}}; } export function classifyFailure() { return "user"; }`, body: `{}`, class: service.VideoFailureUser, noRetry: true},
+		{name: "contradictory rejection", parse: `export function parseSubmitResponse() { return {taskId:"created",rejected:{reason:"no"}}; }`, body: `{}`, unknown: true, noRetry: true},
+		{name: "invalid rejection", parse: `export function parseSubmitResponse() { return {rejected:{reason:42}}; }`, body: `{}`, unknown: true, noRetry: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			previousDB, previousRedis, previousKind := model.DB, common.RedisEnabled, common.MainDatabaseType()
+			model.DB, common.RedisEnabled = db, false
+			common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+			t.Cleanup(func() {
+				model.DB, common.RedisEnabled = previousDB, previousRedis
+				common.SetMainDatabaseType(previousKind)
+				require.NoError(t, sqlDB.Close())
+			})
+			require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}))
 			plugin, err := pluginruntime.NewRegistry().Register(strings.Replace(mockPlugin, parse, tc.parse, 1), pluginruntime.Options{})
 			require.NoError(t, err)
 			adaptor := New(plugin)
-			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 9182}, OriginModelName: "video", TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
 			adaptor.Init(info)
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			c.Set(common.RequestIdKey, tc.name)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Shadow: true})
+			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &operation_setting.VideoSchedulingSetting{Mode: "shadow", WindowSeconds: 1800})
+			service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: 9182}, "default")
+			require.NoError(t, service.BeginVideoHealthTransmission(c, info))
+			t.Cleanup(func() { service.FinishVideoReliabilityRequest(c, false) })
 			if tc.cancel {
 				ctx, cancel := context.WithCancel(c.Request.Context())
 				cancel()
@@ -121,11 +152,23 @@ func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.
 
 			assert.Nil(t, parsed)
 			require.NotNil(t, taskErr)
+			assert.Equal(t, tc.noRetry, taskErr.NoRetry)
+			assert.Equal(t, tc.class, taskErr.SubmitFailureClass)
 			if tc.unknown {
 				assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
 			} else {
 				assert.NotErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
 			}
+			service.ObserveVideoReliabilitySubmit(c, taskErr, false)
+			attempts, err := model.ListVideoHealthAttempts(t.Context(), tc.name)
+			require.NoError(t, err)
+			require.Len(t, attempts, 1)
+			wantSubmit, wantFinal := "rejected", tc.class
+			if tc.unknown {
+				wantSubmit, wantFinal = "unknown", "unknown"
+			}
+			assert.Equal(t, wantSubmit, attempts[0].SubmitOutcome)
+			assert.Equal(t, wantFinal, attempts[0].FinalOutcome)
 		})
 	}
 }

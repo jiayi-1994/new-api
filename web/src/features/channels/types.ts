@@ -118,6 +118,17 @@ export interface VideoSchedulingConfig {
 export type VideoHealthStat = { rate: number; samples: number }
 
 export interface VideoHealth {
+  selection_policy?: import('@/features/system-settings/types').VideoSelectionPolicy
+  as_of?: number
+  validation_slots_held?: number
+  explore_limit?: number
+  recovery_limit?: number
+  models?: Record<
+    string,
+    {
+      reliability?: import('@/features/system-settings/types').VideoReliability
+    }
+  >
   submit: VideoHealthStat
   gen: VideoHealthStat
   in_flight: number

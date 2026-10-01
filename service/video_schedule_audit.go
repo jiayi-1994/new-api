@@ -12,6 +12,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -154,6 +155,9 @@ func buildVideoScheduleAudit(c *gin.Context, state *videoAuditState, panicked bo
 		TaskPK: state.TaskPK, TaskID: state.TaskID, Platform: state.Platform, TaskStatus: state.TaskStatus,
 		TerminalClass: state.TerminalClass, TerminalHealth: state.TerminalHealth, TerminalObservedAt: state.TerminalAt, AssemblyError: state.AssemblyError, SnapshotComplete: true,
 	}
+	if frozenVideoSetting(c).SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		run.SchedulerVersion = videosched.PolicyStabilityCostV2
+	}
 	if run.RequestID == "" {
 		return nil, 0, errors.New("missing server request ID")
 	}
@@ -282,6 +286,9 @@ func buildVideoScheduleAudit(c *gin.Context, state *videoAuditState, panicked bo
 			row.ChoiceKind = "probe"
 		} else if record.Explore {
 			row.ChoiceKind = "explore"
+		}
+		if record.Input != nil && record.Input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+			row.ChoiceKind, row.SelectionReason, row.SchemaVersion, row.SchedulerVersion = record.Flow, record.SelectionReason, "2", "stability_cost_v2"
 		}
 		if used[record.AttemptSeq] == record.SelectionSeq {
 			attempt := state.Attempts[record.AttemptSeq]

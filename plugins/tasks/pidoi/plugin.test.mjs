@@ -2,6 +2,23 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as plugin from './plugin.js';
+// Explicit rejection is distinct from an unreadable/ambiguous accepted response.
+for (const reason of ["content policy violation", "quota exhausted"]) {
+  const result = plugin.parseSubmitResponse({}, { statusCode: 200, body: { success: false, error: { message: reason } } });
+  assert.deepEqual(result, { rejected: { reason } });
+  assert.equal(plugin.classifyFailure(result.rejected.reason), reason === "content policy violation" ? "user" : "upstream");
+}
+for (const body of [
+  {}, "not JSON",
+  { id: "created", error: { message: "content policy violation" } },
+  { id: 123, error: { message: "quota exhausted" } },
+  { task_id: " ", id: "created", error: { message: "quota exhausted" } },
+  { id: " ", task_id: "created", error: { message: "quota exhausted" } },
+  { status: "completed", error: { message: "quota exhausted" } },
+  { status: "processing", success: false, message: "quota exhausted" },
+]) {
+  assert.throws(() => plugin.parseSubmitResponse({}, { statusCode: 200, body }));
+}
 
 const fixture = JSON.parse(readFileSync(new URL('./fixture.json', import.meta.url), 'utf8'));
 const catalog = JSON.parse(readFileSync(new URL('./pricing-reference.json', import.meta.url), 'utf8').replace(/^\uFEFF/, ''));
@@ -101,5 +118,22 @@ test("Provider-side cancellations and constraint violations count against the up
     ["job cancelled by provider due to internal error", "upstream"],
     ["constraint violation", "upstream"],
     ["content policy violation", "user"],
+    ["moderation service timeout", "upstream"],
+    ["content policy validation internal error", "upstream"],
+    ["sensitive data service unavailable", "upstream"],
+    ["unsupported video backend", "upstream"],
+    ["invalid input", "upstream"],
+    ["审核服务超时", "upstream"],
+    ["moderation rejected", "user"],
+    ["提示词包含敏感违规内容或参数格式错误", "user"],
+    // Anonymized terminal messages from this provider's task logs, 2026-10-01.
+    ["内部错误，请稍等重试", "upstream"],
+    ["您上传的[图片或视频]包含敏感内容，无法直接使用，请更换后重试。", "user"],
+    ["生成的音频内容中可能包含[敏感信息]，请修改输入内容后重试。", "user"],
+    ["请求参数或素材格式不符合要求，请检查后重试", "user"],
+    ["请求失败，输出视频可能涉及版权限制", "user"],
+    ["生成视频未通过内容审核，请调整提示词或参考素材后重试", "user"],
+    ["", "upstream"],
+    ["生成失败：请重新提交任务。请检查上传的素材和引用的格式符合标准。", "upstream"],
   ]) assert.equal(plugin.classifyFailure(reason), kind, reason);
 });

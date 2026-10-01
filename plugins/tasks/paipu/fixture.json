@@ -3446,7 +3446,7 @@
           }
         }
       ],
-      "expectedError": "insufficient quota"
+      "expected": {"rejected": {"reason": "insufficient quota"}}
     },
     {
       "name": "missing create ID",

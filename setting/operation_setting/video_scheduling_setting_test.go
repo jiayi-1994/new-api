@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,37 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		common.MemoryCacheEnabled, common.RedisEnabled, common.IsMasterNode = origMemory, origRedis, origMaster
 	})
 	common.MemoryCacheEnabled, common.RedisEnabled, common.IsMasterNode = true, true, true
+
+	t.Run("reliability_policy_bounds_apply_to_saved_and_simulated_settings", func(t *testing.T) {
+		original := videoSchedulingSetting
+		t.Cleanup(func() { videoSchedulingSetting = original })
+		videoSchedulingSetting.SelectionPolicy = videosched.PolicyStabilityCostV2
+		videoSchedulingSetting.Mode = VideoSchedulingModeOn
+		videoSchedulingSetting.MinGenRate, videoSchedulingSetting.MinOverallRate = .8, .6
+		videoSchedulingSetting.MinSamples, videoSchedulingSetting.ExploreMaxInFlight = 20, 2
+		videoSchedulingSetting.QualificationTTLSeconds, videoSchedulingSetting.ValidationPeriodSeconds = 86400, 604800
+		require.NoError(t, ValidateVideoSchedulingSnapshot(&videoSchedulingSetting))
+		for field, value := range map[string]string{"min_gen_rate": "0.799", "min_overall_rate": "0.599", "min_samples": "0", "explore_max_in_flight": "0", "qualification_ttl_seconds": "604801", "validation_period_seconds": "2592001", "min_margin_rate": "1", "selection_policy": videosched.PolicyWeightedV1} {
+			assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting."+field, value), field)
+		}
+		for _, change := range []func(*VideoSchedulingSetting){
+			func(s *VideoSchedulingSetting) { s.MinGenRate = .799 },
+			func(s *VideoSchedulingSetting) { s.MinOverallRate = .599 },
+			func(s *VideoSchedulingSetting) { s.MinSamples = 0 },
+			func(s *VideoSchedulingSetting) { s.ExploreMaxInFlight = 17 },
+			func(s *VideoSchedulingSetting) { s.QualificationTTLSeconds = 0 },
+			func(s *VideoSchedulingSetting) { s.ValidationPeriodSeconds = 30*86400 + 1 },
+		} {
+			snapshot := videoSchedulingSetting
+			change(&snapshot)
+			assert.Error(t, ValidateVideoSchedulingSnapshot(&snapshot))
+		}
+		videoSchedulingSetting.Mode = VideoSchedulingModeShadow
+		require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.selection_policy", videosched.PolicyWeightedV1))
+		videoSchedulingSetting.SelectionPolicy = videosched.PolicyWeightedV1
+		videoSchedulingSetting.MinSamples, videoSchedulingSetting.ExploreMaxInFlight = 0, 0
+		require.NoError(t, ValidateVideoSchedulingSnapshot(&videoSchedulingSetting), "legacy zero semantics remain valid")
+	})
 
 	valid := map[string]string{
 		"audit_enabled":          "true",

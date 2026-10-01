@@ -100,7 +100,7 @@ export const meta = {
   apiVersion: 1,
   key: "paipu",
   name: "Paipu Video",
-  version: "2.2.0",
+  version: "2.2.2",
   author: { name: "jiayi-1994" },
   description: { en: "Paipu video generation; choose per-second, per-video or per-resolution pricing on each model's price page", zh: "通过 Paipu 生成视频，在各模型定价页自选按秒、按条或分辨率按条计费" },
   icon: "text:PP",
@@ -363,7 +363,12 @@ export function classifyFailure(reason) {
   // Only the marker this plugin writes for a cancelled status, or an explicit
   // user cancellation, is neutral; a provider-side cancellation is upstream.
   if (/^cancelled: |cancell?ed by (the )?user\b/.test(text)) return "cancelled";
-  if (/moderat|sensitive|content policy|policy violation|content violation|violates (the )?(content|usage) polic|prohibit|nsfw|inappropriate|审核|违规|敏感|不合规|invalid (image|video|audio|input|prompt|url)|unsupported (image|video|audio)/.test(text)) return "user";
+  // Mentioning moderation or validation infrastructure is not a user rejection.
+  // Keep service failures upstream even if their message contains these words.
+  if (/timeout|timed out|service (is temporarily )?unavailable|internal (server )?error|quota (exhausted|exceeded)|insufficient (quota|balance)|rate limit|connection|authentication|permission denied|超时|服务(暂)?不可用|内部错误|额度(不足|耗尽)|限流/.test(text)) return "upstream";
+  if (/content policy violation|content violation|violates (the )?(content|usage) polic|moderation (rejected|blocked)|rejected by (the )?(content )?moderation|审核(未通过|不通过|拒绝)|未通过(内容)?审核|内容.{0,12}(违规|敏感|不合规)|(提示词|素材|图片|视频|输入文本).{0,12}(敏感|违规)|触发敏感词|invalid (image|video|audio|prompt|url)\b|unsupported (image|video|audio) (format|type)\b/.test(text)) return "user";
+  // Observed provider refusals; numeric error codes alone do not prove user fault.
+  if (/疑似包含侵权\/违规内容|由于版权相关限制，暂时无法创作|参考素材不符合上游要求|上游要求修改提示词，本次未创建生成任务/.test(text)) return "user";
   return "upstream";
 }
 
@@ -377,9 +382,18 @@ export function parseSubmitResponse(_ctx, response) {
   const body = response.body;
   if (!isObject(body)) throw new Error("upstream create response must be an object");
   const result = taskResult(body);
-  if ((body.error || body.success === false) && result.status !== "FAILURE") throw new Error(taskFailure(body));
-  const taskId = body.id || body.task_id;
-  if (typeof taskId !== "string" || !taskId.trim()) throw new Error(result.reason || "upstream create response has no task id");
+  const ids = [body.task_id, body.id];
+  if (ids.some(value => value != null && typeof value !== "string")) throw new Error("upstream create response has an invalid task id");
+  const taskId = ids.find(value => typeof value === "string" && value.trim());
+  if ((body.error || body.success === false) && result.status !== "FAILURE") {
+    const acceptedStatus = [body.status].some(value => value != null && String(value).trim() !== "" && !/^(failed|failure|cancelled|canceled)(?:[:：].*)?$/i.test(String(value).trim()));
+    if (taskId || acceptedStatus) throw new Error("upstream create response has conflicting acceptance and rejection signals");
+    return { rejected: { reason: taskFailure(body) } };
+  }
+  if (typeof taskId !== "string" || !taskId.trim()) {
+    if (result.status === "FAILURE") return { rejected: { reason: taskFailure(body) } };
+    throw new Error("upstream create response has no task id");
+  }
   const output = { taskId: taskId.trim(), taskData: body };
   if (result.status === "SUCCESS" || result.status === "FAILURE") output.immediate = result;
   return output;

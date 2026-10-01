@@ -1545,7 +1545,7 @@
           }
         }
       ],
-      "expectedError": "No 4k price"
+      "expected": {"rejected": {"reason": "No 4k price"}}
     },
     {
       "name": "Create without id is rejected",

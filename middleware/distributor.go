@@ -40,6 +40,7 @@ func Distribute() func(c *gin.Context) {
 			// panics.
 			service.ReleaseUnpersistedVideoProbeLease(c)
 			if recovered := recover(); recovered != nil {
+				service.FinishVideoReliabilityRequest(c, true)
 				// Status is still the default 200 here; the outer recovery
 				// writes the 500 once the original value is re-raised.
 				service.LogVideoScheduleSummary(c, true)
@@ -47,11 +48,16 @@ func Distribute() func(c *gin.Context) {
 				panic(recovered)
 			}
 			service.LogVideoScheduleSummary(c, false)
+			service.FinishVideoReliabilityRequest(c, false)
 			service.EnqueueVideoScheduleAudit(c, false)
 			if c.Writer.Status() >= 400 {
 				service.RecordRequestPolicyTermination(c, types.NewErrorWithStatusCode(errors.New("request rejected"), types.ErrorCodeInvalidRequest, c.Writer.Status(), types.ErrOptionWithSkipRetry()))
 			}
 		}()
+		if decision := service.VideoSchedDecisionFrom(c); decision.Takeover && decision.Reason == service.VideoSchedReasonNotReady {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "video scheduling health admission unavailable", types.ErrorCode("video_health_unavailable"))
+			return
+		}
 		constraints := service.GetChannelConstraints(c)
 		constraints.AddFilter(taskdto.ChannelFilter{
 			Kind:        taskdto.FilterRequestPath,

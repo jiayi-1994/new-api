@@ -67,8 +67,10 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData            TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+	VideoHealthAttemptID   *int64          `json:"-" gorm:"uniqueIndex"`
+	VideoHealthAttribution string          `json:"-" gorm:"type:varchar(24)"`
+	Data                   json.RawMessage `json:"data" gorm:"type:json"`
 }
 
 func (t *Task) SetData(data any) {
@@ -144,7 +146,22 @@ type TaskPrivateData struct {
 	StoreAttempts int `json:"store_attempts,omitempty"`
 	// SchedulingSummary is set when the submitting channel takes part in
 	// video scheduling; nil tasks are invisible to channel health.
-	SchedulingSummary *TaskSchedulingSummary `json:"scheduling_summary,omitempty"`
+	SchedulingSummary *TaskSchedulingSummary    `json:"scheduling_summary,omitempty"`
+	VideoHealth       *TaskVideoHealthReference `json:"video_health,omitempty"`
+}
+
+// TaskVideoHealthReference survives audit-off and scheduling mode changes.
+// Internal task PK is linked after insertion; external provider IDs are not keys.
+type TaskVideoHealthReference struct {
+	AttemptID    int64          `json:"attempt_id"`
+	RequestID    string         `json:"request_id"`
+	AttemptSeq   int            `json:"attempt_seq"`
+	ChannelID    int            `json:"channel_id"`
+	Model        string         `json:"model"`
+	StartedAt    int64          `json:"started_at"`
+	StateVersion int64          `json:"state_version"`
+	Flow         string         `json:"flow"`
+	Slot         *TaskProbeSlot `json:"slot,omitempty"`
 }
 
 // TaskSchedulingSummary is what video scheduling needs once a task outlives
@@ -271,7 +288,7 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
 		!p.ResultDiscarded && p.StoredArtifact == nil && p.StoreAttempts == 0 &&
-		p.SchedulingSummary == nil {
+		p.SchedulingSummary == nil && p.VideoHealth == nil {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。

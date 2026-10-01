@@ -34,6 +34,7 @@ import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
+import { Dialog } from '@/components/dialog'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
@@ -53,7 +54,11 @@ import {
   formatQuotaWithCurrency,
   getCurrencyLabel,
 } from '@/lib/currency'
-import { formatPercent, formatTimestampToDate } from '@/lib/format'
+import {
+  formatNumber,
+  formatPercent,
+  formatTimestampToDate,
+} from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
@@ -97,6 +102,7 @@ import {
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
+import { VideoReliabilityDetails } from './video-reliability-details'
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
   source?: string
@@ -182,12 +188,68 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
 
 /** Video scheduling health; renders nothing for a channel without a scheduling config. */
 export function VideoHealthCell(props: { channel: Channel }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // A tag row copies its first child's fields; health belongs to one channel.
   const health = isTagAggregateRow(props.channel)
     ? null
     : props.channel.video_health
   if (!health) return null
+  if (health.selection_policy === 'stability_cost_v2') {
+    const models = Object.entries(health.models ?? {})
+    const verified = models.filter(
+      ([, model]) =>
+        model.reliability?.state === 'normal' &&
+        model.reliability.integrity === 'complete' &&
+        (model.reliability.qualification?.expires_at ?? 0) > (health.as_of ?? 0)
+    ).length
+    return (
+      <Dialog
+        title={t('Video reliability')}
+        description={props.channel.name}
+        trigger={
+          <Button
+            variant='ghost'
+            size='sm'
+            className='h-auto justify-start text-left whitespace-normal'
+          >
+            <StatusBadge
+              copyable={false}
+              variant={verified > 0 ? 'success' : 'warning'}
+            >
+              {t('Verified models')}: {formatNumber(verified, locale)}/
+              {formatNumber(models.length, locale)}
+            </StatusBadge>
+          </Button>
+        }
+      >
+        <p className='text-muted-foreground mb-4 text-sm'>
+          {t(
+            'No verified candidates does not mean no service. Unverified channels may accept limited validation traffic.'
+          )}
+        </p>
+        <p className='mb-4 text-sm'>
+          {t('Validation slots')}:{' '}
+          {formatNumber(health.validation_slots_held ?? 0, locale)} ·{' '}
+          {t('Exploration max in flight')}:{' '}
+          {formatNumber(health.explore_limit ?? 0, locale)} ·{' '}
+          {t('Probe max in flight')}:{' '}
+          {formatNumber(health.recovery_limit ?? 0, locale)}
+        </p>
+        <div className='space-y-4'>
+          {models.map(([name, model]) => (
+            <section key={name} className='border-t pt-3'>
+              <h4 className='mb-2 font-medium break-all'>{name}</h4>
+              <VideoReliabilityDetails
+                health={model.reliability}
+                asOf={health.as_of}
+              />
+            </section>
+          ))}
+        </div>
+      </Dialog>
+    )
+  }
   let variant: StatusBadgeProps['variant'] = 'success'
   if (health.submit.samples === 0 && health.gen.samples === 0) {
     variant = 'warning'
@@ -199,8 +261,14 @@ export function VideoHealthCell(props: { channel: Channel }) {
       label={t(
         'Submit {{submit}} / gen {{gen}} ({{samples}} samples) · in flight {{inFlight}}/{{capacity}}',
         {
-          submit: formatPercent(health.submit.rate * 100),
-          gen: formatPercent(health.gen.rate * 100),
+          submit:
+            health.submit.samples > 0
+              ? formatPercent(health.submit.rate * 100)
+              : t('Unknown'),
+          gen:
+            health.gen.samples > 0
+              ? formatPercent(health.gen.rate * 100)
+              : t('Unknown'),
           samples: health.submit.samples,
           inFlight: health.in_flight,
           capacity: health.capacity > 0 ? health.capacity : '∞',

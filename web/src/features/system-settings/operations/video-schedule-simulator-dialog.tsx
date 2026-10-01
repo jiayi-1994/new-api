@@ -35,7 +35,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { VideoReliabilityDetails } from '@/features/channels/components/video-reliability-details'
+import { videoReliabilityLabel } from '@/features/channels/lib/video-reliability'
 import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber, formatPercent } from '@/lib/format'
 import {
   getServerErrorMessage,
   requireServerSuccess,
@@ -168,6 +171,7 @@ export function VideoScheduleSimulatorDialog(
   }
 
   const result = simulate.data
+  const isV2 = result?.selection_policy === 'stability_cost_v2'
   const specSource =
     result?.candidates.find(
       (candidate) => candidate.id === result.recommended && candidate.spec
@@ -247,11 +251,23 @@ export function VideoScheduleSimulatorDialog(
     { id: 'sell', header: t('Sell price'), cell: sellCell },
     {
       id: 'scores',
-      header: t('P / Q / S / Total'),
+      header: isV2
+        ? t('Margin / quality / best generation rate')
+        : t('P / Q / S / Total'),
       cell: (row: VideoScheduleCandidate) =>
-        [row.p, row.q, row.s, row.total]
-          .map((value) => score.format(value))
-          .join(' / '),
+        isV2
+          ? [
+              row.estimated_margin == null
+                ? '—'
+                : formatPercent(row.estimated_margin * 100),
+              score.format(row.q),
+              row.best_generation_rate == null
+                ? '—'
+                : formatPercent(row.best_generation_rate * 100),
+            ].join(' / ')
+          : [row.p, row.q, row.s, row.total]
+              .map((value) => score.format(value))
+              .join(' / '),
     },
     {
       id: 'status',
@@ -259,7 +275,9 @@ export function VideoScheduleSimulatorDialog(
       cell: (row: VideoScheduleCandidate) => (
         <div className='text-xs'>
           {row.excluded ? (
-            <span className='text-destructive'>{row.excluded}</span>
+            <span className='text-destructive'>
+              {videoReliabilityLabel(row.excluded, t)}
+            </span>
           ) : (
             t('Eligible')
           )}
@@ -269,6 +287,34 @@ export function VideoScheduleSimulatorDialog(
         </div>
       ),
     },
+    ...(isV2
+      ? [
+          {
+            id: 'reliability',
+            header: t('Video reliability'),
+            cell: (row: VideoScheduleCandidate) => (
+              <>
+                <VideoReliabilityDetails
+                  health={row.reliability}
+                  asOf={result ? Date.parse(result.now) / 1000 : undefined}
+                />
+                <p className='mt-2 text-xs'>
+                  {t('Validation slots')}:{' '}
+                  {formatNumber(result?.slot_occupancy?.[row.id] ?? 0, locale)}{' '}
+                  /{' '}
+                  {formatNumber(
+                    (row.reliability?.state === 'blocked' ||
+                    row.reliability?.state === 'recovering'
+                      ? result?.validation_limits?.recover
+                      : result?.validation_limits?.explore) ?? 0,
+                    locale
+                  )}
+                </p>
+              </>
+            ),
+          },
+        ]
+      : []),
   ]
 
   const textField = (
@@ -414,6 +460,11 @@ export function VideoScheduleSimulatorDialog(
             'Use the unsaved settings on this page as the config snapshot (the window stays at the live value)'
           )}
         </Label>
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'Health overrides accept per-channel reliability states and evidence. The simulator recommends without acquiring validation slots.'
+          )}
+        </p>
 
         {(inputError || simulate.isError) && (
           <p role='alert' className='text-destructive text-sm'>
@@ -443,10 +494,26 @@ export function VideoScheduleSimulatorDialog(
                   {result.decision.takeover && 'takeover'}
                   {result.decision.shadow && 'shadow'}
                   {result.decision.reason}
-                  {result.probe && ` · ${t('Probe')}`}
-                  {result.explore && ` · ${t('Exploration')}`}
+                  {result.flow ? (
+                    ` · ${videoReliabilityLabel(result.flow, t)}`
+                  ) : (
+                    <>
+                      {result.probe && ` · ${t('Probe')}`}
+                      {result.explore && ` · ${t('Exploration')}`}
+                    </>
+                  )}
                 </dd>
               </div>
+              {isV2 && (
+                <div className='sm:col-span-2'>
+                  <dt className='text-muted-foreground inline'>
+                    {t('Selection reason')}:{' '}
+                  </dt>
+                  <dd className='inline'>
+                    {videoReliabilityLabel(result.selection_reason, t)}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className='text-muted-foreground inline'>{t('Spec')}: </dt>
                 <dd className='inline'>

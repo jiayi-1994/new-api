@@ -1804,7 +1804,7 @@
           }
         }
       ],
-      "expectedError": "余额不足"
+      "expected": {"rejected": {"reason": "余额不足"}}
     },
     {
       "name": "Failure with a task ID is terminal at submission",

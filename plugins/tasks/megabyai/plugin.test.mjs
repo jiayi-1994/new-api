@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as plugin from "./plugin.js";
+// Explicit rejection is distinct from an unreadable/ambiguous accepted response.
+for (const reason of ["content policy violation", "quota exhausted"]) {
+  const result = plugin.parseSubmitResponse({}, { statusCode: 200, body: { success: false, error: { message: reason } } });
+  assert.deepEqual(result, { rejected: { reason } });
+  assert.equal(plugin.classifyFailure(result.rejected.reason), reason === "content policy violation" ? "user" : "upstream");
+}
+for (const body of [
+  {}, "not JSON",
+  { id: "created", error: { message: "content policy violation" } },
+  { id: 123, error: { message: "quota exhausted" } },
+  { task_id: " ", id: "created", error: { message: "quota exhausted" } },
+  { id: " ", task_id: "created", error: { message: "quota exhausted" } },
+  { status: "completed", error: { message: "quota exhausted" } },
+  { status: "processing", success: false, message: "quota exhausted" },
+]) {
+  assert.throws(() => plugin.parseSubmitResponse({}, { statusCode: 200, body }));
+}
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 for (const entry of fixture.cases) {
@@ -88,5 +105,18 @@ test("Provider-side cancellations and constraint violations count against the up
     ["job cancelled by provider due to internal error", "upstream"],
     ["constraint violation", "upstream"],
     ["content policy violation", "user"],
+    ["moderation service timeout", "upstream"],
+    ["content policy validation internal error", "upstream"],
+    ["sensitive data service unavailable", "upstream"],
+    ["unsupported video backend", "upstream"],
+    ["invalid input", "upstream"],
+    ["审核服务超时", "upstream"],
+    ["moderation rejected", "user"],
+    ["提示词包含敏感违规内容或参数格式错误", "user"],
+    // Anonymized terminal messages from this provider's task logs, 2026-10-01.
+    ["出于肖像保护考虑，未认证人脸暂不支持用 Dreamina Seedance 2.5 生成视频。你可以尝试换其它参考图或文生视频。", "user"],
+    ["上游服务繁忙，请稍后重试", "upstream"],
+    ["service is temporarily unavailable", "upstream"],
+    ["video generation timed out", "upstream"],
   ]) assert.equal(plugin.classifyFailure(reason), kind, reason);
 });

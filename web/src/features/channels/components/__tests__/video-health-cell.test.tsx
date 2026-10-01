@@ -17,11 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test } from 'vitest'
+
+import type { VideoReliability } from '@/features/system-settings/types'
 
 import { aggregateChannelsByTag } from '../../lib'
 import { channelSchema, type Channel } from '../../types'
 import { VideoHealthCell } from '../channels-columns'
+import { VideoReliabilityDetails } from '../video-reliability-details'
 
 const scheduled = channelSchema.parse({
   id: 9,
@@ -46,6 +50,95 @@ const scheduled = channelSchema.parse({
 })
 
 afterEach(cleanup)
+
+const health: VideoReliability = {
+  version: 1,
+  model: 'video',
+  state: 'unverified',
+  state_version: 1,
+  state_revision: 1,
+  validation_round: 1,
+  probe_failures: 0,
+  reason: 'new_channel',
+  integrity: 'complete',
+  blocked_at: 0,
+  recovery_started: 0,
+  recovery_expires: 0,
+  validation_started: 0,
+  validation_expires: 0,
+  last_validation_at: 0,
+  qualification: null,
+  current: null,
+  recovery: null,
+}
+
+test('zero evidence stays unknown and channel details explain limited validation', async () => {
+  const user = userEvent.setup()
+  const legacy = scheduled.video_health
+  if (!legacy) throw new Error('Missing test health')
+  render(
+    <VideoHealthCell
+      channel={{
+        ...scheduled,
+        video_health: {
+          ...legacy,
+          selection_policy: 'stability_cost_v2',
+          models: { video: { reliability: health } },
+          as_of: 1000,
+        },
+      }}
+    />
+  )
+  await user.click(screen.getByRole('button', { name: /Verified models/ }))
+  expect(screen.getByText('Unverified')).toBeVisible()
+  expect(
+    screen.getByText(/No verified candidates does not mean no service/)
+  ).toBeVisible()
+  expect(screen.queryByText(/100%/)).not.toBeInTheDocument()
+})
+
+test('an expired recovery certificate displays unverified and translates its evidence source', async () => {
+  const user = userEvent.setup()
+  const qualification = {
+    version: 1,
+    source: 'recovery' as const,
+    batch_start: 1,
+    batch_end: 10,
+    window_seconds: 10,
+    as_of: 20,
+    validated_at: 20,
+    expires_at: 100,
+    submitted: 20,
+    accepted: 20,
+    succeeded: 20,
+    rejected: 0,
+    generation_failed: 0,
+    user: 0,
+    cancelled: 0,
+    pending: 0,
+    unknown: 0,
+    missing: 0,
+  }
+  render(
+    <VideoReliabilityDetails
+      health={{
+        ...health,
+        state: 'normal',
+        reason: 'qualified',
+        qualification,
+      }}
+      asOf={101}
+    />
+  )
+  expect(screen.getByText('Unverified')).toBeVisible()
+  expect(screen.getByText('Qualification expired')).toBeVisible()
+  const trigger = screen.getByRole('button', { name: 'Evidence details' })
+  expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  await user.click(trigger)
+  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByText('Qualification expires')).toBeVisible()
+  expect(screen.getByText('Recovery verification')).toBeVisible()
+})
 
 test('a channel row shows its own video health', () => {
   render(<VideoHealthCell channel={scheduled} />)

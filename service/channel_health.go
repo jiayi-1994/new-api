@@ -61,10 +61,11 @@ type VideoProbeState struct {
 }
 
 type VideoChannelHealth struct {
-	Submit   videosched.HealthStat `json:"submit"`
-	Gen      videosched.HealthStat `json:"gen"`
-	InFlight int                   `json:"in_flight"`
-	Probe    VideoProbeState       `json:"probe"`
+	Submit      videosched.HealthStat           `json:"submit"`
+	Gen         videosched.HealthStat           `json:"gen"`
+	InFlight    int                             `json:"in_flight"`
+	Probe       VideoProbeState                 `json:"probe"`
+	Reliability *videosched.ReliabilitySnapshot `json:"reliability,omitempty"`
 }
 
 // videoProbeLease is a probe slot owned by the request until its task is
@@ -141,6 +142,7 @@ func recordVideoSamples(channelID int, modelName, field string) {
 // attempt did not turn into an accepted task is released at once, and a
 // failure attributed to the upstream extends the probe cooldown.
 func ObserveVideoSubmit(c *gin.Context, channel *model.Channel, modelName string, taskErr *taskdto.TaskError) {
+	ObserveVideoReliabilitySubmit(c, taskErr, false)
 	captureVideoAuditSubmit(c, channel.Id, taskErr)
 	outcome := videoSubmitOutcome(taskErr)
 	if taskErr != nil {
@@ -184,6 +186,7 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 // is observed once and never counted in flight; any other task is counted
 // until one of the terminal paths releases it.
 func VideoTaskPersisted(c *gin.Context, task *model.Task) {
+	linkVideoReliabilityTask(c, task)
 	summary := task.PrivateData.SchedulingSummary
 	audit := videoScheduleAuditState(c)
 	if audit != nil {
@@ -194,10 +197,11 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 		c.Set(string(constant.ContextKeyVideoSchedProbeLease), nil)
 	}
 	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
-		if summary == nil && audit == nil {
+		if summary == nil && audit == nil && task.PrivateData.VideoHealth == nil {
 			return
 		}
 		outcome, attribution := videoTerminalAttribution(task, false)
+		observeVideoReliabilityTerminal(task, outcome, attribution)
 		if audit != nil {
 			observedAt := time.Now().UnixMilli()
 			audit.TaskStatus, audit.TerminalClass, audit.TerminalAt = string(task.Status), attribution, &observedAt
@@ -228,6 +232,7 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 // failure the host detected itself (timeout, poll failure escalation).
 func ObserveVideoTerminal(task *model.Task, hostFailure bool) {
 	outcome, attribution := videoTerminalAttribution(task, hostFailure)
+	observeVideoReliabilityTerminal(task, outcome, attribution)
 	ObserveVideoScheduleAuditTerminal(task, attribution, outcome)
 	observeVideoTerminal(task, true, outcome)
 }
@@ -291,7 +296,7 @@ func GetVideoChannelHealth(channelID int, modelName string, minSamples int) (Vid
 		}
 		return stat
 	}
-	health := VideoChannelHealth{Submit: pick(videoSubmitOK, videoSubmitFail), Gen: pick(videoGenOK, videoGenFail)}
+	health := VideoChannelHealth{Submit: pick(videoSubmitOK, videoSubmitFail), Gen: pick(videoGenOK, videoGenFail), Reliability: GetVideoReliability(channelID, modelName)}
 	lastKey, failsKey := videoProbeStateKeys(channelID)
 	values, err := store.get([]string{videoInFlightKey(channelID), lastKey, failsKey})
 	if err != nil {
@@ -308,14 +313,19 @@ func GetVideoChannelHealth(channelID int, modelName string, minSamples int) (Vid
 // on request, the windows of each model it prices.
 type VideoHealthView struct {
 	VideoChannelHealth
-	Gated              bool                          `json:"gated"`
-	Capacity           int                           `json:"capacity"`
-	CapacityGroup      string                        `json:"capacity_group,omitempty"`
-	GroupCapacity      int                           `json:"group_capacity,omitempty"`
-	GroupInFlight      int                           `json:"group_in_flight,omitempty"`
-	ProbeSlotsHeld     int                           `json:"probe_slots_held"`
-	ProbeCooldownUntil int64                         `json:"probe_cooldown_until,omitempty"` // unix seconds after the last probe
-	Models             map[string]VideoChannelHealth `json:"models,omitempty"`
+	SelectionPolicy     string                        `json:"selection_policy"`
+	AsOf                int64                         `json:"as_of"`
+	ValidationSlotsHeld int                           `json:"validation_slots_held"`
+	ExploreLimit        int                           `json:"explore_limit"`
+	RecoveryLimit       int                           `json:"recovery_limit"`
+	Gated               bool                          `json:"gated"`
+	Capacity            int                           `json:"capacity"`
+	CapacityGroup       string                        `json:"capacity_group,omitempty"`
+	GroupCapacity       int                           `json:"group_capacity,omitempty"`
+	GroupInFlight       int                           `json:"group_in_flight,omitempty"`
+	ProbeSlotsHeld      int                           `json:"probe_slots_held"`
+	ProbeCooldownUntil  int64                         `json:"probe_cooldown_until,omitempty"` // unix seconds after the last probe
+	Models              map[string]VideoChannelHealth `json:"models,omitempty"`
 }
 
 // GetVideoHealthView reads a channel's scheduling state from Redis or memory
@@ -333,10 +343,16 @@ func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView
 	}
 	view := &VideoHealthView{
 		VideoChannelHealth: health,
-		Gated:              videoGated(health.Submit, health.Gen, setting.MinSubmitRate, setting.MinGenRate, setting.MinSamples),
-		Capacity:           cfg.Capacity,
-		CapacityGroup:      cfg.CapacityGroup,
-		GroupCapacity:      setting.CapacityGroups[cfg.CapacityGroup],
+		SelectionPolicy:    setting.SelectionPolicy, AsOf: time.Now().Unix(), ExploreLimit: setting.ExploreMaxInFlight, RecoveryLimit: setting.ProbeMaxInFlight,
+		Gated:         videoGated(health.Submit, health.Gen, setting.MinSubmitRate, setting.MinGenRate, setting.MinSamples),
+		Capacity:      cfg.Capacity,
+		CapacityGroup: cfg.CapacityGroup,
+		GroupCapacity: setting.CapacityGroups[cfg.CapacityGroup],
+	}
+	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		if view.ValidationSlotsHeld, err = videoHealthStore().held(videoValidationKeys(channel.Id)); err != nil {
+			return nil, err
+		}
 	}
 	if view.GroupCapacity > 0 {
 		if view.GroupInFlight, err = GetVideoGroupInFlight(cfg.CapacityGroup); err != nil {
@@ -349,7 +365,7 @@ func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView
 	if last := health.Probe.LastProbeAt; last > 0 {
 		view.ProbeCooldownUntil = last + int64(VideoProbeCooldown(setting.ProbeCooldownSec, health.Probe).Seconds())
 	}
-	if perModel {
+	if perModel || setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 		view.Models = make(map[string]VideoChannelHealth, len(cfg.Models))
 		for name := range cfg.Models {
 			if view.Models[name], err = GetVideoChannelHealth(channel.Id, name, setting.MinSamples); err != nil {
@@ -510,6 +526,7 @@ func RunVideoHealthCalibration(ctx context.Context) {
 	lastBlockerWarning := ""
 	for {
 		setting := operation_setting.GetVideoSchedulingSetting()
+		RefreshVideoReliability(ctx)
 		if setting.Mode != operation_setting.VideoSchedulingModeOff {
 			calibrateVideoInFlight()
 			// Logged when it changes, so startup and later setting or plugin

@@ -244,6 +244,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if strings.HasPrefix(key, "video_scheduling_setting.") {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if IsRequestPolicyOption(key) {
 		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
@@ -317,6 +320,17 @@ func UpdateOptionsBulk(values map[string]string) error {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
+			}
+			if k == "video_scheduling_setting.mode" && v == operation_setting.VideoSchedulingModeOn && option.Value != v {
+				policy := operation_setting.GetVideoSchedulingSetting().SelectionPolicy
+				if staged, ok := values["video_scheduling_setting.selection_policy"]; ok {
+					policy = staged
+				}
+				if policy == "stability_cost_v2" {
+					if err := BeginVideoHealthActivation(tx); err != nil {
+						return err
+					}
+				}
 			}
 			option.Value = v
 			if err := tx.Save(&option).Error; err != nil {

@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
-import type { VideoScheduleCandidate } from '@/features/system-settings/types'
+import type {
+  VideoScheduleCandidate,
+  VideoReliabilityEvidence,
+} from '@/features/system-settings/types'
 
 export const auditSearchSchema = z.object({
   start: z.number().nonnegative().optional(),
@@ -83,6 +86,7 @@ export type AuditDecision = {
   recommended: number
   selected: number
   choice_kind: string
+  selection_reason?: string
   affinity_hit: boolean
   admission: string
   submit_outcome: string
@@ -101,6 +105,19 @@ export type AuditDecision = {
   plugins_json: string
 }
 export type AuditDetail = {
+  health_status?: string
+  health_attempts?: {
+    attempt_seq: number
+    channel_id: number
+    model: string
+    started_at: number
+    flow: string
+    submit_outcome: string
+    final_outcome: string
+    attribution: string
+    task_pk: number | null
+    missing: boolean
+  }[]
   run: AuditRun
   decisions: AuditDecision[]
   attempts: {
@@ -144,6 +161,23 @@ export type AuditRate = {
   value: number | null
 }
 export type AuditStats = {
+  reliability?: {
+    supported: boolean
+    reason?: string
+    as_of: number
+    attempts: VideoReliabilityEvidence
+    generation_success: AuditRate
+    channel_completion: AuditRate
+    request_completion: AuditRate
+    limited_share: AuditRate
+    requests: number
+    request_pending: number
+    request_unknown: number
+    request_missing: number
+    request_user: number
+    request_cancelled: number
+    collection_write_failures: number
+  }
   as_of: number
   total: number
   pending: number

@@ -116,6 +116,27 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('a cold-start recommendation explains limited admission and hides legacy scores', async () => {
+  await runSimulation({
+    success: true,
+    data: {
+      ...simulation,
+      selection_policy: 'stability_cost_v2',
+      flow: 'explore',
+      selection_reason: 'no_normal_candidate',
+      slot_occupancy: { 3: 1 },
+      validation_limits: { explore: 2, recover: 1 },
+    },
+  })
+  expect(
+    await screen.findByText('No verified candidates; limited validation')
+  ).toBeVisible()
+  expect(screen.getByText(/Cold-start validation/)).toBeVisible()
+  expect(screen.queryByText('P / Q / S / Total')).not.toBeInTheDocument()
+  expect(screen.getAllByText('Health state unavailable').length).toBe(2)
+  expect(screen.getByText('Validation slots: 1 / 2')).toBeVisible()
+})
+
 test('the default protocol entry sends the protocol without a path that would override it', async () => {
   const post = await runSimulation({ success: true, data: simulation })
 

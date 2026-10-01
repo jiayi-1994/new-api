@@ -122,7 +122,8 @@ type Candidate struct {
 	Capacity, InFlight           int // channel; Capacity 0 = unlimited
 	GroupCapacity, GroupInFlight int // capacity group total; 0 = no group
 
-	Submit, Gen HealthStat // raw; health gates are applied here, not during assembly
+	Submit, Gen HealthStat           // raw; health gates are applied here, not during assembly
+	Reliability *ReliabilitySnapshot `json:",omitempty"`
 	Sell        SellPrice
 	Excluded    string // hard exclusion from assembly (disabled, tried, not schedulable, ...); never gated or at capacity
 }
@@ -135,10 +136,18 @@ type Weights struct {
 var DefaultWeights = Weights{Price: 0.5, Quality: 0.3, Service: 0.2}
 
 type Policy struct {
-	Weights       Weights
-	MinSubmitRate float64 // [0,1]; 0 disables the gate
-	MinGenRate    float64 // [0,1]; 0 disables the gate
-	MinSamples    int     // metrics with fewer samples count as 1 and mark Unproven
+	SelectionPolicy         string  `json:",omitempty"`
+	MinMarginRate           float64 `json:",omitempty"`
+	MinOverallRate          float64 `json:",omitempty"`
+	StabilityTolerance      float64 `json:",omitempty"`
+	Now                     int64   `json:",omitempty"`
+	QualificationTTLSeconds int     `json:",omitempty"`
+	ValidationPeriodSeconds int     `json:",omitempty"`
+	WindowSeconds           int     `json:",omitempty"`
+	Weights                 Weights
+	MinSubmitRate           float64 // [0,1]; 0 disables the gate
+	MinGenRate              float64 // [0,1]; 0 disables the gate
+	MinSamples              int     // metrics with fewer samples count as 1 and mark Unproven
 
 	UnknownSellPolicy  string  // exclude (default) | relative
 	MaxCostToSellRatio float64 // 0 = no loss threshold
@@ -147,14 +156,18 @@ type Policy struct {
 }
 
 type Score struct {
-	Candidate  *Candidate
-	Quote      CostQuote // the quote every price comparison of this score used
-	PriceScore float64
-	Quality    float64
-	Service    float64
-	Total      float64
-	Unproven   bool
-	Reason     string // non-empty = not eligible
+	Candidate          *Candidate
+	Quote              CostQuote // the quote every price comparison of this score used
+	PriceScore         float64
+	Quality            float64
+	Service            float64
+	Total              float64
+	Unproven           bool
+	Reason             string   // non-empty = not eligible
+	EstimatedMargin    *float64 `json:",omitempty"`
+	GenerationRate     *float64 `json:",omitempty"`
+	OverallRate        *float64 `json:",omitempty"`
+	BestGenerationRate *float64 `json:",omitempty"`
 }
 
 var ErrNoCandidate = errors.New("videosched: no eligible candidate")
@@ -333,6 +346,9 @@ func product(a, b float64) (float64, bool) {
 // an eligible candidate is ranked; eligible candidates below it get the reason
 // "lower priority". Evaluate does not modify cands.
 func Evaluate(cands []Candidate, p Policy) []Score {
+	if p.SelectionPolicy == PolicyStabilityCostV2 {
+		return evaluateStabilityCost(cands, p, false)
+	}
 	return evaluate(cands, p, false)
 }
 
@@ -341,6 +357,9 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 // capacity, the quote, the cost bound, the sell policy and the loss threshold
 // all still apply.
 func EvaluateProbe(cands []Candidate, p Policy) []Score {
+	if p.SelectionPolicy == PolicyStabilityCostV2 {
+		return evaluateStabilityCost(cands, p, true)
+	}
 	return evaluate(cands, p, true)
 }
 
@@ -471,12 +490,12 @@ func Select(cands []Candidate, p Policy, rnd *rand.Rand) (*Candidate, []Score, e
 	if len(scores) == 0 || scores[0].Reason != "" {
 		return nil, scores, ErrNoCandidate
 	}
-	if rnd == nil || !(p.TieEpsilon > 0) || math.IsInf(p.TieEpsilon, 1) {
+	if rnd == nil || p.SelectionPolicy != PolicyStabilityCostV2 && (!(p.TieEpsilon > 0) || math.IsInf(p.TieEpsilon, 1)) {
 		return scores[0].Candidate, scores, nil
 	}
 	floor := scores[0].Total - p.TieEpsilon
 	ties, totalWeight := 0, 0
-	for ties < len(scores) && scores[ties].Reason == "" && scores[ties].Total >= floor {
+	for ties < len(scores) && scores[ties].Reason == "" && (p.SelectionPolicy == PolicyStabilityCostV2 || scores[ties].Total >= floor) {
 		totalWeight += max(0, scores[ties].Candidate.Weight)
 		ties++
 	}
