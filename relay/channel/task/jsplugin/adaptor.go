@@ -471,7 +471,9 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 		var body []byte
 		body, err = io.ReadAll(io.LimitReader(resp.Body, maxTaskPluginPersistedJSONBytes+1))
 		if err == nil && len(body) > maxTaskPluginPersistedJSONBytes {
-			err = fmt.Errorf("task submit response exceeds size limit")
+			// The upstream answered 2xx; rejecting its body locally does not
+			// make a retry elsewhere safe.
+			err = fmt.Errorf("%w: task submit response exceeds size limit", relaycommon.ErrTaskSubmitOutcomeUnknown)
 		}
 		responseBody = string(body)
 		var decoded any

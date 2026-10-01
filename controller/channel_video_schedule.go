@@ -136,7 +136,7 @@ type videoScheduleSimulateRequest struct {
 // probe slot and writes no state. The fingerprint hashes the whole decision
 // input; equal fingerprints and seeds give equal results. Overrides pin the
 // health, in-flight, probe slot, setting and clock segments; the others use
-// live values.
+// live values. config_snapshot also drives the takeover/shadow decision.
 func SimulateVideoSchedule(c *gin.Context) {
 	var req videoScheduleSimulateRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
@@ -257,6 +257,8 @@ func SimulateVideoSchedule(c *gin.Context) {
 	identify := func(sc *gin.Context) {
 		sc.Set("id", c.GetInt("id"))
 		sc.Set("group", req.UserGroup)
+		// The entry decides takeover/shadow under the same setting that scores.
+		common.SetContextKey(sc, constant.ContextKeyVideoSchedSetting, setting)
 		sc.Next()
 	}
 

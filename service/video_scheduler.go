@@ -64,6 +64,9 @@ func DecideVideoSched(c *gin.Context) (decision VideoSchedDecision) {
 	defer func() { common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision) }()
 
 	setting := operation_setting.GetVideoSchedulingSetting()
+	if snapshot, ok := common.GetContextKeyType[*operation_setting.VideoSchedulingSetting](c, constant.ContextKeyVideoSchedSetting); ok && snapshot != nil {
+		setting = snapshot
+	}
 	if setting.Mode != operation_setting.VideoSchedulingModeOn && setting.Mode != operation_setting.VideoSchedulingModeShadow {
 		return VideoSchedDecision{Reason: VideoSchedReasonModeOff}
 	}
@@ -176,6 +179,10 @@ const (
 	// VideoSchedAdmissionProbeTaken marks a probe choice whose slot another
 	// request took first; a new selection follows it.
 	VideoSchedAdmissionProbeTaken = "probe_slot_taken"
+	// VideoSchedAdmissionChannelUnavailable marks a choice whose channel was
+	// disabled or left the request's group/model while it was scored; a new
+	// selection follows it.
+	VideoSchedAdmissionChannelUnavailable = "channel_unavailable"
 )
 
 func init() {
@@ -332,20 +339,21 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 	if !VideoSchedDecisionFrom(c).Takeover {
 		return nil, model.ErrTierSelectorNotApplicable
 	}
-	channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
-	if err != nil {
-		return nil, err
-	}
 	// Slot TTL only backstops a lost release, so it covers the longest task.
 	probeTTL := time.Duration(constant.TaskTimeoutMinutes) * time.Minute
 	if probeTTL <= 0 {
 		probeTTL = videoSchedProbeCooldownMax
 	}
-	// A probe that loses its slot to a concurrent request is decided again on
-	// a fresh snapshot (which then sees the slot held) under a new
-	// selection_seq, never silently under the old fingerprint. The bound only
-	// guards against a store that keeps failing.
+	// A probe that loses its slot to a concurrent request, or a choice whose
+	// channel was disabled or regrouped while it was scored, is decided again
+	// on a fresh snapshot under a new selection_seq, never silently under the
+	// old fingerprint. The bound only guards against a store that keeps
+	// failing.
 	for range videoSchedProbeRounds {
+		channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
+		if err != nil {
+			return nil, err
+		}
 		input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, rand.Uint64())
 		choice := DecideVideoSchedule(input)
 		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore}
@@ -371,16 +379,23 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 				continue
 			}
 		}
-		appendVideoScheduleRecord(c, record, choice.Board)
 		if choice.Best == nil {
+			appendVideoScheduleRecord(c, record, choice.Board)
 			return nil, model.ErrTierSelectorNoCandidate
 		}
-		for _, channel := range channels {
-			if channel.Id == choice.Best.ID {
-				return channel, nil
+		// Scoring ran without the cache lock (plugins, Redis), so the choice is
+		// checked against the live cache right before it is handed out.
+		selected, available := model.CacheGetSatisfiedChannel(group, modelName, filters, choice.Best.ID)
+		if !available {
+			if choice.Probe {
+				ReleaseUnpersistedVideoProbeLease(c)
 			}
+			record.Admission = VideoSchedAdmissionChannelUnavailable
+			appendVideoScheduleRecord(c, record, choice.Board)
+			continue
 		}
-		return nil, model.ErrTierSelectorNoCandidate
+		appendVideoScheduleRecord(c, record, choice.Board)
+		return selected, nil
 	}
 	return nil, model.ErrTierSelectorNoCandidate
 }

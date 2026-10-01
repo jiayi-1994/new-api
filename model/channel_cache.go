@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -121,7 +122,9 @@ func SyncChannelCache(frequency int) {
 // priority/weight choice below, ErrTierSelectorNoCandidate when no channel is
 // eligible (the caller sees no channel, never a fallback), or the chosen
 // channel. It runs without channelSyncLock held, so it may call plugins and
-// Redis, and reads candidates through SatisfiedChannelSnapshot.
+// Redis, and reads candidates through SatisfiedChannelSnapshot; it returns the
+// live cached channel after CacheGetSatisfiedChannel confirms it is still
+// available.
 var TierSelector func(c *gin.Context, group, modelName string, filters []dto.ChannelFilter) (*Channel, error)
 
 var (
@@ -161,8 +164,7 @@ func GetRandomSatisfiedChannelWithContext(
 		case err != nil:
 			return nil, err
 		default:
-			// Hand back the live cached channel, not the selector's snapshot copy.
-			return CacheGetChannel(selected.Id)
+			return selected, nil
 		}
 	}
 
@@ -264,10 +266,7 @@ func GetRandomSatisfiedChannelWithContext(
 func SatisfiedChannelSnapshot(group, model string, filters []dto.ChannelFilter) ([]*Channel, error) {
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
-	ids, _ := filterCandidateIDs(group2model2channels[group][model], model, filters)
-	if len(ids) == 0 {
-		ids, _ = filterCandidateIDs(group2model2channels[group][ratio_setting.RoutingMatchModelName(model)], model, filters)
-	}
+	ids := satisfiedChannelIDs(group, model, filters)
 	snapshot := make([]*Channel, 0, len(ids))
 	for _, id := range ids {
 		channel, ok := channelsIDM[id]
@@ -278,6 +277,30 @@ func SatisfiedChannelSnapshot(group, model string, filters []dto.ChannelFilter) 
 		snapshot = append(snapshot, &copied)
 	}
 	return snapshot, nil
+}
+
+// CacheGetSatisfiedChannel returns the live cached channel id when it is still
+// enabled, serves model in group and passes filters. A choice made from
+// SatisfiedChannelSnapshot needs this check before submission: the channel
+// may have been disabled or regrouped after the snapshot.
+func CacheGetSatisfiedChannel(group, model string, filters []dto.ChannelFilter, id int) (*Channel, bool) {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	channel, ok := channelsIDM[id]
+	if !ok || channel.Status != common.ChannelStatusEnabled || !slices.Contains(satisfiedChannelIDs(group, model, filters), id) {
+		return nil, false
+	}
+	return channel, true
+}
+
+// satisfiedChannelIDs is the exact-then-normalized model lookup shared by
+// selection; the caller holds channelSyncLock.
+func satisfiedChannelIDs(group, model string, filters []dto.ChannelFilter) []int {
+	ids, _ := filterCandidateIDs(group2model2channels[group][model], model, filters)
+	if len(ids) == 0 {
+		ids, _ = filterCandidateIDs(group2model2channels[group][ratio_setting.RoutingMatchModelName(model)], model, filters)
+	}
+	return ids
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

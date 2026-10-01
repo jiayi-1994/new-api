@@ -349,6 +349,20 @@ func TestVideoScheduleSimulateAndSchedulable(t *testing.T) {
 		})
 	}
 
+	t.Run("the decision follows config_snapshot, not the live setting", func(t *testing.T) {
+		live := operation_setting.GetVideoSchedulingSetting()
+		savedMode, savedModels := live.Mode, live.Models
+		t.Cleanup(func() { live.Mode, live.Models = savedMode, savedModels })
+		decide := func(liveModels, snapshotModels []string) map[string]any {
+			live.Mode, live.Models = operation_setting.VideoSchedulingModeShadow, liveModels
+			changed := snapshot
+			changed.Mode, changed.Models = operation_setting.VideoSchedulingModeShadow, snapshotModels
+			return simulate(func(body map[string]any) { body["config_snapshot"] = changed })["decision"].(map[string]any)
+		}
+		assert.Equal(t, map[string]any{"takeover": false, "shadow": true}, decide([]string{"other"}, []string{"videos-fast"}))
+		assert.Equal(t, map[string]any{"takeover": false, "shadow": false, "reason": "model_not_listed"}, decide([]string{"videos-fast"}, []string{"other"}))
+	})
+
 	for _, body := range []string{
 		`{"group":"auto","entry":"protocol","protocol":"openai_video","request_body":{"model":"videos-fast"}}`,
 		`{"group":"default","entry":"batch","request_body":{"model":"videos-fast"}}`,

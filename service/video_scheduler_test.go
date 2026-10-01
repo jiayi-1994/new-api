@@ -543,6 +543,41 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		ReleaseUnpersistedVideoProbeLease(rival)
 	})
 
+	t.Run("a channel disabled while it was scored is decided again", func(t *testing.T) {
+		setting.ProbeRatio = 1
+		lastProbeKey, _ := videoProbeStateKeys(3201)
+		previous := acquireVideoProbeSlot
+		t.Cleanup(func() {
+			setting.ProbeRatio = 0
+			acquireVideoProbeSlot = previous
+			require.NoError(t, videoHealthStore().set(lastProbeKey, 0))
+			// Re-enabling only flips the status; a rebuild restores the index.
+			model.InitChannelCache()
+		})
+		// 3201 is probed; it is disabled after scoring, before submission.
+		acquireVideoProbeSlot = func(c *gin.Context, channelID, n int, ttl time.Duration) (bool, error) {
+			model.CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
+			return AcquireVideoProbeSlot(c, channelID, n, ttl)
+		}
+		c := request(VideoSchedDecision{Takeover: true}, 3207)
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		assert.Equal(t, 3204, channel.Id)
+		assert.Equal(t, common.ChannelStatusEnabled, channel.Status)
+		records := VideoScheduleRecords(c)
+		require.Len(t, records, 2)
+		assert.Equal(t, 3201, records[0].Recommended)
+		assert.Equal(t, VideoSchedAdmissionChannelUnavailable, records[0].Admission)
+		assert.Equal(t, 3204, records[1].Recommended)
+		assert.Empty(t, records[1].Admission)
+		for _, row := range records[1].Candidates {
+			assert.NotEqual(t, 3201, row.ID, "the fresh snapshot no longer holds the disabled channel")
+		}
+		_, leased := peekVideoProbeLease(c)
+		assert.False(t, leased, "the disabled channel's probe slot is released")
+	})
+
 	t.Run("no eligible candidate never falls back to ordinary selection", func(t *testing.T) {
 		channel, err := model.GetRandomSatisfiedChannelWithContext(request(VideoSchedDecision{Takeover: true}, 3204, 3207), "default", "videos-fast", 0, nil)
 		require.NoError(t, err)

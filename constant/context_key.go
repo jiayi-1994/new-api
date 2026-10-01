@@ -87,6 +87,10 @@ const (
 	// ContextKeyVideoSchedDecision holds the request's frozen video scheduling
 	// decision (service.VideoSchedDecision).
 	ContextKeyVideoSchedDecision ContextKey = "video_sched_decision"
+	// ContextKeyVideoSchedSetting replaces the live video scheduling setting
+	// for one request (*operation_setting.VideoSchedulingSetting); only the
+	// simulator sets it, to decide under its config_snapshot.
+	ContextKeyVideoSchedSetting ContextKey = "video_sched_setting"
 	// ContextKeyVideoSchedBoard holds every video scheduling selection of the
 	// request ([]service.VideoScheduleRecord), appended in selection order.
 	ContextKeyVideoSchedBoard ContextKey = "video_sched_board"

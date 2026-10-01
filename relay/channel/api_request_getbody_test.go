@@ -201,13 +201,45 @@ func (s *stubTaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, 
 func TestDoTaskApiRequestMarksSentFailuresOutcomeUnknown(t *testing.T) {
 	service.InitHttpClient()
 	gin.SetMode(gin.TestMode)
-	submit := func(baseURL string) error {
+	send := func(baseURL string) (*http.Response, error) {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
-		_, err := DoTaskApiRequest(&stubTaskAdaptor{baseURL: baseURL}, ctx, info, bytes.NewReader([]byte(`{}`)))
+		return DoTaskApiRequest(&stubTaskAdaptor{baseURL: baseURL}, ctx, info, bytes.NewReader([]byte(`{}`)))
+	}
+	submit := func(baseURL string) error {
+		_, err := send(baseURL)
 		return err
 	}
+
+	// The upstream accepted (202) but the body broke off: it may hold the task.
+	truncated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		_, _ = buf.WriteString("HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"id\":")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}))
+	defer truncated.Close()
+	resp, err := send(truncated.URL)
+	require.NoError(t, err)
+	_, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, relaycommon.ErrTaskSubmitOutcomeUnknown)
+
+	complete := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"task-1"}`))
+	}))
+	defer complete.Close()
+	resp, err = send(complete.URL)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err, "a complete body still ends in a plain io.EOF")
+	assert.JSONEq(t, `{"id":"task-1"}`, string(body))
 
 	dropped := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.ReadAll(r.Body)
@@ -216,7 +248,7 @@ func TestDoTaskApiRequestMarksSentFailuresOutcomeUnknown(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer dropped.Close()
-	err := submit(dropped.URL)
+	err = submit(dropped.URL)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, relaycommon.ErrTaskSubmitOutcomeUnknown)
 

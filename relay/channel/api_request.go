@@ -626,7 +626,22 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 		}
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
+	// The upstream has answered, so a body that breaks off (truncated JSON,
+	// dropped stream) leaves an accepted task possible as well.
+	resp.Body = submitResponseBody{resp.Body}
 	return resp, nil
+}
+
+// submitResponseBody marks every read failure of a task submit response as an
+// unknown submit outcome. io.EOF stays unwrapped: readers compare it with ==.
+type submitResponseBody struct{ io.ReadCloser }
+
+func (b submitResponseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("read submit response: %w: %w", common.ErrTaskSubmitOutcomeUnknown, err)
+	}
+	return n, err
 }
 
 func newTaskAPIRequest(c *gin.Context, fullRequestURL string, requestBody io.Reader) (*http.Request, error) {

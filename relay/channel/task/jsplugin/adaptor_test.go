@@ -81,6 +81,26 @@ func TestTaskAdaptorRejectsDeprecatedClientResponse(t *testing.T) {
 	assert.Contains(t, taskErr.Error.Error(), "must not return clientResponse")
 }
 
+// An accepted submission whose body is rejected locally may still hold an
+// upstream task, so it must not be retried on another channel.
+func TestTaskAdaptorOversizedAcceptedResponseHasUnknownOutcome(t *testing.T) {
+	plugin, err := pluginruntime.NewRegistry().Register(mockPlugin, pluginruntime.Options{})
+	require.NoError(t, err)
+	adaptor := New(plugin)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
+	adaptor.Init(info)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	oversized := `{"id":"upstream","pad":"` + strings.Repeat("x", maxTaskPluginPersistedJSONBytes) + `"}`
+	response := &http.Response{StatusCode: http.StatusAccepted, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(oversized))}
+
+	parsed, taskErr := adaptor.ParseResponse(c, response, info)
+
+	assert.Nil(t, parsed)
+	require.NotNil(t, taskErr)
+	assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
+}
+
 func TestTaskAdaptorBuildsMultipartFromOpaqueFileReference(t *testing.T) {
 	source := `
 export const meta = {apiVersion:1,key:"multipart",name:"Multipart",version:"1.0.0",author:{name:"Test"},models:["m"],fetchMode:"per_task"};
