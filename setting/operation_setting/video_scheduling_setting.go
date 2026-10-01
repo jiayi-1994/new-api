@@ -84,6 +84,35 @@ func VideoSchedMaxCostUSD() (float64, error) {
 	return bound, nil
 }
 
+const (
+	maxVideoProbeSlots        = 16
+	maxVideoSchedulingSeconds = 86400
+)
+
+// ValidateVideoSchedulingSnapshot applies the option checks to a whole
+// setting supplied outside the option table (the simulator's config_snapshot).
+// Mode is only checked to be known: the snapshot is never put into effect.
+func ValidateVideoSchedulingSnapshot(setting *VideoSchedulingSetting) error {
+	switch setting.Mode {
+	case VideoSchedulingModeOff, VideoSchedulingModeShadow, VideoSchedulingModeOn:
+	default:
+		return fmt.Errorf("invalid video scheduling mode %q", setting.Mode)
+	}
+	options, err := config.ConfigToMap(setting)
+	if err != nil {
+		return err
+	}
+	for field, value := range options {
+		if field == "mode" {
+			continue
+		}
+		if err := ValidateVideoSchedulingOption(videoSchedulingSettingName+"."+field, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ValidateVideoSchedulingOption validates one video_scheduling_setting.* option
 // so a saved value can never make the runtime policy invalid.
 func ValidateVideoSchedulingOption(key, value string) error {
@@ -140,16 +169,25 @@ func ValidateVideoSchedulingOption(key, value string) error {
 			}
 		}
 		return nil
-	case "min_samples", "explore_max_in_flight", "probe_max_in_flight":
+	case "min_samples", "explore_max_in_flight":
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer", field)
 		}
 		return nil
-	case "window_seconds", "probe_cooldown_sec":
+	case "probe_max_in_flight":
+		// Every selection reads each candidate's slots one key per slot.
 		n, err := strconv.Atoi(value)
-		if err != nil || n <= 0 {
-			return fmt.Errorf("%s must be a positive integer", field)
+		if err != nil || n < 0 || n > maxVideoProbeSlots {
+			return fmt.Errorf("%s must be an integer within [0,%d]", field, maxVideoProbeSlots)
+		}
+		return nil
+	case "window_seconds", "probe_cooldown_sec":
+		// A window is summed bucket by bucket on every health read, and the
+		// probe cooldown is capped at one day anyway.
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 || n > maxVideoSchedulingSeconds {
+			return fmt.Errorf("%s must be an integer within [1,%d]", field, maxVideoSchedulingSeconds)
 		}
 		return nil
 	case "min_submit_rate", "min_gen_rate", "explore_share", "probe_ratio":

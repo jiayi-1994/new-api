@@ -250,7 +250,7 @@ func TestVideoSubmitAndTerminalAttribution(t *testing.T) {
 		"client 400":        {&taskdto.TaskError{StatusCode: http.StatusBadRequest}, VideoOutcomeIgnored},
 		"client 408":        {&taskdto.TaskError{StatusCode: http.StatusRequestTimeout}, VideoOutcomeIgnored},
 		"local rejection":   {&taskdto.TaskError{StatusCode: http.StatusForbidden, LocalError: true}, VideoOutcomeIgnored},
-		"outcome unknown":   {unknown, VideoOutcomeIgnored},
+		"outcome unknown":   {unknown, VideoOutcomeFail},
 		"local 5xx ignored": {&taskdto.TaskError{StatusCode: http.StatusInternalServerError, LocalError: true}, VideoOutcomeIgnored},
 	} {
 		assert.Equal(t, tc.want, videoSubmitOutcome(tc.err), name)

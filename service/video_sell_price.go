@@ -31,8 +31,8 @@ const contextKeyVideoSellCache = "video_sched_sell_cache"
 //
 // A request that submission would reject for this plugin (missing or fixed
 // expression, incompatible shared-model expression, failing or invalid usage
-// hook, no per-call price) is unknown. The pre-group price is cached per
-// request by (plugin, mapped model); the effective group ratio is applied on
+// hook, no per-call price) is unknown. A known or free pre-group price is
+// cached per request by (plugin, mapped model); the effective group ratio is applied on
 // every call because auto groups change it between attempts.
 func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlugin, clientModel, mappedModel string, body any, action string) videosched.SellPrice {
 	cache, _ := c.Value(contextKeyVideoSellCache).(map[string]videosched.SellPrice)
@@ -44,7 +44,10 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 	sell, cached := cache[key]
 	if !cached {
 		sell = videoSellBeforeGroup(c, plugin, clientModel, mappedModel, body, action)
-		cache[key] = sell
+		// Unknown may come from a hook timeout, so a later attempt asks again.
+		if sell.Kind != videosched.SellUnknown {
+			cache[key] = sell
+		}
 	}
 	if sell.Kind != videosched.SellKnown {
 		return sell

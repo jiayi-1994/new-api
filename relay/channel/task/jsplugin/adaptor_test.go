@@ -81,24 +81,53 @@ func TestTaskAdaptorRejectsDeprecatedClientResponse(t *testing.T) {
 	assert.Contains(t, taskErr.Error.Error(), "must not return clientResponse")
 }
 
-// An accepted submission whose body is rejected locally may still hold an
-// upstream task, so it must not be retried on another channel.
-func TestTaskAdaptorOversizedAcceptedResponseHasUnknownOutcome(t *testing.T) {
-	plugin, err := pluginruntime.NewRegistry().Register(mockPlugin, pluginruntime.Options{})
-	require.NoError(t, err)
-	adaptor := New(plugin)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
-	adaptor.Init(info)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
-	oversized := `{"id":"upstream","pad":"` + strings.Repeat("x", maxTaskPluginPersistedJSONBytes) + `"}`
-	response := &http.Response{StatusCode: http.StatusAccepted, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(oversized))}
+// An accepted submission rejected locally (oversized body or task data, an
+// interrupted parse hook) may still hold an upstream task, so it must not be
+// retried on another channel. A plugin's own thrown error stays retryable.
+func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.T) {
+	const parse = `export function parseSubmitResponse(ctx, resp) {
+  return {
+    taskId: resp.body.id,
+    taskData: {accepted: true, status: resp.statusCode},
+  };
+}`
+	pad := strings.Repeat("x", maxTaskPluginPersistedJSONBytes)
+	for _, tc := range []struct {
+		name, parse, body string
+		cancel            bool
+		unknown           bool
+	}{
+		{name: "oversized body", parse: parse, body: `{"id":"upstream","pad":"` + pad + `"}`, unknown: true},
+		{name: "oversized task data", parse: strings.Replace(parse, "accepted: true", `accepted: "`+pad+`"`, 1), body: `{"id":"upstream"}`, unknown: true},
+		{name: "interrupted parse hook", parse: `export function parseSubmitResponse() { for (;;) {} }`, body: `{"id":"upstream"}`, cancel: true, unknown: true},
+		{name: "plugin error", parse: `export function parseSubmitResponse() { throw new Error("upstream said no"); }`, body: `{"id":"upstream"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin, err := pluginruntime.NewRegistry().Register(strings.Replace(mockPlugin, parse, tc.parse, 1), pluginruntime.Options{})
+			require.NoError(t, err)
+			adaptor := New(plugin)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
+			adaptor.Init(info)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			if tc.cancel {
+				ctx, cancel := context.WithCancel(c.Request.Context())
+				cancel()
+				c.Request = c.Request.WithContext(ctx)
+			}
+			response := &http.Response{StatusCode: http.StatusAccepted, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tc.body))}
 
-	parsed, taskErr := adaptor.ParseResponse(c, response, info)
+			parsed, taskErr := adaptor.ParseResponse(c, response, info)
 
-	assert.Nil(t, parsed)
-	require.NotNil(t, taskErr)
-	assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
+			assert.Nil(t, parsed)
+			require.NotNil(t, taskErr)
+			if tc.unknown {
+				assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
+			} else {
+				assert.NotErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
+			}
+		})
+	}
 }
 
 func TestTaskAdaptorBuildsMultipartFromOpaqueFileReference(t *testing.T) {

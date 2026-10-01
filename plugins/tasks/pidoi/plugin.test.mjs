@@ -95,3 +95,11 @@ test("A raw channel key and a resolved Bearer header both reach upstream as one 
     assert.equal(plugin.buildQueryRequest({ ...ctx, ...credentials }).headers.Authorization, "Bearer fixture-only-key", authHeader);
   }
 });
+
+test("Provider-side cancellations and constraint violations count against the upstream", () => {
+  for (const [reason, kind] of [
+    ["job cancelled by provider due to internal error", "upstream"],
+    ["constraint violation", "upstream"],
+    ["content policy violation", "user"],
+  ]) assert.equal(plugin.classifyFailure(reason), kind, reason);
+});

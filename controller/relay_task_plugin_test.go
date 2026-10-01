@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
@@ -347,6 +348,44 @@ func TestExecuteTaskSubmissionFirstAttemptFeedsVideoScheduling(t *testing.T) {
 	require.NoError(t, database.Where("task_id = ?", "task_public").First(&stored).Error)
 	require.NotNil(t, stored.PrivateData.SchedulingSummary)
 	assert.Equal(t, model.TaskSchedulingSummary{Model: "plugin-model", CapacityGroup: "acct"}, *stored.PrivateData.SchedulingSummary)
+	service.ObserveVideoTerminal(&stored, true)
+
+	// A submission failed by the client leaving is no sample against the upstream.
+	c = taskSubmissionTestContext()
+	c.Set("channel_id", channel.Id)
+	c.Set("channel_type", channel.Type)
+	requestContext, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestContext)
+	info = taskSubmissionRelayInfo(&taskSubmissionTestBilling{events: &events})
+	info.ChannelMeta, info.LockedChannel = nil, nil
+	_, taskErr = executeTaskSubmissionWith(c, info, func(_ *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type}
+		cancel()
+		return nil, service.TaskErrorWrapper(fmt.Errorf("do request failed: %w", context.Canceled), "do_request_failed", http.StatusInternalServerError)
+	})
+	require.NotNil(t, taskErr)
+	assert.Equal(t, "request_cancelled", taskErr.Code)
+	health, err = service.GetVideoChannelHealth(channel.Id, "plugin-model", 0)
+	require.NoError(t, err)
+	assert.Equal(t, videosched.HealthStat{Rate: 1, Samples: 1}, health.Submit)
+
+	// A channel locked by the origin task is never scheduled, but its real
+	// upstream load still feeds health and the in-flight count.
+	c = taskSubmissionTestContext()
+	info = taskSubmissionRelayInfo(&taskSubmissionTestBilling{events: &events})
+	info.LockedChannel = channel
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type}
+	_, taskErr = executeTaskSubmissionWith(c, info, func(_ *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		return &relay.TaskSubmitResult{UpstreamTaskID: "upstream-locked", Platform: constant.TaskPlatform("plugin")}, nil
+	})
+	require.Nil(t, taskErr)
+	health, err = service.GetVideoChannelHealth(channel.Id, "plugin-model", 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, health.Submit.Samples)
+	assert.Equal(t, 1, health.InFlight)
+	stored = model.Task{}
+	require.NoError(t, database.Where("channel_id = ? AND status <> ?", channel.Id, model.TaskStatusFailure).Last(&stored).Error)
+	require.NotNil(t, stored.PrivateData.SchedulingSummary)
 	service.ObserveVideoTerminal(&stored, true)
 }
 
@@ -765,7 +804,7 @@ func TestExecuteTaskSubmissionVideoSchedulingAutoGroupBudget(t *testing.T) {
 		wantStop   string
 	}{
 		{"takeover crosses only an exhausted group within one budget", service.VideoSchedDecision{Takeover: true}, true, []string{"vip", "default"}, "attempt_budget_exhausted"},
-		{"takeover without cross-group retry stops in its group", service.VideoSchedDecision{Takeover: true}, false, []string{"vip"}, "retry_status_matched"},
+		{"takeover without cross-group retry stops in its group", service.VideoSchedDecision{Takeover: true}, false, []string{"vip"}, "candidates_exhausted"},
 		{"shadow keeps the retry-index flow", service.VideoSchedDecision{Shadow: true}, true, []string{"auto", "vip", "default", "default"}, "retry_status_matched"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -791,6 +830,11 @@ func TestExecuteTaskSubmissionVideoSchedulingAutoGroupBudget(t *testing.T) {
 				return nil, service.TaskErrorWrapper(errors.New("bad gateway"), "fail_to_fetch_task", http.StatusBadGateway)
 			})
 			require.NotNil(t, taskErr)
+			if tc.decision.Takeover {
+				// Running out of candidates returns the last upstream error.
+				assert.Equal(t, http.StatusBadGateway, taskErr.StatusCode)
+				assert.Equal(t, "fail_to_fetch_task", taskErr.Code)
+			}
 
 			var groups []string
 			tried := map[int]bool{}

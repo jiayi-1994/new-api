@@ -179,6 +179,10 @@ const (
 	// VideoSchedAdmissionProbeTaken marks a probe choice whose slot another
 	// request took first; a new selection follows it.
 	VideoSchedAdmissionProbeTaken = "probe_slot_taken"
+	// VideoSchedAdmissionProbeError marks a probe choice whose slot could not
+	// be claimed because the store failed; the selection is decided again
+	// without probing.
+	VideoSchedAdmissionProbeError = "probe_slot_error"
 	// VideoSchedAdmissionChannelUnavailable marks a choice whose channel was
 	// disabled or left the request's group/model while it was scored; a new
 	// selection follows it.
@@ -189,9 +193,13 @@ func init() {
 	model.TierSelector = selectVideoChannel
 }
 
-// acquireVideoProbeSlot is AcquireVideoProbeSlot; tests replace it to lose the
-// slot race between a decision and its admission.
-var acquireVideoProbeSlot = AcquireVideoProbeSlot
+// acquireVideoProbeSlot is AcquireVideoProbeSlot and recheckVideoChannel is
+// model.CacheGetSatisfiedChannel; tests replace them to lose the races between
+// a decision and its admission.
+var (
+	acquireVideoProbeSlot = AcquireVideoProbeSlot
+	recheckVideoChannel   = model.CacheGetSatisfiedChannel
+)
 
 // VideoExploreSettings are the probe and explore parameters in effect for one
 // decision. They are host concepts, so they stay out of videosched.Policy.
@@ -347,52 +355,56 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 	// A probe that loses its slot to a concurrent request, or a choice whose
 	// channel was disabled or regrouped while it was scored, is decided again
 	// on a fresh snapshot under a new selection_seq, never silently under the
-	// old fingerprint. The bound only guards against a store that keeps
-	// failing.
+	// old fingerprint. A slot store that fails to write turns probing off for
+	// the rest of the selection instead of costing the request its channel.
+	// The bound only guards against a store that keeps failing.
+	probeOff := false
 	for range videoSchedProbeRounds {
 		channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
 		if err != nil {
 			return nil, err
 		}
 		input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, rand.Uint64())
+		if probeOff {
+			input.Explore.ProbeMaxInFlight = 0
+		}
 		choice := DecideVideoSchedule(input)
 		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore}
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
-		if choice.Best != nil {
-			record.Recommended = choice.Best.ID
+		if choice.Best == nil {
+			appendVideoScheduleRecord(c, record, choice.Board)
+			return nil, model.ErrTierSelectorNoCandidate
+		}
+		record.Recommended = choice.Best.ID
+		// Scoring ran without the cache lock (plugins, Redis), so the choice is
+		// checked against the live cache before it is admitted. The probe slot
+		// is claimed only afterwards: claiming starts the probe cooldown.
+		selected, available := recheckVideoChannel(group, modelName, filters, choice.Best.ID)
+		if !available {
+			record.Admission = VideoSchedAdmissionChannelUnavailable
+			appendVideoScheduleRecord(c, record, choice.Board)
+			continue
 		}
 		if choice.Probe {
 			acquired := false
 			for n := range input.Explore.ProbeMaxInFlight {
-				ok, err := acquireVideoProbeSlot(c, choice.Best.ID, n, probeTTL)
-				if err != nil {
-					logger.LogWarn(c, "video scheduling probe slot acquisition failed: channel=%d error=%v", choice.Best.ID, err)
+				acquired, err = acquireVideoProbeSlot(c, choice.Best.ID, n, probeTTL)
+				if err != nil || acquired {
 					break
 				}
-				if acquired = ok; acquired {
-					break
-				}
+			}
+			if err != nil {
+				logger.LogWarn(c, "video scheduling probe slot acquisition failed: channel=%d error=%v", choice.Best.ID, err)
+				record.Admission = VideoSchedAdmissionProbeError
+				appendVideoScheduleRecord(c, record, choice.Board)
+				probeOff = true
+				continue
 			}
 			if !acquired {
 				record.Admission = VideoSchedAdmissionProbeTaken
 				appendVideoScheduleRecord(c, record, choice.Board)
 				continue
 			}
-		}
-		if choice.Best == nil {
-			appendVideoScheduleRecord(c, record, choice.Board)
-			return nil, model.ErrTierSelectorNoCandidate
-		}
-		// Scoring ran without the cache lock (plugins, Redis), so the choice is
-		// checked against the live cache right before it is handed out.
-		selected, available := model.CacheGetSatisfiedChannel(group, modelName, filters, choice.Best.ID)
-		if !available {
-			if choice.Probe {
-				ReleaseUnpersistedVideoProbeLease(c)
-			}
-			record.Admission = VideoSchedAdmissionChannelUnavailable
-			appendVideoScheduleRecord(c, record, choice.Board)
-			continue
 		}
 		appendVideoScheduleRecord(c, record, choice.Board)
 		return selected, nil
@@ -519,8 +531,10 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 	health, err := GetVideoChannelHealth(channel.Id, clientModel, setting.MinSamples)
 	if err != nil {
 		// No last-known value is kept: an unreadable window counts as unproven
-		// rather than excluding every channel while the store is down.
+		// rather than excluding every channel while the store is down, but an
+		// unknown in-flight count is taken as full, like unreadable probe slots.
 		logger.LogWarn(c, "video scheduling health read failed: channel=%d error=%v", channel.Id, err)
+		candidate.InFlight = candidate.Capacity
 	} else {
 		candidate.Submit, candidate.Gen, candidate.InFlight, probe = health.Submit, health.Gen, health.InFlight, health.Probe
 	}
@@ -529,6 +543,7 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.GroupCapacity = quota
 		if candidate.GroupInFlight, err = GetVideoGroupInFlight(cfg.CapacityGroup); err != nil {
 			logger.LogWarn(c, "video scheduling group in-flight read failed: group=%q error=%v", cfg.CapacityGroup, err)
+			candidate.GroupInFlight = quota
 		}
 	}
 
@@ -620,8 +635,9 @@ type videoSpecResult struct {
 }
 
 // describeVideoSpec calls plugin's describeSpec on its own decoded body and
-// validates the answer. Results are cached per request by (plugin, mapped
-// model), so ignored descriptive keys are logged once per entry.
+// validates the answer. The plugin's answers, including thrown errors, are
+// cached per request by (plugin, mapped model), so ignored descriptive keys
+// are logged once per entry.
 func describeVideoSpec(c *gin.Context, plugin *jsplugin.LoadedPlugin, clientModel, mappedModel string, body any, action string) (videosched.Spec, error) {
 	cache, _ := c.Value(contextKeyVideoSpecCache).(map[string]videoSpecResult)
 	if cache == nil {
@@ -635,7 +651,12 @@ func describeVideoSpec(c *gin.Context, plugin *jsplugin.LoadedPlugin, clientMode
 	var result videoSpecResult
 	value, err := plugin.Engine.Call(c.Request.Context(), videoSchedSpecHook, videoUsageContext(c, clientModel, mappedModel, body, action, "spec"))
 	raw, isObject := value.(map[string]any)
+	var hookErr *jsplugin.HookError
 	switch {
+	case err != nil && !errors.As(err, &hookErr):
+		// A timeout or admission failure says nothing about the request: a
+		// later attempt in this request asks again.
+		return videosched.Spec{}, err
 	case err != nil:
 		result.err = err
 	case !isObject:

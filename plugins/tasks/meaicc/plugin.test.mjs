@@ -108,7 +108,18 @@ test("A cancelled upstream task is attributed as cancelled, not as a channel fai
   for (const body of [{ status: "cancelled" }, { status: "CANCELED" }, { status: "cancelled", error: "quota exhausted" }]) {
     const result = plugin.parseTaskResult({}, body);
     assert.equal(result.status, "FAILURE", JSON.stringify(body));
+    assert.match(result.reason, /^cancelled: /, JSON.stringify(body));
     assert.equal(plugin.classifyFailure(result.reason), "cancelled", JSON.stringify(body));
   }
   assert.equal(plugin.classifyFailure(plugin.parseTaskResult({}, { status: "failed" }).reason), "upstream");
+  const failed = plugin.parseTaskResult({}, { status: "failed", error: "job cancelled by provider due to internal error" });
+  assert.equal(plugin.classifyFailure(failed.reason), "upstream");
+});
+
+test("Provider-side cancellations and constraint violations count against the upstream", () => {
+  for (const [reason, kind] of [
+    ["job cancelled by provider due to internal error", "upstream"],
+    ["constraint violation", "upstream"],
+    ["content policy violation", "user"],
+  ]) assert.equal(plugin.classifyFailure(reason), kind, reason);
 });

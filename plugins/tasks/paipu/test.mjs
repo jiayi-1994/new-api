@@ -59,6 +59,13 @@ for (const test of fixture.cases.filter(test => (test.path || []).includes("deco
 }
 console.log("describeSpec contract checks passed");
 
+// Provider-side cancellations and constraint violations count against the upstream.
+for (const [reason, kind] of [
+  ["job cancelled by provider due to internal error", "upstream"],
+  ["constraint violation", "upstream"],
+  ["content policy violation", "user"],
+]) assert.equal(plugin.classifyFailure(reason), kind, reason);
+
 let failed = 0;
 for (const test of fixture.cases) {
   let hook = plugin[test.hook];

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -489,6 +490,13 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	headers := make(map[string][]string, len(resp.Header))
 	maps.Copy(headers, resp.Header)
 	value, err := a.plugin.Engine.Call(c.Request.Context(), "parseSubmitResponse", a.submitContext(c, info), map[string]any{"statusCode": resp.StatusCode, "headers": headers, "body": responseBody})
+	var hookErr *pluginruntime.HookError
+	if err != nil && resp.StatusCode/100 == 2 && !errors.As(err, &hookErr) {
+		// A timeout, cancellation or admission failure left a 2xx answer
+		// unread, so the upstream may hold the task. A thrown plugin error
+		// stays retryable: plugins use it for business error envelopes.
+		err = fmt.Errorf("%w: %w", relaycommon.ErrTaskSubmitOutcomeUnknown, err)
+	}
 	if err != nil {
 		logger.LogDebug(
 			c,
@@ -525,6 +533,9 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 			if err == nil {
 				err = fmt.Errorf("task data exceeds size limit")
 			}
+			// The upstream already returned a task ID; rejecting its data
+			// locally does not make a retry elsewhere safe.
+			err = fmt.Errorf("%w: %w", relaycommon.ErrTaskSubmitOutcomeUnknown, err)
 			return nil, service.TaskErrorWrapper(err, "plugin_submit_response_invalid", http.StatusBadGateway)
 		}
 	}

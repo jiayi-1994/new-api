@@ -38,7 +38,9 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		"capacity_groups":        `{"acct-a":20}`,
 		"min_submit_rate":        "0.8",
 		"min_samples":            "0",
-		"window_seconds":         "1800",
+		"window_seconds":         "86400",
+		"probe_max_in_flight":    "16",
+		"probe_cooldown_sec":     "86400",
 		"price_weight":           "0",
 		"max_cost_to_sell_ratio": "0",
 		"unknown_sell_policy":    "relative",
@@ -53,6 +55,8 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		"min_gen_rate":        "1.5",
 		"min_samples":         "-1",
 		"window_seconds":      "0",
+		"probe_max_in_flight": "17",
+		"probe_cooldown_sec":  "86401",
 		"tie_epsilon":         "NaN",
 		"quality_weight":      "Inf",
 		"unknown_sell_policy": "guess",
@@ -62,6 +66,16 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting."+field, value), field)
 	}
 	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.capacity_groups", `{"`+strings.Repeat("g", 65)+`":1}`), "group names follow the channel-side length limit")
+	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.window_seconds", "86401"), "a window is summed bucket by bucket on every read")
+
+	// The simulator's config_snapshot goes through the same checks.
+	snapshot := *GetVideoSchedulingSetting()
+	require.NoError(t, ValidateVideoSchedulingSnapshot(&snapshot))
+	snapshot.ProbeMaxInFlight = 100000000
+	assert.Error(t, ValidateVideoSchedulingSnapshot(&snapshot))
+	snapshot = *GetVideoSchedulingSetting()
+	snapshot.Mode = "auto"
+	assert.Error(t, ValidateVideoSchedulingSnapshot(&snapshot))
 	require.NoError(t, ValidateVideoSchedulingOption("other_setting.mode", "anything"))
 
 	require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.mode", "on"))

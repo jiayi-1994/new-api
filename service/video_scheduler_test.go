@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
@@ -541,23 +542,41 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		_, leased = peekVideoProbeLease(c)
 		assert.False(t, leased)
 		ReleaseUnpersistedVideoProbeLease(rival)
+		restartCooldown()
+
+		// A slot store that fails to write turns probing off for the rest of
+		// the selection rather than failing the request.
+		acquireVideoProbeSlot = func(*gin.Context, int, int, time.Duration) (bool, error) {
+			return false, errors.New("READONLY")
+		}
+		c = request(VideoSchedDecision{Takeover: true}, 3207)
+		channel, err = model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		assert.Equal(t, 3204, channel.Id)
+		records = VideoScheduleRecords(c)
+		require.Len(t, records, 2)
+		assert.Equal(t, VideoSchedAdmissionProbeError, records[0].Admission)
+		assert.False(t, records[1].Probe)
 	})
 
 	t.Run("a channel disabled while it was scored is decided again", func(t *testing.T) {
 		setting.ProbeRatio = 1
 		lastProbeKey, _ := videoProbeStateKeys(3201)
-		previous := acquireVideoProbeSlot
+		previous := recheckVideoChannel
 		t.Cleanup(func() {
 			setting.ProbeRatio = 0
-			acquireVideoProbeSlot = previous
+			recheckVideoChannel = previous
 			require.NoError(t, videoHealthStore().set(lastProbeKey, 0))
 			// Re-enabling only flips the status; a rebuild restores the index.
 			model.InitChannelCache()
 		})
-		// 3201 is probed; it is disabled after scoring, before submission.
-		acquireVideoProbeSlot = func(c *gin.Context, channelID, n int, ttl time.Duration) (bool, error) {
-			model.CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
-			return AcquireVideoProbeSlot(c, channelID, n, ttl)
+		// 3201 is chosen for a probe; it is disabled after scoring, before admission.
+		recheckVideoChannel = func(group, modelName string, filters []taskdto.ChannelFilter, channelID int) (*model.Channel, bool) {
+			if channelID == 3201 {
+				model.CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
+			}
+			return previous(group, modelName, filters, channelID)
 		}
 		c := request(VideoSchedDecision{Takeover: true}, 3207)
 		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
@@ -575,7 +594,10 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 			assert.NotEqual(t, 3201, row.ID, "the fresh snapshot no longer holds the disabled channel")
 		}
 		_, leased := peekVideoProbeLease(c)
-		assert.False(t, leased, "the disabled channel's probe slot is released")
+		assert.False(t, leased, "the disabled channel never claims a probe slot")
+		last, err := videoHealthStore().get([]string{lastProbeKey})
+		require.NoError(t, err)
+		assert.Zero(t, last[0], "a probe that was never admitted starts no cooldown")
 	})
 
 	t.Run("no eligible candidate never falls back to ordinary selection", func(t *testing.T) {

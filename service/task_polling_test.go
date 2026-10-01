@@ -15,6 +15,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -1040,4 +1041,48 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 			}
 		})
 	}
+}
+
+// userClassifyingAdaptor's plugin blames the user for every failure reason.
+type userClassifyingAdaptor struct{ scriptedPollingAdaptor }
+
+func (*userClassifyingAdaptor) ClassifyFailure(string) (string, bool) { return VideoFailureUser, true }
+
+// A poll failure escalation is host-detected, so it counts against the upstream
+// whatever the plugin classifier says, and releases the in-flight count once
+// even when a second escalation races it; a plugin-reported failure follows
+// the classifier.
+func TestPollFailureEscalationCountsAgainstUpstreamOnce(t *testing.T) {
+	truncate(t)
+	useVideoHealthBackend(t, "memory")
+	seedUser(t, 404, 10_000)
+	adaptor := &userClassifyingAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	newTask := func(id string) *model.Task {
+		task := makeTask(404, 9, 0, 0, BillingSourceWallet, 0)
+		task.TaskID = id
+		task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{Model: "m"}
+		require.NoError(t, model.DB.Create(task).Error)
+		VideoTaskPersisted(healthTestContext(), task)
+		return task
+	}
+	escalated := newTask("poll_failure_escalated")
+	fromStatus := escalated.Status
+	require.NoError(t, failTaskFromPoll(context.Background(), adaptor, escalated, fromStatus, "upstream task not found (HTTP 404)"))
+	require.NoError(t, failTaskFromPoll(context.Background(), adaptor, escalated, fromStatus, "upstream task not found (HTTP 404)"))
+	health, err := GetVideoChannelHealth(9, "m", 0)
+	require.NoError(t, err)
+	assert.Equal(t, videosched.HealthStat{Rate: 0, Samples: 1}, health.Gen)
+	assert.Zero(t, health.InFlight)
+
+	reported := newTask("plugin_reported_failure")
+	reported.Status, reported.FailReason = model.TaskStatusFailure, "invalid input"
+	finalizeTerminalTask(context.Background(), adaptor, reported, relaycommon.FailTaskInfo(reported.FailReason), false)
+	health, err = GetVideoChannelHealth(9, "m", 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, health.Gen.Samples, "the plugin blamed the user")
+	assert.Zero(t, health.InFlight)
 }

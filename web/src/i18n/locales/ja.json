@@ -6908,6 +6908,7 @@
     "User group (optional)": "ユーザーグループ（任意）",
     "Entry": "入口",
     "Protocol (optional)": "プロトコル（任意）",
+    "Path (optional, overrides protocol)": "パス（任意、プロトコルより優先）",
     "Seed (optional)": "シード（任意）",
     "Now (optional, RFC3339)": "現在時刻（任意、RFC3339）",
     "Request body": "リクエストボディ",

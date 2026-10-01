@@ -534,6 +534,13 @@ func executeTaskSubmissionWith(
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
+				// A taken-over request excludes the channels it already tried, so
+				// running out of them ends the retries: the client gets the last
+				// upstream error rather than a local "no channel" one.
+				if takeover && taskErr != nil {
+					policy.AddEvent(service.PolicyEvent{Decision: service.PolicyDecision{Action: "stop", Reason: "candidates_exhausted", Source: "video_scheduling"}})
+					break
+				}
 				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", channelErr.StatusCode)
 				break
 			}
@@ -555,11 +562,18 @@ func executeTaskSubmissionWith(
 
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
-		service.ObserveVideoSubmit(c, channel, relayInfo.OriginModelName, taskErr)
+		requestErr := c.Request.Context().Err()
 		if taskErr == nil {
 			submittedChannel = channel
 		}
-		if requestErr := c.Request.Context().Err(); requestErr != nil {
+		// A failure caused by the client leaving says nothing about the
+		// upstream; its unaccepted probe lease is only given back.
+		if taskErr == nil || requestErr == nil {
+			service.ObserveVideoSubmit(c, channel, relayInfo.OriginModelName, taskErr)
+		} else {
+			service.ReleaseUnpersistedVideoProbeLease(c)
+		}
+		if requestErr != nil {
 			diagnostics.cancelled("after_submit", retryParam.GetRetry()+1)
 			taskErr = service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
 			break

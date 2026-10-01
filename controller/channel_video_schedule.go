@@ -176,6 +176,10 @@ func SimulateVideoSchedule(c *gin.Context) {
 			common.ApiErrorMsg(c, "config_snapshot.window_seconds must equal the live window_seconds "+strconv.Itoa(live)+": health samples are bucketed by the live window")
 			return
 		}
+		if err := operation_setting.ValidateVideoSchedulingSnapshot(req.ConfigSnapshot); err != nil {
+			common.ApiErrorMsg(c, "invalid config_snapshot: "+err.Error())
+			return
+		}
 		setting = req.ConfigSnapshot
 	}
 

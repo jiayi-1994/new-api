@@ -375,7 +375,7 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 			continue
 		}
 		if terminalTransition {
-			finalizeTerminalTask(ctx, adaptor, task, &responseItem.TaskInfo)
+			finalizeTerminalTask(ctx, adaptor, task, &responseItem.TaskInfo, false)
 		}
 	}
 	return nil
@@ -617,16 +617,19 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	if shouldFinalizeBilling {
-		finalizeTerminalTask(ctx, adaptor, task, taskResult)
+		finalizeTerminalTask(ctx, adaptor, task, taskResult, false)
 	}
 
 	return nil
 }
 
 // finalizeTerminalTask 终态统一收尾（状态 CAS 赢家调用，恰好一次）：采样 + 结算 + 失败兜底退款。
-func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+// hostFailure marks a failure the host detected while polling (task not found,
+// poll errors); channel health attributes it to the upstream without asking
+// the plugin.
+func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo, hostFailure bool) {
 	perfmetrics.RecordTaskResult(task, taskResult)
-	ObserveVideoTerminal(task, false)
+	ObserveVideoTerminal(task, hostFailure)
 	billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
 	if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -819,7 +822,7 @@ func failTaskFromPoll(ctx context.Context, adaptor TaskPollingAdaptor, task *mod
 	if !won {
 		return nil
 	}
-	finalizeTerminalTask(ctx, adaptor, task, relaycommon.FailTaskInfo(reason))
+	finalizeTerminalTask(ctx, adaptor, task, relaycommon.FailTaskInfo(reason), true)
 	return nil
 }
 

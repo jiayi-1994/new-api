@@ -1969,7 +1969,7 @@
       ],
       "expected": {
         "status": "FAILURE",
-        "reason": "video generation cancelled"
+        "reason": "cancelled: video generation cancelled"
       }
     },
     {

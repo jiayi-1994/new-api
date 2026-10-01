@@ -6908,6 +6908,7 @@
     "User group (optional)": "Nhóm người dùng (tùy chọn)",
     "Entry": "Lối vào",
     "Protocol (optional)": "Giao thức (tùy chọn)",
+    "Path (optional, overrides protocol)": "Đường dẫn (tùy chọn, ghi đè giao thức)",
     "Seed (optional)": "Seed (tùy chọn)",
     "Now (optional, RFC3339)": "Thời điểm (tùy chọn, RFC3339)",
     "Request body": "Nội dung yêu cầu",

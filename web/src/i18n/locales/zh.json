@@ -6908,6 +6908,7 @@
     "User group (optional)": "用户分组（可选）",
     "Entry": "入口",
     "Protocol (optional)": "协议（可选）",
+    "Path (optional, overrides protocol)": "路径（可选，填写后覆盖协议）",
     "Seed (optional)": "种子（可选）",
     "Now (optional, RFC3339)": "当前时间（可选，RFC3339）",
     "Request body": "请求体",

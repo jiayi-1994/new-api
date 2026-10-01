@@ -239,8 +239,8 @@ function taskResult(body) {
   if ((typeof progress === "number" || (typeof progress === "string" && progress !== "")) && Number.isFinite(Number(progress)) && Number(progress) >= 0 && Number(progress) <= 100) result.progress = Number(progress) + "%";
   if (mapped === "FAILURE") result.reason = status.startsWith("failed:") ? raw.slice(raw.indexOf(":") + 1).trim() || taskFailure(record, body) : taskFailure(record, body);
   // classifyFailure only sees the reason, so a cancelled status must say so.
-  if ((status === "cancelled" || status === "canceled") && !/cancel/i.test(result.reason)) {
-    result.reason = result.reason === "video generation failed" ? "video generation cancelled" : "cancelled: " + result.reason;
+  if (status === "cancelled" || status === "canceled") {
+    result.reason = "cancelled: " + (result.reason === "video generation failed" ? "video generation cancelled" : result.reason);
   }
   return result;
 }
@@ -306,8 +306,10 @@ export function describeSpec(ctx) {
 // anything else counts against the upstream channel.
 export function classifyFailure(reason) {
   const text = String(reason || "").toLowerCase();
-  if (/cancel/.test(text)) return "cancelled";
-  if (/moderat|sensitive|content policy|violat|prohibit|nsfw|inappropriate|审核|违规|敏感|不合规|invalid (image|video|audio|input|prompt|url)|unsupported (image|video|audio)/.test(text)) return "user";
+  // Only the marker this plugin writes for a cancelled status, or an explicit
+  // user cancellation, is neutral; a provider-side cancellation is upstream.
+  if (/^cancelled: |cancell?ed by (the )?user\b/.test(text)) return "cancelled";
+  if (/moderat|sensitive|content policy|policy violation|content violation|violates (the )?(content|usage) polic|prohibit|nsfw|inappropriate|审核|违规|敏感|不合规|invalid (image|video|audio|input|prompt|url)|unsupported (image|video|audio)/.test(text)) return "user";
   return "upstream";
 }
 

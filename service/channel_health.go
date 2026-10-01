@@ -203,20 +203,21 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 }
 
 // ObserveVideoTerminal is called exactly once per polled task by the
-// state-transition winner: finalizeTerminalTask or the timeout sweep. It
-// releases the task's in-flight count.
-func ObserveVideoTerminal(task *model.Task, timedOut bool) {
-	observeVideoTerminal(task, timedOut, true)
+// state-transition winner: finalizeTerminalTask, the timeout sweep or the
+// realtime fetch. It releases the task's in-flight count. hostFailure marks a
+// failure the host detected itself (timeout, poll failure escalation).
+func ObserveVideoTerminal(task *model.Task, hostFailure bool) {
+	observeVideoTerminal(task, hostFailure, true)
 }
 
 // observeVideoTerminal records the generation outcome; counted tells whether
 // the task sits in the in-flight gauges (immediate results never do).
-func observeVideoTerminal(task *model.Task, timedOut, counted bool) {
+func observeVideoTerminal(task *model.Task, hostFailure, counted bool) {
 	summary := task.PrivateData.SchedulingSummary
 	if summary == nil {
 		return
 	}
-	outcome := videoTerminalOutcome(task, timedOut)
+	outcome := videoTerminalOutcome(task, hostFailure)
 	if outcome != VideoOutcomeIgnored {
 		field := videoGenOK
 		if outcome == VideoOutcomeFail {
@@ -534,11 +535,7 @@ func calibrateVideoInFlight() {
 		common.SysError("video scheduling calibration channel scan failed: " + err.Error())
 		return
 	}
-	ids := make([]int, 0, len(configs))
-	for id := range configs {
-		ids = append(ids, id)
-	}
-	channels, groups, err := model.CountActiveScheduledTasks(ids)
+	channels, groups, err := model.CountActiveScheduledTasks()
 	if err != nil {
 		// Keep the last gauge values: a failed read must not zero them.
 		common.SysError("video scheduling calibration count failed: " + err.Error())

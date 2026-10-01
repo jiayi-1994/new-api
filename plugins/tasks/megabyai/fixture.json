@@ -1672,7 +1672,7 @@
       ],
       "expected": {
         "status": "FAILURE",
-        "reason": "Cancelled by provider"
+        "reason": "cancelled: Cancelled by provider"
       }
     },
     {

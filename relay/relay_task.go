@@ -577,7 +577,13 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	}
 
 	if !snap.Equal(task.Snapshot()) {
-		_, _ = task.UpdateWithStatus(snap.Status)
+		won, _ := task.UpdateWithStatus(snap.Status)
+		// This fetch can win the terminal transition instead of the poller, so
+		// it also closes the task's video scheduling accounting.
+		wasTerminal := snap.Status == model.TaskStatusSuccess || snap.Status == model.TaskStatusFailure
+		if won && !wasTerminal && (task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure) {
+			service.ObserveVideoTerminal(task, false)
+		}
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理

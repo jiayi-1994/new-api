@@ -6908,6 +6908,7 @@
     "User group (optional)": "Groupe utilisateur (facultatif)",
     "Entry": "Entrée",
     "Protocol (optional)": "Protocole (facultatif)",
+    "Path (optional, overrides protocol)": "Chemin (facultatif, remplace le protocole)",
     "Seed (optional)": "Graine (facultatif)",
     "Now (optional, RFC3339)": "Maintenant (facultatif, RFC3339)",
     "Request body": "Corps de la requête",

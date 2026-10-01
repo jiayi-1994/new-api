@@ -1,8 +1,8 @@
 name: Publish Docker image (GHCR and Docker Hub)
 
 # Fork-specific build: pushes to ghcr.io/<owner>/new-api and Docker Hub.
-# GHCR uses GITHUB_TOKEN; Docker Hub requires DOCKERHUB_USERNAME and
-# DOCKERHUB_TOKEN repository secrets.
+# GHCR uses GITHUB_TOKEN; Docker Hub is pushed only when the DOCKERHUB_USERNAME
+# and DOCKERHUB_TOKEN repository secrets are both set.
 on:
   workflow_dispatch:
   push:
@@ -26,7 +26,7 @@ concurrency:
 jobs:
   verify:
     name: Verify video download flow (Linux)
-    if: github.ref_type == 'branch' && (contains(fromJSON('["v1.0", "v1.1", "v1.3", "v1.4"]'), github.ref_name) || startsWith(github.ref_name, 'feature/'))
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'branch' && (contains(fromJSON('["v1.0", "v1.1", "v1.3", "v1.4"]'), github.ref_name) || startsWith(github.ref_name, 'feature/')))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -59,6 +59,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - name: Check out code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -79,6 +81,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
         with:
           registry: docker.io
@@ -100,10 +103,16 @@ jobs:
           fi
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          images="$IMAGE"
+          if [ "$HAS_DOCKERHUB" = "true" ]; then
+            images="$images $DOCKERHUB_IMAGE"
+          else
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set; pushing to GHCR only"
+          fi
           # Keep :latest on the established release branch.
           {
             echo "tags<<TAGS_EOF"
-            for image in "$IMAGE" "$DOCKERHUB_IMAGE"; do
+            for image in $images; do
               echo "${image}:${branch}"
               echo "${image}:${branch}-${sha}"
               if [ "${GITHUB_REF}" = "refs/heads/${LATEST_BRANCH}" ]; then

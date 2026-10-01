@@ -179,31 +179,34 @@ func TestVideoSchedulingCalibrationQueries(t *testing.T) {
 			require.Len(t, configs, 1, "only decodable scheduling configs are returned")
 			assert.Equal(t, "acct", configs[scheduled.Id].CapacityGroup)
 
+			channels, groups, err := CountActiveScheduledTasks()
+			require.NoError(t, err)
+			assert.Empty(t, channels)
+			assert.Empty(t, groups)
+
 			for i, row := range []struct {
-				channel int
-				status  TaskStatus
-				group   string
-				tracked bool
+				channel  int
+				status   TaskStatus
+				progress string
+				group    string
+				tracked  bool
 			}{
-				{scheduled.Id, TaskStatusSubmitted, "acct", true}, {scheduled.Id, TaskStatusInProgress, "old", true},
-				{scheduled.Id, TaskStatusUnknown, "", true}, {scheduled.Id, TaskStatusQueued, "", false},
-				{scheduled.Id, TaskStatusSuccess, "acct", true}, {scheduled.Id, TaskStatusFailure, "acct", true},
-				{plain.Id, TaskStatusQueued, "acct", true},
+				{scheduled.Id, TaskStatusSubmitted, "", "acct", true}, {scheduled.Id, TaskStatusInProgress, "40%", "old", true},
+				{scheduled.Id, TaskStatusUnknown, "", "", true}, {scheduled.Id, TaskStatusQueued, "", "", false},
+				{scheduled.Id, TaskStatusSuccess, "100%", "acct", true}, {scheduled.Id, TaskStatusFailure, "100%", "acct", true},
+				{scheduled.Id, TaskStatusInProgress, "100%", "acct", true},
+				{plain.Id, TaskStatusQueued, "", "acct", true},
 			} {
-				task := &Task{TaskID: fmt.Sprintf("video-%d", i), ChannelId: row.channel, Status: row.status}
+				task := &Task{TaskID: fmt.Sprintf("video-%d", i), ChannelId: row.channel, Status: row.status, Progress: row.progress}
 				if row.tracked {
 					task.PrivateData.SchedulingSummary = &TaskSchedulingSummary{Model: "m", CapacityGroup: row.group}
 				}
 				require.NoError(t, db.Create(task).Error)
 			}
-			channels, groups, err := CountActiveScheduledTasks([]int{scheduled.Id, corrupt.Id})
+			channels, groups, err = CountActiveScheduledTasks()
 			require.NoError(t, err)
-			assert.Equal(t, map[int]int64{scheduled.Id: 3}, channels, "terminal, summary-less and unlisted-channel tasks are not counted")
-			assert.Equal(t, map[string]int64{"acct": 1, "old": 1}, groups, "groups follow the capacity group saved at submit")
-			channels, groups, err = CountActiveScheduledTasks(nil)
-			require.NoError(t, err)
-			assert.Empty(t, channels)
-			assert.Empty(t, groups)
+			assert.Equal(t, map[int]int64{scheduled.Id: 3, plain.Id: 1}, channels, "terminal, summary-less and stuck 100% tasks are not counted")
+			assert.Equal(t, map[string]int64{"acct": 2, "old": 1}, groups, "groups follow the capacity group saved at submit, whatever the channel's current config")
 		})
 	}
 }

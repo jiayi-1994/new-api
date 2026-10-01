@@ -116,6 +116,14 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('the default protocol entry sends the protocol without a path that would override it', async () => {
+  const post = await runSimulation({ success: true, data: simulation })
+
+  const body = post.mock.calls[0][1] as Record<string, unknown>
+  expect(body.protocol).toBe('openai_video')
+  expect(body.path).toBeUndefined()
+})
+
 test('an invalid quote shows no cost instead of 0 and keeps its exclusion reason', async () => {
   await runSimulation({ success: true, data: simulation })
 

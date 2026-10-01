@@ -73,8 +73,8 @@ const INITIAL_INPUT: SimulatorInput = {
   group: 'default',
   userGroup: '',
   entry: 'protocol',
-  protocol: '',
-  path: '/v1/videos',
+  protocol: 'openai_video',
+  path: '',
   pluginKey: '',
   requestBody: '{\n  "model": "",\n  "prompt": "test"\n}',
   healthOverride: '',
@@ -347,7 +347,13 @@ export function VideoScheduleSimulatorDialog(
           {input.entry === 'protocol'
             ? textField('protocol', t('Protocol (optional)'), 'openai_video')
             : textField('pluginKey', t('Plugin key'))}
-          {textField('path', t('Path'), '/v1/videos')}
+          {textField(
+            'path',
+            input.entry === 'protocol'
+              ? t('Path (optional, overrides protocol)')
+              : t('Path'),
+            '/v1/videos'
+          )}
           {textField('seed', t('Seed (optional)'))}
           {textField(
             'now',

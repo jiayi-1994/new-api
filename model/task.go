@@ -659,22 +659,21 @@ type TaskQuotaUsage struct {
 	Count float64 `json:"count"`
 }
 
-// CountActiveScheduledTasks counts the non-terminal tasks of the given
-// channels that carry a SchedulingSummary, per channel and per the capacity
-// group saved in that summary: the same ownership the in-flight gauges are
-// incremented and released by. Tasks without a summary are not counted. A
-// query or decode error is returned rather than zero counts so callers never
-// reset gauges on a failed read.
-func CountActiveScheduledTasks(channelIDs []int) (map[int]int64, map[string]int64, error) {
+// CountActiveScheduledTasks counts the unfinished tasks that carry a
+// SchedulingSummary, per channel and per the capacity group saved in that
+// summary: the same ownership the in-flight gauges are incremented and
+// released by. Tasks of every channel are counted, so a group keeps the tasks
+// of a channel whose scheduling config was removed. Tasks stuck at 100%
+// progress are left out like polling and the timeout sweep leave them out:
+// nothing would ever release them. A query error is returned rather than zero
+// counts so callers never reset gauges on a failed read.
+func CountActiveScheduledTasks() (map[int]int64, map[string]int64, error) {
 	channels, groups := map[int]int64{}, map[string]int64{}
-	if len(channelIDs) == 0 {
-		return channels, groups, nil
-	}
-	// ponytail: loads every active task of tracked channels each round; page
-	// with FindInBatches if active tasks grow into the tens of thousands.
+	// ponytail: loads every unfinished task each round (the poller does the
+	// same); page with FindInBatches if they grow into the tens of thousands.
 	var tasks []Task
 	err := DB.Select("id", "channel_id", "private_data").
-		Where("channel_id IN ?", channelIDs).
+		Where("progress != ?", "100%").
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
 		Find(&tasks).Error
 	if err != nil {
