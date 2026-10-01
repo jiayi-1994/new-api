@@ -18,6 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from '@tanstack/react-router'
+import {
   cleanup,
   fireEvent,
   render,
@@ -37,6 +43,8 @@ import { VideoSchedulingSettingsSection } from '../video-scheduling-settings-sec
 
 const liveSettings = {
   'video_scheduling_setting.mode': 'shadow',
+  'video_scheduling_setting.audit_enabled': true,
+  'video_scheduling_setting.audit_retention_days': 30,
   'video_scheduling_setting.models': [],
   'video_scheduling_setting.price_weight': 0.5,
   'video_scheduling_setting.quality_weight': 0.3,
@@ -60,6 +68,12 @@ let applyServerValue: (key: string, value: string) => void
 
 function Harness() {
   const [client] = useState(() => new QueryClient())
+  const [router] = useState(() =>
+    createRouter({
+      routeTree: createRootRoute(),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    })
+  )
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
   const [settings, setSettings] = useState(liveSettings)
   applyServerValue = (key, value) =>
@@ -72,10 +86,12 @@ function Harness() {
     }))
   return (
     <QueryClientProvider client={client}>
-      <div ref={setActions} />
-      <SettingsPageProvider actionsContainer={actions}>
-        <VideoSchedulingSettingsSection settings={settings} />
-      </SettingsPageProvider>
+      <RouterContextProvider router={router}>
+        <div ref={setActions} />
+        <SettingsPageProvider actionsContainer={actions}>
+          <VideoSchedulingSettingsSection settings={settings} />
+        </SettingsPageProvider>
+      </RouterContextProvider>
     </QueryClientProvider>
   )
 }
@@ -103,6 +119,35 @@ async function chooseMode(
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+})
+
+test('audit collection and retention save independently and reject retention below seven days', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  expect(
+    screen.getByRole('link', { name: 'Open scheduling audit' })
+  ).toHaveAttribute('href', expect.stringContaining('/video-scheduling/audit'))
+  await user.click(
+    screen.getByRole('switch', { name: 'Collect scheduling audits' })
+  )
+  fireEvent.change(screen.getByLabelText('Audit retention (days)'), {
+    target: { value: '6' },
+  })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(
+    await screen.findByText('Audit retention must be between 7 and 180 days')
+  ).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Audit retention (days)'), {
+    target: { value: '14' },
+  })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
+  expect(put.mock.calls.map((call) => call[1])).toEqual([
+    { key: 'video_scheduling_setting.audit_enabled', value: 'false' },
+    { key: 'video_scheduling_setting.audit_retention_days', value: '14' },
+  ])
 })
 
 test('the saved tri-state mode is shown and a new mode saves as its option value', async () => {

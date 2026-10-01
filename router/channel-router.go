@@ -30,6 +30,11 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 
 	// The simulator runs task plugin hooks on an arbitrary request body.
 	channelRoute.POST("/video_schedule/simulate", middleware.RootAuth(), controller.SimulateVideoSchedule)
+	// Historical snapshots contain procurement quotes and plugin metadata.
+	channelRoute.GET("/video_schedule/audits", middleware.RootAuth(), middleware.DisableCache(), controller.ListVideoScheduleAudits)
+	channelRoute.GET("/video_schedule/audits/:request_id", middleware.RootAuth(), middleware.DisableCache(), controller.GetVideoScheduleAudit)
+	channelRoute.GET("/video_schedule/audit_stats", middleware.RootAuth(), middleware.DisableCache(), controller.GetVideoScheduleAuditStats)
+	channelRoute.GET("/video_schedule/audit_export", middleware.RootAuth(), middleware.DisableCache(), controller.ExportVideoScheduleAudits)
 
 	for _, route := range channelPermissionRoutes {
 		channelRoute.Handle(route.method, route.path,

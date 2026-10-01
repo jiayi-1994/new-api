@@ -571,6 +571,7 @@ func executeTaskSubmissionWith(
 		if taskErr == nil || requestErr == nil {
 			service.ObserveVideoSubmit(c, channel, relayInfo.OriginModelName, taskErr)
 		} else {
+			policy.AddEvent(service.PolicyEvent{ChannelID: channel.Id, Decision: service.PolicyDecision{Action: "cancelled", Reason: "client_disconnected", Source: "local"}})
 			service.ReleaseUnpersistedVideoProbeLease(c)
 		}
 		if requestErr != nil {

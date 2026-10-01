@@ -654,7 +654,7 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 				rejectedPlugins[detail] = append(rejectedPlugins[detail], candidate.Plugin.Meta.Key)
 				continue
 			}
-			candidate.DecodedBody = result["requestBody"]
+			candidate.DecodedBody, candidate.DecodedBodyPresent = result["requestBody"]
 			candidate.DecodedAction, _ = result["action"].(string)
 			accepted = append(accepted, candidate)
 			if resolved == nil {

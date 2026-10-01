@@ -43,9 +43,11 @@ func Distribute() func(c *gin.Context) {
 				// Status is still the default 200 here; the outer recovery
 				// writes the 500 once the original value is re-raised.
 				service.LogVideoScheduleSummary(c, true)
+				service.EnqueueVideoScheduleAudit(c, true)
 				panic(recovered)
 			}
 			service.LogVideoScheduleSummary(c, false)
+			service.EnqueueVideoScheduleAudit(c, false)
 			if c.Writer.Status() >= 400 {
 				service.RecordRequestPolicyTermination(c, types.NewErrorWithStatusCode(errors.New("request rejected"), types.ErrorCodeInvalidRequest, c.Writer.Status(), types.ErrOptionWithSkipRetry()))
 			}

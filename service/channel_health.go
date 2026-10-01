@@ -141,6 +141,7 @@ func recordVideoSamples(channelID int, modelName, field string) {
 // attempt did not turn into an accepted task is released at once, and a
 // failure attributed to the upstream extends the probe cooldown.
 func ObserveVideoSubmit(c *gin.Context, channel *model.Channel, modelName string, taskErr *taskdto.TaskError) {
+	captureVideoAuditSubmit(c, channel.Id, taskErr)
 	outcome := videoSubmitOutcome(taskErr)
 	if taskErr != nil {
 		if lease, ok := takeVideoProbeLease(c, channel); ok {
@@ -184,14 +185,33 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 // until one of the terminal paths releases it.
 func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 	summary := task.PrivateData.SchedulingSummary
-	if summary == nil {
-		return
+	audit := videoScheduleAuditState(c)
+	if audit != nil {
+		id := task.ID
+		audit.TaskPK, audit.TaskID, audit.Platform = &id, task.TaskID, string(task.Platform)
 	}
-	if summary.ProbeSlot != nil {
+	if summary != nil && summary.ProbeSlot != nil {
 		c.Set(string(constant.ContextKeyVideoSchedProbeLease), nil)
 	}
 	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
-		observeVideoTerminal(task, false, false)
+		if summary == nil && audit == nil {
+			return
+		}
+		outcome, attribution := videoTerminalAttribution(task, false)
+		if audit != nil {
+			observedAt := time.Now().UnixMilli()
+			audit.TaskStatus, audit.TerminalClass, audit.TerminalAt = string(task.Status), attribution, &observedAt
+			audit.TerminalHealth = "ignored"
+			if outcome == VideoOutcomeSuccess {
+				audit.TerminalHealth = "success"
+			} else if outcome == VideoOutcomeFail {
+				audit.TerminalHealth = "fail"
+			}
+		}
+		observeVideoTerminal(task, false, outcome)
+		return
+	}
+	if summary == nil {
 		return
 	}
 	store := videoHealthStore()
@@ -207,17 +227,18 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 // realtime fetch. It releases the task's in-flight count. hostFailure marks a
 // failure the host detected itself (timeout, poll failure escalation).
 func ObserveVideoTerminal(task *model.Task, hostFailure bool) {
-	observeVideoTerminal(task, hostFailure, true)
+	outcome, attribution := videoTerminalAttribution(task, hostFailure)
+	ObserveVideoScheduleAuditTerminal(task, attribution, outcome)
+	observeVideoTerminal(task, true, outcome)
 }
 
 // observeVideoTerminal records the generation outcome; counted tells whether
 // the task sits in the in-flight gauges (immediate results never do).
-func observeVideoTerminal(task *model.Task, hostFailure, counted bool) {
+func observeVideoTerminal(task *model.Task, counted bool, outcome VideoOutcome) {
 	summary := task.PrivateData.SchedulingSummary
 	if summary == nil {
 		return
 	}
-	outcome := videoTerminalOutcome(task, hostFailure)
 	if outcome != VideoOutcomeIgnored {
 		field := videoGenOK
 		if outcome == VideoOutcomeFail {

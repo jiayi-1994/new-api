@@ -23,6 +23,34 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 	service.RegisterSystemTaskHandler(taskArtifactSyncHandler{})
+	service.RegisterSystemTaskHandler(videoScheduleAuditHandler{})
+}
+
+// Reconciliation and retention share the system task's cross-node lease. Keep
+// running after collection is disabled so already registered tasks can finish.
+type videoScheduleAuditHandler struct{}
+
+func (videoScheduleAuditHandler) Type() string            { return model.SystemTaskTypeVideoScheduleAudit }
+func (videoScheduleAuditHandler) Enabled() bool           { return true }
+func (videoScheduleAuditHandler) Interval() time.Duration { return time.Minute }
+func (videoScheduleAuditHandler) NewPayload() any         { return nil }
+func (videoScheduleAuditHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	now := time.Now()
+	repaired, err := model.ReconcileVideoScheduleAudits(ctx, now)
+	var deleted int64
+	if err == nil {
+		days := operation_setting.GetVideoSchedulingSetting().AuditRetentionDays
+		if days < 7 || days > 180 {
+			days = 30
+		}
+		deleted, err = model.DeleteExpiredVideoScheduleAudits(ctx, now.Add(-time.Duration(days)*24*time.Hour).UnixMilli())
+	}
+	status := model.SystemTaskStatusSucceeded
+	if err != nil {
+		service.MarkVideoScheduleAuditMaintenanceFailure(err)
+		status = model.SystemTaskStatusFailed
+	}
+	finishSystemTaskHandler(task, runnerID, status, map[string]any{"reconciled": repaired, "deleted": deleted}, err)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

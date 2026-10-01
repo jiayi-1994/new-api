@@ -1,11 +1,14 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -18,16 +21,480 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/plugins"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func TestVideoScheduleAuditKeepsShadowTerminalAfterOffAndPreservesLogs(t *testing.T) {
+	previousErrorLogs, previousConsumeLogs := constant.ErrorLogEnabled, common.LogConsumeEnabled
+	constant.ErrorLogEnabled, common.LogConsumeEnabled = false, false
+	t.Cleanup(func() { constant.ErrorLogEnabled, common.LogConsumeEnabled = previousErrorLogs, previousConsumeLogs })
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
+	previousDB, previousWriter := model.DB, videoAuditQueue
+	model.DB, videoAuditQueue = db, newVideoAuditWriter()
+	t.Cleanup(func() { model.DB, videoAuditQueue = previousDB, previousWriter })
+	setVideoSchedulingForTest(t, "shadow")
+	for _, immediate := range []bool{false, true} {
+		t.Run(fmt.Sprint("immediate=", immediate), func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			requestID := fmt.Sprint("audit-shadow-", immediate)
+			c.Set(common.RequestIdKey, requestID)
+			c.Set("resolved_task_model", "video")
+			c.Set("channel_id", 7)
+			decision := VideoSchedDecision{Shadow: true}
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+			freezeVideoScheduleAudit(c, decision, true)
+			channel := &model.Channel{Id: 7} // no cost table, hence no SchedulingSummary
+			RequestPolicy(c).BeginAttempt(channel, "default")
+			captureVideoAuditSubmit(c, 7, nil)
+			input := VideoDecisionInput{Now: time.Now().UTC().Truncate(time.Second), Seed: 42}
+			fingerprint, _, err := VideoDecisionFingerprint(input)
+			require.NoError(t, err)
+			record := VideoScheduleRecord{Mode: "shadow", SelectionSeq: 1, AttemptSeq: 1, Selected: 7, Recommended: 9, Input: &input, Fingerprint: fingerprint, Candidates: []VideoScheduleRow{{ID: 7}}}
+			before, err := common.Marshal(record)
+			require.NoError(t, err)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedBoard, []VideoScheduleRecord{record})
+			task := &model.Task{ID: 123, TaskID: "task", Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{Execution: &model.TaskExecutionSnapshot{RequestID: requestID}}}
+			if immediate {
+				task.Status = model.TaskStatusSuccess
+			}
+			operation_setting.GetVideoSchedulingSetting().Mode = "off"
+			VideoTaskPersisted(c, task)
+			EnqueueVideoScheduleAudit(c, false)
+			videoAuditQueue.flush(context.Background())
+			EnqueueVideoScheduleAudit(c, false)
+			if !immediate {
+				task.Status = model.TaskStatusSuccess
+				ObserveVideoTerminal(task, false)
+			}
+			got, err := model.GetVideoScheduleAudit(context.Background(), requestID)
+			require.NoError(t, err)
+			assert.Equal(t, string(model.TaskStatusSuccess), got.Run.TaskStatus)
+			assert.Equal(t, 1, got.Run.SubmitAccepted)
+			require.Len(t, got.Decisions, 1)
+			assert.Equal(t, fingerprint, got.Decisions[0].Fingerprint)
+			var frozen VideoDecisionInput
+			require.NoError(t, common.UnmarshalJsonStr(string(got.Decisions[0].InputJSON), &frozen))
+			storedHash, _, err := VideoDecisionFingerprint(frozen)
+			require.NoError(t, err)
+			assert.Equal(t, fingerprint, storedHash)
+			after, err := common.Marshal(VideoScheduleRecords(c)[0])
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after), "private input never changes legacy log JSON")
+		})
+	}
+	for _, tc := range []struct {
+		name, reason, class, health string
+		timedOut                    bool
+	}{
+		{"timeout", "任务超时", "host", "fail", true},
+		{"poll escalation", "poll failures", "host", "fail", false},
+		{"user failure", "user fixture", "user", "ignored", false},
+		{"cancelled", "cancel fixture", "cancelled", "ignored", false},
+		{"unknown", "unknown fixture", "unknown", "fail", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requestID := "terminal-" + tc.name
+			task := &model.Task{Status: model.TaskStatusFailure, FailReason: tc.reason, PrivateData: model.TaskPrivateData{Execution: &model.TaskExecutionSnapshot{RequestID: requestID}}}
+			require.NoError(t, model.InsertVideoScheduleAudit(context.Background(), &model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: requestID, StartedAt: time.Now().Add(-time.Minute).UnixMilli()}}))
+			outcome := VideoOutcomeFail
+			if tc.health == "ignored" {
+				outcome = VideoOutcomeIgnored
+			}
+			if tc.class == "host" {
+				ObserveVideoTerminal(task, true)
+			} else {
+				ObserveVideoScheduleAuditTerminal(task, tc.class, outcome)
+			}
+			got, err := model.GetVideoScheduleAudit(context.Background(), requestID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.class, got.Run.TerminalClass)
+			assert.Equal(t, tc.health, got.Run.TerminalHealth)
+			assert.Equal(t, tc.timedOut, got.Run.TimedOut)
+			ObserveVideoScheduleAuditTerminal(task, "upstream", VideoOutcomeFail)
+			again, err := model.GetVideoScheduleAudit(context.Background(), requestID)
+			require.NoError(t, err)
+			assert.Equal(t, got.Run.TerminalObservedAt, again.Run.TerminalObservedAt)
+			assert.Equal(t, tc.class, again.Run.TerminalClass)
+		})
+	}
+}
+
+func TestVideoScheduleAuditDistinguishesUnknownCancelledAndAcceptedUnpersisted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		taskErr *taskdto.TaskError
+		cancel  bool
+		outcome string
+	}{
+		{"rejected", &taskdto.TaskError{StatusCode: 502}, false, "rejected"},
+		{"local", &taskdto.TaskError{LocalError: true, StatusCode: 400}, false, "local_failure"},
+		{"unknown", &taskdto.TaskError{Error: fmt.Errorf("transport: %w", relaycommon.ErrTaskSubmitOutcomeUnknown), StatusCode: 502}, false, "outcome_unknown"},
+		{"cancelled", &taskdto.TaskError{StatusCode: 502}, true, "cancelled"},
+		{"accepted", nil, false, "persistence_failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(common.RequestIdKey, tc.name)
+			decision := VideoSchedDecision{Takeover: true}
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+			freezeVideoScheduleAudit(c, decision, true)
+			RequestPolicy(c).BeginAttempt(&model.Channel{Id: 1}, "default")
+			captureVideoAuditSubmit(c, 1, tc.taskErr)
+			if tc.cancel {
+				RequestPolicy(c).AddEvent(PolicyEvent{ChannelID: 1, Decision: PolicyDecision{Action: "cancelled"}})
+			}
+			audit, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.outcome, audit.Run.RequestOutcome)
+			if tc.name == "unknown" {
+				assert.Equal(t, 1, audit.Run.SubmitUnknown)
+				assert.Zero(t, audit.Run.SubmitRejected)
+			}
+			if tc.cancel {
+				assert.Equal(t, 1, audit.Run.SubmitCancelled)
+				assert.Zero(t, audit.Run.SubmitRejected)
+			}
+		})
+	}
+	for _, assemblyFailed := range []bool{false, true} {
+		c := newVideoSchedTestContext(t)
+		c.Set(common.RequestIdKey, "no-task-no-selection")
+		decision := VideoSchedDecision{Shadow: true}
+		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+		freezeVideoScheduleAudit(c, decision, true)
+		if assemblyFailed {
+			recordVideoAuditAssemblyError(c)
+		}
+		audit, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+		require.NoError(t, err)
+		assert.Nil(t, audit.Run.TaskPK)
+		assert.Empty(t, audit.Decisions)
+		if assemblyFailed {
+			assert.Equal(t, "candidate_snapshot_failed", audit.Run.AssemblyError)
+			assert.Equal(t, "internal_failure", audit.Run.RequestOutcome)
+		} else {
+			assert.Equal(t, "missing_decisions", audit.Run.DataIssue)
+		}
+	}
+}
+
+func TestVideoScheduleAuditWriterBoundsRecoveryAndShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		size, count int
+	}{{"request cap", 1, videoAuditQueueLimit}, {"byte cap", videoAuditByteLimit, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := newVideoAuditWriter()
+			for i := range tc.count {
+				require.True(t, writer.enqueue(&model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: fmt.Sprint(i)}}, tc.size))
+			}
+			assert.False(t, writer.enqueue(&model.VideoScheduleAudit{}, 1))
+			assert.EqualValues(t, 1, writer.status.Dropped)
+			assert.Equal(t, "queue_full_or_stopped", writer.status.LastIssue)
+		})
+	}
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "writer.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	previous := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previous; sqlDB, _ := db.DB(); _ = sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
+	writer := newVideoAuditWriter()
+	require.True(t, writer.enqueue(&model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: "write-retry"}}, 100))
+	failures := 0
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("audit_transient", func(tx *gorm.DB) {
+		if failures < 2 {
+			failures++
+			tx.AddError(errors.New("injected temporary outage"))
+		}
+	}))
+	writer.flush(context.Background())
+	assert.EqualValues(t, 1, writer.status.Written)
+	assert.Zero(t, writer.status.Dropped)
+	assert.Zero(t, writer.status.Pending)
+	require.NoError(t, db.Callback().Create().Remove("audit_transient"))
+	for _, id := range []string{"shutdown-a", "shutdown-b"} {
+		require.True(t, writer.enqueue(&model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: id}}, 100))
+	}
+	writer.start()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	writer.stopAndFlush(ctx)
+	assert.False(t, writer.status.Running)
+	assert.Zero(t, writer.status.Pending)
+	assert.EqualValues(t, 3, writer.status.Written)
+	var count int64
+	require.NoError(t, db.Model(&model.VideoScheduleRun{}).Count(&count).Error)
+	assert.EqualValues(t, 3, count)
+	// Deadline failures are observable and never propagate into relay behavior.
+	writer = newVideoAuditWriter()
+	require.True(t, writer.enqueue(&model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: "timed-out"}}, 100))
+	expired, expire := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer expire()
+	writer.flush(expired)
+	assert.EqualValues(t, 1, writer.status.WriteFailures)
+	assert.EqualValues(t, 1, writer.status.Dropped)
+	assert.Zero(t, writer.status.Pending)
+	// A cancelled shutdown also releases queued byte accounting and stops the worker.
+	writer = newVideoAuditWriter()
+	for i := range 101 {
+		require.True(t, writer.enqueue(&model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: fmt.Sprintf("stop-%d", i)}}, 100))
+	}
+	entered := make(chan struct{}, 1)
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("audit_timeout", func(tx *gorm.DB) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-tx.Statement.Context.Done()
+		tx.AddError(tx.Statement.Context.Err())
+	}))
+	writer.start()
+	<-entered
+	writer.stopAndFlush(expired)
+	<-writer.done
+	assert.Zero(t, writer.status.Pending)
+	assert.Zero(t, writer.status.PendingBytes)
+	assert.Greater(t, writer.status.Dropped, int64(0))
+	assert.Greater(t, writer.status.WriteFailures, int64(0))
+	require.NoError(t, db.Callback().Create().Remove("audit_timeout"))
+	previousWriter := videoAuditQueue
+	videoAuditQueue = writer
+	t.Cleanup(func() { videoAuditQueue = previousWriter })
+	beforeFailures := writer.status.WriteFailures
+	MarkVideoScheduleAuditMaintenanceFailure(errors.New("private database error"))
+	assert.Equal(t, beforeFailures+1, writer.status.WriteFailures)
+	assert.Equal(t, "maintenance_failed", writer.status.LastIssue)
+	assert.Positive(t, writer.status.FirstIssueAt)
+	// A stopped/full audit writer cannot change the response or swallow the
+	// business panic that the distribution defer must pass to outer recovery.
+	c := newVideoSchedTestContext(t)
+	c.Set(common.RequestIdKey, "business-response")
+	decision := VideoSchedDecision{Takeover: true}
+	common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+	freezeVideoScheduleAudit(c, decision, true)
+	c.Writer.WriteHeader(http.StatusAccepted)
+	require.PanicsWithValue(t, "original business panic", func() {
+		defer EnqueueVideoScheduleAudit(c, true)
+		panic("original business panic")
+	})
+	assert.Equal(t, http.StatusAccepted, c.Writer.Status())
+	assert.Equal(t, "queue_full_or_stopped", writer.status.LastIssue)
+}
+
+func TestVideoScheduleAuditSnapshotsKeepDecisionsAndExcludeRequestSecrets(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint("enabled=", enabled), func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(common.RequestIdKey, "privacy")
+			c.Set("api_key", "sensitive-key-fixture")
+			c.Set("request_body", `{"prompt":"sensitive-prompt-fixture","url":"https://sensitive.invalid/media"}`)
+			decision := VideoSchedDecision{Takeover: true}
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+			freezeVideoScheduleAudit(c, decision, enabled)
+			input := videoDecisionTestInput()
+			healthy := videosched.HealthStat{Rate: 1, Samples: 20}
+			for id := 2; id <= 20; id++ {
+				input.Candidates = append(input.Candidates, videoDecisionTestCandidate(id, 0, healthy, healthy))
+			}
+			input.Policy.TieEpsilon = 0.1
+			choice := DecideVideoSchedule(input)
+			fingerprint, _, err := VideoDecisionFingerprint(input)
+			require.NoError(t, err)
+			for range 3 {
+				appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Fingerprint: fingerprint, Recommended: choice.Best.ID, Probe: true, Admission: "probe_slot_taken", Mode: "on"}, choice.Board)
+			}
+			before, err := common.Marshal(VideoScheduleRecords(c))
+			require.NoError(t, err)
+			afterChoice := DecideVideoSchedule(input)
+			assert.Equal(t, choice.Best.ID, afterChoice.Best.ID)
+			if !enabled {
+				for _, record := range VideoScheduleRecords(c) {
+					assert.Nil(t, record.Input)
+				}
+				return
+			}
+			audit, bytes, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+			require.NoError(t, err)
+			require.Len(t, audit.Decisions, 3)
+			total := 0
+			for _, row := range audit.Decisions {
+				assert.True(t, row.SnapshotComplete)
+				total += len(row.InputJSON) + len(row.BoardJSON)
+				var frozen VideoDecisionInput
+				require.NoError(t, common.UnmarshalJsonStr(string(row.InputJSON), &frozen))
+				actual, _, err := VideoDecisionFingerprint(frozen)
+				require.NoError(t, err)
+				assert.Equal(t, fingerprint, actual)
+			}
+			encoded, err := common.Marshal(audit)
+			require.NoError(t, err)
+			for _, secret := range []string{"sensitive-key-fixture", "sensitive-prompt-fixture", "sensitive.invalid"} {
+				assert.NotContains(t, string(encoded), secret)
+			}
+			t.Logf("20 candidates x 3 selections: snapshot bytes=%d serialized request bytes=%d queue estimate=%d; per-decision cap=%d", total, len(encoded), bytes, videoAuditDetailLimit)
+			after, err := common.Marshal(VideoScheduleRecords(c))
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after))
+			// A provider-controlled error is reduced to a stable category, then
+			// explicitly marked incomplete because its input fingerprint changes.
+			input.Candidates[0].Excluded = "spec invalid: sensitive-key-fixture https://sensitive.invalid/media"
+			input.Candidates[0].Spec.Tier = "https://sensitive.invalid/input"
+			choice = DecideVideoSchedule(input)
+			appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Mode: "on"}, choice.Board)
+			audit, _, err = buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+			require.NoError(t, err)
+			assert.False(t, audit.Run.SnapshotComplete)
+			encoded, err = common.Marshal(audit)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "sensitive.invalid")
+			assert.NotContains(t, string(encoded), "sensitive-key-fixture")
+			input.Candidates[0].Name = strings.Repeat("bounded fixture ", 30000)
+			appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Mode: "on"}, DecideVideoSchedule(input).Board)
+			audit, _, err = buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+			require.NoError(t, err)
+			last := audit.Decisions[len(audit.Decisions)-1]
+			assert.False(t, last.SnapshotComplete)
+			assert.Empty(t, last.InputJSON)
+			assert.Empty(t, last.BoardJSON)
+		})
+	}
+}
+
+// An opt-in, fixed-size capacity measurement with a real database. A barrier
+// holds the first write until the burst is queued, then verifies full recovery.
+func TestVideoScheduleAuditWriterCapacity(t *testing.T) {
+	if os.Getenv("P51_CAPACITY") != "1" {
+		t.Skip("set P51_CAPACITY=1 for the representative audit writer measurement")
+	}
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "capacity.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	previous := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previous; require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
+	input := videoDecisionTestInput()
+	healthy := videosched.HealthStat{Rate: 1, Samples: 20}
+	for id := 2; id <= 20; id++ {
+		input.Candidates = append(input.Candidates, videoDecisionTestCandidate(id, 0, healthy, healthy))
+	}
+	choice := DecideVideoSchedule(input)
+	fingerprint, _, err := VideoDecisionFingerprint(input)
+	require.NoError(t, err)
+	for _, recoverBacklog := range []bool{false, true} {
+		t.Run(fmt.Sprint("recovery=", recoverBacklog), func(t *testing.T) {
+			writer := newVideoAuditWriter()
+			entered, recovered := make(chan struct{}), make(chan struct{})
+			if recoverBacklog {
+				first := true
+				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("capacity_barrier", func(tx *gorm.DB) {
+					if first {
+						first = false
+						close(entered)
+						select {
+						case <-recovered:
+						case <-tx.Statement.Context.Done():
+							tx.AddError(tx.Statement.Context.Err())
+						}
+					}
+				}))
+			}
+			started := time.Now()
+			writer.start()
+			maxPending, maxBytes := 0, 0
+			for i := range 250 {
+				c := newVideoSchedTestContext(t)
+				c.Set(common.RequestIdKey, fmt.Sprintf("capacity-%t-%d", recoverBacklog, i))
+				decision := VideoSchedDecision{Takeover: true}
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+				freezeVideoScheduleAudit(c, decision, true)
+				for range 3 {
+					appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Fingerprint: fingerprint, Recommended: choice.Best.ID, Mode: "on"}, choice.Board)
+				}
+				audit, size, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+				require.NoError(t, err)
+				require.True(t, writer.enqueue(audit, size))
+				if recoverBacklog && i == 0 {
+					writer.wake <- struct{}{}
+					<-entered
+				}
+				writer.mu.Lock()
+				maxPending, maxBytes = max(maxPending, writer.status.Pending), max(maxBytes, writer.status.PendingBytes)
+				writer.mu.Unlock()
+			}
+			captured := time.Since(started)
+			if recoverBacklog {
+				close(recovered)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			writer.stopAndFlush(ctx)
+			<-writer.done
+			assert.EqualValues(t, 250, writer.status.Written)
+			assert.Zero(t, writer.status.Dropped)
+			assert.Zero(t, writer.status.Pending)
+			assert.Zero(t, writer.status.PendingBytes)
+			t.Logf("250 requests / 20 candidates / 3 selections: capture=%s total=%s peak_pending=%d peak_estimated_bytes=%d written=%d dropped=%d", captured, time.Since(started), maxPending, maxBytes, writer.status.Written, writer.status.Dropped)
+			if recoverBacklog {
+				require.NoError(t, db.Callback().Create().Remove("capacity_barrier"))
+			}
+		})
+	}
+}
+
+// Measures the request-end observer separately from upstream network latency.
+// The fixed 20-candidate / 3-selection workload matches the P5.1 capacity gate.
+func BenchmarkVideoScheduleAuditCapture(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	input := videoDecisionTestInput()
+	healthy := videosched.HealthStat{Rate: 1, Samples: 20}
+	for id := 2; id <= 20; id++ {
+		input.Candidates = append(input.Candidates, videoDecisionTestCandidate(id, 0, healthy, healthy))
+	}
+	choice := DecideVideoSchedule(input)
+	fingerprint, _, _ := VideoDecisionFingerprint(input)
+	for _, enabled := range []bool{false, true} {
+		b.Run(fmt.Sprint("audit=", enabled), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+				c.Set(common.RequestIdKey, "benchmark")
+				decision := VideoSchedDecision{Takeover: true}
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+				freezeVideoScheduleAudit(c, decision, enabled)
+				for range 3 {
+					appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Fingerprint: fingerprint, Recommended: choice.Best.ID, Mode: "on"}, choice.Board)
+				}
+				if enabled {
+					if _, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
 
 func newVideoSchedTestContext(t *testing.T) *gin.Context {
 	t.Helper()
@@ -414,6 +881,7 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	createVideoSchedChannel(t, db, 3208, "default", "spec-probe", 5, scheduled(0, ""), `{"videos-fast":"future"}`)
 	createVideoSchedChannel(t, db, 3209, "default", "spec-probe", 5, scheduled(0, ""), `{"videos-fast":"opt-out"}`)
 	createVideoSchedChannel(t, db, 3210, "default", "spec-probe", 5, scheduled(0, ""), `{"videos-fast":"broken"}`)
+	createVideoSchedChannel(t, db, 3250, "backup", "spec-probe", 5, scheduled(0, ""), "")
 	model.InitChannelCache()
 	recordVideoSamples(3201, "videos-fast", videoSubmitFail)
 	store := videoHealthStore()
@@ -424,14 +892,55 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 
 	request := func(decision VideoSchedDecision, tried ...int) *gin.Context {
 		c := newVideoSchedTestContext(t)
+		c.Set(common.RequestIdKey, "real-selection-audit")
 		c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
 		c.Set("task_request", map[string]any{"prompt": "cat"})
 		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+		freezeVideoScheduleAudit(c, decision, true)
+		t.Cleanup(func() {
+			if videoScheduleAuditState(c) != nil {
+				assertVideoAuditSnapshotMatches(t, c)
+			}
+		})
 		for _, id := range tried {
 			RequestPolicy(c).BeginAttempt(&model.Channel{Id: id}, "default")
 		}
 		return c
 	}
+
+	t.Run("empty auto-group visits and cross-group retry retain separate decisions", func(t *testing.T) {
+		c := request(VideoSchedDecision{Takeover: true})
+		for _, group := range []string{"empty-first", "default", "empty-retry", "backup"} {
+			channel, err := model.GetRandomSatisfiedChannelWithContext(c, group, "videos-fast", 0, nil)
+			require.NoError(t, err)
+			if strings.HasPrefix(group, "empty") {
+				assert.Nil(t, channel)
+				continue
+			}
+			require.NotNil(t, channel)
+			RequestPolicy(c).BeginAttempt(channel, group)
+			if group == "default" {
+				captureVideoAuditSubmit(c, channel.Id, &taskdto.TaskError{StatusCode: 502})
+			} else {
+				captureVideoAuditSubmit(c, channel.Id, nil)
+				VideoTaskPersisted(c, &model.Task{ID: 42, TaskID: "cross-group-task", Status: model.TaskStatusSubmitted})
+			}
+		}
+		audit, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+		require.NoError(t, err)
+		require.Len(t, audit.Decisions, 4)
+		for i, row := range audit.Decisions {
+			assert.Equal(t, i+1, row.SelectionSeq)
+			assert.Equal(t, i/2+1, row.AttemptSeq)
+		}
+		assert.Zero(t, audit.Decisions[0].Selected)
+		assert.Equal(t, "rejected", audit.Decisions[1].SubmitOutcome)
+		assert.Zero(t, audit.Decisions[2].Selected)
+		assert.Equal(t, "accepted", audit.Decisions[3].SubmitOutcome)
+		assert.Equal(t, "backup", audit.Run.ActualGroup)
+		assert.Equal(t, "submitted", audit.Run.RequestOutcome)
+		assert.Equal(t, 2, audit.Run.SubmitAttempts)
+	})
 
 	t.Run("the highest layer with an eligible candidate wins", func(t *testing.T) {
 		c := request(VideoSchedDecision{Takeover: true}, 3207)
@@ -866,7 +1375,42 @@ func TestDecideVideoScheduleProbesAndExplores(t *testing.T) {
 				}
 			}
 			assert.Equal(t, choice, DecideVideoSchedule(input), "the same input decides the same")
+			c := newVideoSchedTestContext(t)
+			c.Set(common.RequestIdKey, "probe-explore-audit")
+			decision := VideoSchedDecision{Takeover: true}
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+			freezeVideoScheduleAudit(c, decision, true)
+			fingerprint, _, err := VideoDecisionFingerprint(input)
+			require.NoError(t, err)
+			appendVideoScheduleRecord(c, VideoScheduleRecord{Input: &input, Fingerprint: fingerprint, Recommended: choice.Best.ID, Probe: choice.Probe, Explore: choice.Explore, Mode: "on"}, choice.Board)
+			assertVideoAuditSnapshotMatches(t, c)
 		})
+	}
+}
+
+// A retained complete snapshot must reproduce the actual selector input hash,
+// and no selection may overwrite another selection within the same attempt.
+func assertVideoAuditSnapshotMatches(t *testing.T, c *gin.Context) {
+	t.Helper()
+	records := VideoScheduleRecords(c)
+	audit, _, err := buildVideoScheduleAudit(c, videoScheduleAuditState(c), false)
+	require.NoError(t, err)
+	require.Len(t, audit.Decisions, len(records))
+	for i, row := range audit.Decisions {
+		assert.Equal(t, records[i].SelectionSeq, row.SelectionSeq)
+		assert.Equal(t, records[i].AttemptSeq, row.AttemptSeq)
+		assert.Equal(t, records[i].AffinityHit, row.AffinityHit)
+		assert.Equal(t, records[i].Admission, row.Admission)
+		require.NotNil(t, records[i].Input)
+		if !row.SnapshotComplete {
+			assert.Equal(t, "incomplete_snapshot", audit.Run.DataIssue)
+			continue
+		}
+		var input VideoDecisionInput
+		require.NoError(t, common.UnmarshalJsonStr(string(row.InputJSON), &input))
+		fingerprint, _, err := VideoDecisionFingerprint(input)
+		require.NoError(t, err)
+		assert.Equal(t, records[i].Fingerprint, fingerprint)
 	}
 }
 

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Link } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -48,6 +49,7 @@ import { getServerErrorMessage } from '@/lib/server-error-message'
 import {
   SettingsForm,
   SettingsFormGrid,
+  SettingsSwitchField,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
@@ -97,6 +99,12 @@ const positive = z
 
 const videoSchedulingSchema = z.object({
   mode: z.enum(['off', 'shadow', 'on']),
+  audit_enabled: z.boolean(),
+  audit_retention_days: z
+    .number()
+    .int()
+    .min(7, 'Audit retention must be between 7 and 180 days')
+    .max(180, 'Audit retention must be between 7 and 180 days'),
   models: z.array(z.string()),
   price_weight: nonNegative,
   quality_weight: nonNegative,
@@ -163,6 +171,8 @@ function toFormValues(settings: OperationsSettings): VideoSchedulingFormValues {
   const groups = parseCapacityGroups(values.capacity_groups) ?? {}
   return {
     ...values,
+    audit_enabled: values.audit_enabled ?? true,
+    audit_retention_days: values.audit_retention_days ?? 30,
     capacity_groups: Object.keys(groups).length
       ? JSON.stringify(groups, null, 2)
       : '',
@@ -378,6 +388,38 @@ export function VideoSchedulingSettingsSection(props: {
               )}
             />
           </SettingsFormGrid>
+
+          <h4 className='font-medium'>{t('Video scheduling audit')}</h4>
+          <SettingsFormGrid>
+            <FormField
+              control={form.control}
+              name='audit_enabled'
+              render={({ field }) => (
+                <SettingsSwitchField
+                  controlId='video-audit-enabled'
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  label={t('Collect scheduling audits')}
+                  description={t(
+                    'Stopping collection does not stop terminal updates for enrolled tasks.'
+                  )}
+                />
+              )}
+            />
+            {numberField('audit_retention_days', t('Audit retention (days)'), {
+              step: 1,
+              description: t(
+                'Completed audits are retained for 7–180 days. Pending tasks are kept.'
+              ),
+            })}
+          </SettingsFormGrid>
+          <Link
+            className='text-primary text-sm underline'
+            to='/video-scheduling/audit'
+            search={{ mode: 'on', page: 1, page_size: 25 }}
+          >
+            {t('Open scheduling audit')}
+          </Link>
 
           <h4 className='font-medium'>{t('Score weights')}</h4>
           <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>

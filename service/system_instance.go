@@ -91,6 +91,7 @@ func ReportCurrentSystemInstance() error {
 	systemStatus := common.GetSystemStatus()
 	diskInfo := common.GetDiskSpaceInfo()
 	info := SystemInstanceInfo{
+		Extra:         map[string]any{"video_schedule_audit": VideoScheduleAuditCollectionStatus()},
 		SchemaVersion: 1,
 		Node:          identity,
 		Role: SystemInstanceRoleInfo{

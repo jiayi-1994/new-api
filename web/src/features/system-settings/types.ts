@@ -398,6 +398,8 @@ export type VideoSchedulingMode = 'off' | 'shadow' | 'on'
 /** Global video scheduling setting as the backend stores it. */
 export type VideoSchedulingSetting = {
   mode: VideoSchedulingMode
+  audit_enabled: boolean
+  audit_retention_days: number
   models: string[]
   price_weight: number
   quality_weight: number

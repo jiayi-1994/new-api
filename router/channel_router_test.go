@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
@@ -80,7 +81,7 @@ func TestVideoScheduleRoutesPermissions(t *testing.T) {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Log{}, &model.AuditLog{}, &model.CasbinRule{}, &model.AuthzRole{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Token{}, &model.Log{}, &model.AuditLog{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
 	model.DB, model.LOG_DB, common.RedisEnabled, common.IsMasterNode = db, db, false, true
 	require.NoError(t, authz.Init(db))
 	t.Cleanup(func() {
@@ -90,7 +91,7 @@ func TestVideoScheduleRoutesPermissions(t *testing.T) {
 		name  string
 		role  int
 		token string
-	}{{"sim-admin", common.RoleAdminUser, "sim-admin-token"}, {"sim-root", common.RoleRootUser, "sim-root-token"}} {
+	}{{"sim-admin", common.RoleAdminUser, "sim-admin-token"}, {"sim-root", common.RoleRootUser, "sim-root-token"}, {"sim-user", common.RoleCommonUser, "sim-user-token"}} {
 		token := user.token
 		require.NoError(t, db.Create(&model.User{Username: user.name, Password: "placeholder", Role: user.role, Status: common.UserStatusEnabled,
 			Group: "default", AccessToken: &token, AuthVersion: 1, AffCode: user.name}).Error)
@@ -112,4 +113,25 @@ func TestVideoScheduleRoutesPermissions(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, simulate(""))
 	assert.Equal(t, http.StatusForbidden, simulate("sim-admin-token"))
 	assert.Equal(t, http.StatusOK, simulate("sim-root-token"), "root reaches the handler, which rejects the empty body")
+	require.NoError(t, db.Create(&model.Token{Key: "audit-api-token", UserId: 2, Status: common.TokenStatusEnabled, ExpiredTime: -1}).Error)
+	require.NoError(t, db.Create(&model.VideoScheduleRun{RequestID: "private-audit", StartedAt: time.Now().UnixMilli(), CostUSD: new(float64)}).Error)
+	for _, path := range []string{"/audits", "/audits/private-audit", "/audit_stats", "/audit_export"} {
+		for _, identity := range []struct {
+			token  string
+			status int
+		}{{"", http.StatusUnauthorized}, {"sim-user-token", http.StatusForbidden}, {"sk-audit-api-token", http.StatusUnauthorized}, {"sim-admin-token", http.StatusForbidden}, {"sim-root-token", http.StatusOK}} {
+			request := httptest.NewRequest(http.MethodGet, "/api/channel/video_schedule"+path, nil)
+			if identity.token != "" {
+				request.Header.Set("Authorization", "Bearer "+identity.token)
+			}
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			assert.Equal(t, identity.status, recorder.Code, "path=%s token=%s response=%s", path, identity.token, recorder.Body.String())
+			if identity.status == http.StatusOK {
+				assert.Contains(t, recorder.Body.String(), "\"", path)
+			} else {
+				assert.NotContains(t, recorder.Body.String(), "cost_usd")
+			}
+		}
+	}
 }

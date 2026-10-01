@@ -58,6 +58,8 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.retention_days': 0,
   // Mirrors setting/operation_setting/video_scheduling_setting.go defaults.
   'video_scheduling_setting.mode': 'off',
+  'video_scheduling_setting.audit_enabled': true,
+  'video_scheduling_setting.audit_retention_days': 30,
   'video_scheduling_setting.models': [],
   'video_scheduling_setting.price_weight': 0.5,
   'video_scheduling_setting.quality_weight': 0.3,

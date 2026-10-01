@@ -18,9 +18,13 @@ import (
 	appI18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
+	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -1823,6 +1827,108 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 				assert.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
 				assert.Equal(t, tc.wantKeys, gotKeys)
 			}
+		})
+	}
+}
+
+func TestPrepareTaskPluginEndpointQuotesNullAndMissingBodiesLikeSubmission(t *testing.T) {
+	setting := operation_setting.GetVideoSchedulingSetting()
+	savedSetting, savedRedis := *setting, common.RedisEnabled
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	savedGroups := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		*setting, common.RedisEnabled = savedSetting, savedRedis
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroups))
+	})
+	setting.Mode, common.RedisEnabled = operation_setting.VideoSchedulingModeOff, false
+	setting.ProbeMaxInFlight = 0
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"null-body-video":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	for _, tc := range []struct {
+		name, decodedBody string
+		seconds           float64
+		images            int
+	}{
+		{"explicit null uses plugin defaults", ",requestBody:null", 6, 0},
+		{"missing body retains prepared request", "", 10, 1},
+		{"object uses candidate body", ",requestBody:{seconds:8,images:[]}", 8, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, spec := range []struct{ key, decode string }{
+				{"null-body-alpha", `return {model:ctx.model,requestBody:{seconds:10,images:["reference"]}};`},
+				{"null-body-beta", `return {model:ctx.model` + tc.decodedBody + `};`},
+			} {
+				source := taskProtocolPluginSource(spec.key, "1.0.0", `["null-body-video"]`, "/v1/videos", spec.decode)
+				source = strings.Replace(source, `fetchMode: "per_task",`, `fetchMode: "per_task", usageSchema: {seconds:{type:"number",unit:"second",description:"Video generation unit price"}},`, 1)
+				source = strings.Replace(source, `export function buildSubmitRequest() { return {url: "https://example.com"}; }`, `
+function payload(ctx) {
+  const body = ctx.requestBody || {};
+  return {seconds: body.seconds || 6, images: body.images || []};
+}
+export function buildSubmitRequest(ctx) { return {url:"https://example.com",body:payload(ctx)}; }
+export function extractUsage(ctx) { return {seconds:payload(ctx).seconds}; }
+export function describeSpec(ctx) {
+  const body = payload(ctx);
+  return {spec_version:1,output_seconds:body.seconds,resolution:"720p",references:{video:0,image:body.images.length,audio:0}};
+}`, 1)
+				_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(spec.key)) })
+			}
+			router := gin.New()
+			router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				pinned := c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
+				require.Len(t, pinned.Candidates, 2)
+				assert.Equal(t, "null-body-alpha", pinned.Plugin.Meta.Key)
+				channelSetting := `{"task_plugin_key":"null-body-beta"}`
+				channel := &model.Channel{Id: 98301, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Setting: &channelSetting,
+					OtherSettings: `{"video_scheduling":{"models":{"null-body-video":{"mode":"per_second","prices":{"720p":0.05},"references":{"image":{"*":{"mode":"per_input","value":1}}}}}}}`}
+				input := service.AssembleVideoDecision(c, setting, "default", "null-body-video", []*model.Channel{channel}, 1)
+				require.Len(t, input.Candidates, 1)
+				candidate := input.Candidates[0]
+				require.Empty(t, candidate.Excluded)
+				require.NotNil(t, candidate.Spec.OutputSeconds)
+				assert.Equal(t, tc.seconds, *candidate.Spec.OutputSeconds)
+				assert.Equal(t, tc.images, candidate.Spec.References["image"])
+				assert.Equal(t, videosched.SellKnown, candidate.Sell.Kind)
+				assert.InDelta(t, tc.seconds, candidate.Sell.USD, 1e-9)
+				board := service.VideoScheduleBoard(service.DecideVideoSchedule(input).Board)
+				require.Len(t, board, 1)
+				require.NotNil(t, board[0].CostUSD)
+				assert.InDelta(t, tc.seconds*0.05+float64(tc.images), *board[0].CostUSD, 1e-9)
+
+				// Exercise the real submit decoder and request builder, without
+				// sending an upstream request or charging the test user.
+				pinned.Plugin = pinned.Candidates[1].Plugin
+				c.Set(jsplugin.ContextKeyPinnedEndpoint, pinned)
+				c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Generation: pinned.Generation, Plugin: pinned.Plugin})
+				info := &relaycommon.RelayInfo{OriginModelName: "null-body-video", TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+					ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://example.com", ChannelType: constant.ChannelTypeTaskPlugin}}
+				adaptor := taskplugin.New(pinned.Plugin)
+				adaptor.Init(info)
+				require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+				body, err := adaptor.BuildRequestBody(c, info)
+				require.NoError(t, err)
+				var submitted struct {
+					Seconds float64  `json:"seconds"`
+					Images  []string `json:"images"`
+				}
+				require.NoError(t, common.DecodeJson(body, &submitted))
+				assert.Equal(t, tc.seconds, submitted.Seconds)
+				assert.Len(t, submitted.Images, tc.images)
+				assert.Equal(t, submitted.Seconds, *candidate.Spec.OutputSeconds)
+				assert.Equal(t, len(submitted.Images), candidate.Spec.References["image"])
+				usage, err := adaptor.EstimateBillingValidated(c, info)
+				require.NoError(t, err)
+				assert.Equal(t, candidate.Sell.USD, usage["seconds"])
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"null-body-video"}`))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
 		})
 	}
 }

@@ -211,10 +211,11 @@ type ProtocolBinding struct {
 	Operation HostProtocolOperation
 	Model     string
 	// DecodedBody and DecodedAction are this candidate's own decodeRequest
-	// result, set for accepted candidates before distribution; DecodedBody is
-	// nil when the decoder returned no requestBody.
-	DecodedBody   any
-	DecodedAction string
+	// result, set for accepted candidates before distribution. Presence keeps
+	// an explicit null requestBody distinct from an omitted field.
+	DecodedBody        any
+	DecodedBodyPresent bool
+	DecodedAction      string
 }
 
 const (

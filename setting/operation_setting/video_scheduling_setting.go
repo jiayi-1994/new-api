@@ -22,7 +22,9 @@ const (
 // VideoSchedulingSetting is the global video task scheduling configuration.
 // Channel cost tables live in each channel's video_scheduling settings.
 type VideoSchedulingSetting struct {
-	Mode               string         `json:"mode"`   // off | shadow | on
+	Mode               string         `json:"mode"` // off | shadow | on
+	AuditEnabled       bool           `json:"audit_enabled"`
+	AuditRetentionDays int            `json:"audit_retention_days"`
 	Models             []string       `json:"models"` // allow list; empty = every model of plugins exporting describeSpec
 	PriceWeight        float64        `json:"price_weight"`
 	QualityWeight      float64        `json:"quality_weight"`
@@ -44,6 +46,8 @@ type VideoSchedulingSetting struct {
 
 var videoSchedulingSetting = VideoSchedulingSetting{
 	Mode:               VideoSchedulingModeOff,
+	AuditEnabled:       true,
+	AuditRetentionDays: 30,
 	Models:             []string{},
 	PriceWeight:        0.5,
 	QualityWeight:      0.3,
@@ -103,7 +107,7 @@ func ValidateVideoSchedulingSnapshot(setting *VideoSchedulingSetting) error {
 		return err
 	}
 	for field, value := range options {
-		if field == "mode" {
+		if field == "mode" || field == "audit_enabled" || field == "audit_retention_days" {
 			continue
 		}
 		if err := ValidateVideoSchedulingOption(videoSchedulingSettingName+"."+field, value); err != nil {
@@ -121,6 +125,17 @@ func ValidateVideoSchedulingOption(key, value string) error {
 		return nil
 	}
 	switch field {
+	case "audit_enabled":
+		if value != "true" && value != "false" {
+			return fmt.Errorf("audit_enabled must be true or false")
+		}
+		return nil
+	case "audit_retention_days":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 7 || n > 180 {
+			return fmt.Errorf("audit_retention_days must be within [7,180]")
+		}
+		return nil
 	case "mode":
 		switch value {
 		case VideoSchedulingModeOff:

@@ -33,6 +33,8 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 	common.MemoryCacheEnabled, common.RedisEnabled, common.IsMasterNode = true, true, true
 
 	valid := map[string]string{
+		"audit_enabled":          "true",
+		"audit_retention_days":   "30",
 		"mode":                   "shadow",
 		"models":                 `["videos-mini"]`,
 		"capacity_groups":        `{"acct-a":20}`,
@@ -49,18 +51,20 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting."+field, value), field)
 	}
 	invalid := map[string]string{
-		"mode":                "auto",
-		"models":              `[""]`,
-		"capacity_groups":     `{"acct-a":0}`,
-		"min_gen_rate":        "1.5",
-		"min_samples":         "-1",
-		"window_seconds":      "0",
-		"probe_max_in_flight": "17",
-		"probe_cooldown_sec":  "86401",
-		"tie_epsilon":         "NaN",
-		"quality_weight":      "Inf",
-		"unknown_sell_policy": "guess",
-		"no_such_field":       "1",
+		"audit_enabled":        "yes",
+		"audit_retention_days": "6",
+		"mode":                 "auto",
+		"models":               `[""]`,
+		"capacity_groups":      `{"acct-a":0}`,
+		"min_gen_rate":         "1.5",
+		"min_samples":          "-1",
+		"window_seconds":       "0",
+		"probe_max_in_flight":  "17",
+		"probe_cooldown_sec":   "86401",
+		"tie_epsilon":          "NaN",
+		"quality_weight":       "Inf",
+		"unknown_sell_policy":  "guess",
+		"no_such_field":        "1",
 	}
 	for field, value := range invalid {
 		assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting."+field, value), field)
@@ -69,6 +73,8 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.window_seconds", "86401"), "a window is summed bucket by bucket on every read")
 
 	// The simulator's config_snapshot goes through the same checks.
+	require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.audit_enabled", "false"))
+	assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.audit_retention_days", "181"))
 	snapshot := *GetVideoSchedulingSetting()
 	require.NoError(t, ValidateVideoSchedulingSnapshot(&snapshot))
 	snapshot.ProbeMaxInFlight = 100000000

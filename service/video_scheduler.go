@@ -61,12 +61,15 @@ type VideoSchedDecision struct {
 // candidate plugin. A single hook-less candidate keeps the whole request on
 // ordinary channel selection, in every group.
 func DecideVideoSched(c *gin.Context) (decision VideoSchedDecision) {
-	defer func() { common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision) }()
-
 	setting := operation_setting.GetVideoSchedulingSetting()
 	if snapshot, ok := common.GetContextKeyType[*operation_setting.VideoSchedulingSetting](c, constant.ContextKeyVideoSchedSetting); ok && snapshot != nil {
 		setting = snapshot
 	}
+	auditEnabled := setting.AuditEnabled
+	defer func() {
+		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
+		freezeVideoScheduleAudit(c, decision, auditEnabled)
+	}()
 	if setting.Mode != operation_setting.VideoSchedulingModeOn && setting.Mode != operation_setting.VideoSchedulingModeShadow {
 		return VideoSchedDecision{Reason: VideoSchedReasonModeOff}
 	}
@@ -362,6 +365,7 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 	for range videoSchedProbeRounds {
 		channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
 		if err != nil {
+			recordVideoAuditAssemblyError(c)
 			return nil, err
 		}
 		input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, rand.Uint64())
@@ -369,7 +373,7 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 			input.Explore.ProbeMaxInFlight = 0
 		}
 		choice := DecideVideoSchedule(input)
-		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore}
+		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore, Input: &input}
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 		if choice.Best == nil {
 			appendVideoScheduleRecord(c, record, choice.Board)
@@ -422,6 +426,7 @@ func ShadowObserveVideoSched(c *gin.Context, group, modelName string, selected *
 	channels, err := model.SatisfiedChannelSnapshot(group, modelName, GetChannelConstraints(c).Filters)
 	if err != nil {
 		logger.LogWarn(c, "video scheduling shadow skipped: %v", err)
+		recordVideoAuditAssemblyError(c)
 		return
 	}
 	// Seeded per request so probe and explore draws sample their ratios across
@@ -429,7 +434,7 @@ func ShadowObserveVideoSched(c *gin.Context, group, modelName string, selected *
 	seed := uint64(RequestPolicy(c).StartedAt.UnixNano())
 	input := AssembleVideoDecision(c, operation_setting.GetVideoSchedulingSetting(), group, modelName, channels, seed)
 	choice := DecideVideoSchedule(input)
-	record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeShadow, Group: group, Selected: selected.Id, AffinityHit: affinityHit, Probe: choice.Probe, Explore: choice.Explore}
+	record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeShadow, Group: group, Selected: selected.Id, AffinityHit: affinityHit, Probe: choice.Probe, Explore: choice.Explore, Input: &input}
 	record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 	if choice.Best != nil {
 		record.Recommended = choice.Best.ID
@@ -584,8 +589,9 @@ func videoCandidateRequest(c *gin.Context, channel *model.Channel) (*jsplugin.Lo
 	if _, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
 		binding, ok := PinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key"))
 		body := binding.DecodedBody
-		if body == nil {
-			// A decoder that returns no body leaves task_request in place at submit.
+		if body == nil && !binding.DecodedBodyPresent {
+			// Only an omitted field leaves task_request in place at submit;
+			// explicit null must reach this candidate's own spec and usage hooks.
 			body = taskRequest
 		}
 		return binding.Plugin, body, binding.DecodedAction, ok
@@ -676,18 +682,19 @@ func describeVideoSpec(c *gin.Context, plugin *jsplugin.LoadedPlugin, clientMode
 // candidate with its score or exclusion. A request records one per selection;
 // empty auto groups share an attempt_seq, so selection_seq tells them apart.
 type VideoScheduleRecord struct {
-	SelectionSeq int                `json:"selection_seq"`
-	AttemptSeq   int                `json:"attempt_seq"` // the submission attempt this selection feeds, from 1
-	Mode         string             `json:"mode"`        // on | shadow
-	Group        string             `json:"group"`
-	Recommended  int                `json:"recommended,omitempty"` // best candidate; 0 when none is eligible
-	Selected     int                `json:"selected,omitempty"`    // shadow: the channel ordinary selection used
-	AffinityHit  bool               `json:"affinity_hit,omitempty"`
-	Probe        bool               `json:"probe,omitempty"`     // Recommended was drawn as a recovery probe
-	Explore      bool               `json:"explore,omitempty"`   // Recommended was drawn to explore an unproven channel
-	Admission    string             `json:"admission,omitempty"` // probe_slot_taken: the choice was not used
-	Fingerprint  string             `json:"fingerprint,omitempty"`
-	Candidates   []VideoScheduleRow `json:"candidates"`
+	Input        *VideoDecisionInput `json:"-"`
+	SelectionSeq int                 `json:"selection_seq"`
+	AttemptSeq   int                 `json:"attempt_seq"` // the submission attempt this selection feeds, from 1
+	Mode         string              `json:"mode"`        // on | shadow
+	Group        string              `json:"group"`
+	Recommended  int                 `json:"recommended,omitempty"` // best candidate; 0 when none is eligible
+	Selected     int                 `json:"selected,omitempty"`    // shadow: the channel ordinary selection used
+	AffinityHit  bool                `json:"affinity_hit,omitempty"`
+	Probe        bool                `json:"probe,omitempty"`     // Recommended was drawn as a recovery probe
+	Explore      bool                `json:"explore,omitempty"`   // Recommended was drawn to explore an unproven channel
+	Admission    string              `json:"admission,omitempty"` // probe_slot_taken: the choice was not used
+	Fingerprint  string              `json:"fingerprint,omitempty"`
+	Candidates   []VideoScheduleRow  `json:"candidates"`
 }
 
 // VideoScheduleRow is one candidate on the board. Cost amounts are nil when
@@ -732,6 +739,9 @@ func VideoScheduleRecords(c *gin.Context) []VideoScheduleRecord {
 // appendVideoScheduleRecord numbers record, fills its board from scores and
 // appends it to the request's selections.
 func appendVideoScheduleRecord(c *gin.Context, record VideoScheduleRecord, scores []videosched.Score) {
+	if videoScheduleAuditState(c) == nil {
+		record.Input = nil
+	}
 	records := VideoScheduleRecords(c)
 	record.SelectionSeq = len(records) + 1
 	record.AttemptSeq = RequestPolicy(c).Attempts + 1

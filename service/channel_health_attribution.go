@@ -58,25 +58,32 @@ type VideoFailureClassifier interface {
 // the host detected itself (timeout, poll failure escalation): its reason is
 // host text, so it always counts against the upstream without the plugin.
 func videoTerminalOutcome(task *model.Task, hostFailure bool) VideoOutcome {
+	outcome, _ := videoTerminalAttribution(task, hostFailure)
+	return outcome
+}
+
+// The health observer and audit share one classification, so optional plugin
+// hooks are never called twice for the same observed terminal transition.
+func videoTerminalAttribution(task *model.Task, hostFailure bool) (VideoOutcome, string) {
 	switch {
 	case task.Status == model.TaskStatusSuccess:
-		return VideoOutcomeSuccess
+		return VideoOutcomeSuccess, "success"
 	case hostFailure:
-		return VideoOutcomeFail
+		return VideoOutcomeFail, "host"
 	}
 	if GetTaskAdaptorFunc != nil {
 		if classifier, ok := GetTaskAdaptorFunc(task.Platform).(VideoFailureClassifier); ok {
 			class, ok := classifier.ClassifyFailure(task.FailReason)
 			switch {
 			case ok && (class == VideoFailureUser || class == VideoFailureCancelled):
-				return VideoOutcomeIgnored
+				return VideoOutcomeIgnored, class
 			case ok && class == VideoFailureUpstream:
-				return VideoOutcomeFail
+				return VideoOutcomeFail, class
 			}
 		}
 	}
 	// Unclassified failures count against the upstream; the log line is the
 	// sample set for calibrating plugin classifiers before rollout.
 	common.SysLog(fmt.Sprintf("video scheduling failure class=unknown task=%s platform=%s channel=%d reason=%q", task.TaskID, task.Platform, task.ChannelId, task.FailReason))
-	return VideoOutcomeFail
+	return VideoOutcomeFail, "unknown"
 }
