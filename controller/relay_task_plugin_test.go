@@ -747,7 +747,7 @@ func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
 	for _, key := range []string{"unified-controller-a", "unified-controller-b"} {
 		plugin, err := pluginruntime.DefaultRegistry.Register(fmt.Sprintf(`
-export const meta = {apiVersion:1,key:%q,name:"Unified submission fixture",version:"1.0.0",author:{name:"Test"},models:[%q],fetchMode:"per_task",protocols:["openai_video"],usageSchema:{requests:{type:"number",unit:"count",description:"Video generation unit price"}}};
+export const meta = {apiVersion:1,key:%q,name:"Unified submission fixture",version:"1.0.0",author:{name:"Test"},models:[%q,%q],fetchMode:"per_task",protocols:["openai_video"],usageSchema:{requests:{type:"number",unit:"count",description:"Video generation unit price"}}};
 export const protocols = {openai_video:{
   decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size,decodedBy:meta.key}};},
   render(ctx,task) {return task.data;}
@@ -767,7 +767,7 @@ export function buildQueryRequest() {throw new Error("immediate task must not po
 export function parseTaskResult() {throw new Error("immediate task must not poll");}
 export function listArtifacts() {return [];}
 export function buildContentRequest() {throw new Error("fixture has no artifacts");}
-`, key, key+"-upstream"), pluginruntime.Options{})
+`, key, key+"-upstream", key+"-upstream-alt"), pluginruntime.Options{})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, pluginruntime.DefaultRegistry.Unregister(plugin.Meta.Key)) })
 	}
@@ -777,12 +777,14 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 		firstOutcome string
 		wantPlugins  []string
 		wantStatus   int
+		samePlugin   bool
 	}{
-		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK},
-		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK},
-		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK},
-		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway},
-		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable},
+		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false},
+		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK, false},
+		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK, false},
+		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway, false},
+		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable, false},
+		{"same plugin retries a different upstream model", "rejected", []string{"unified-controller-a", "unified-controller-a"}, http.StatusOK, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initialQuota := common.QuotaRound(20 * common.QuotaPerUnit)
@@ -818,7 +820,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				received.UserQuota, received.TokenQuota = balance.Quota, allowance.RemainQuota
 				requests <- received
 				w.Header().Set("Content-Type", "application/json")
-				if received.Plugin == "unified-controller-a" {
+				if received.Body["model"] == "unified-controller-a-upstream" {
 					switch tc.firstOutcome {
 					case "rejected":
 						_, _ = io.WriteString(w, `{"reject":true}`)
@@ -832,8 +834,12 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 			}))
 			defer server.Close()
 			for i, key := range []string{"unified-controller-a", "unified-controller-b"} {
+				upstreamModel := key + "-upstream"
+				if tc.samePlugin && i == 1 {
+					key, upstreamModel = "unified-controller-a", "unified-controller-a-upstream-alt"
+				}
 				binding := fmt.Sprintf(`{"task_plugin_key":%q}`, key)
-				mapping := fmt.Sprintf(`{"unified-controller-video":%q}`, key+"-upstream")
+				mapping := fmt.Sprintf(`{"unified-controller-video":%q}`, upstreamModel)
 				prices := `"720p":0.12`
 				if tc.firstOutcome == "all_excluded" || i == 0 && tc.firstOutcome == "excluded" {
 					prices = `"1080p":0.12`
@@ -871,6 +877,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 			router := gin.New()
 			router.POST("/v1/videos", middleware.PinTaskPluginEndpoint(), middleware.PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 				requestContext = c
+				c.Set(common.RequestIdKey, info.PublicTaskID)
 				c.Set("username", user.Username)
 				common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 				common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
@@ -895,13 +902,28 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 			require.NotNil(t, requestContext, recorder.Body.String())
 			assert.Equal(t, tc.wantStatus, recorder.Code)
 			require.Len(t, requests, len(tc.wantPlugins))
-			for _, key := range tc.wantPlugins {
+			lastModel := ""
+			for i, key := range tc.wantPlugins {
+				lastModel = key + "-upstream"
+				if tc.samePlugin && i == 1 {
+					lastModel += "-alt"
+				}
 				received := <-requests
 				require.NoError(t, received.Err)
 				assert.Equal(t, key, received.Plugin)
-				assert.Equal(t, map[string]any{"model": key + "-upstream", "seconds": float64(15), "size": "1280x720", "decodedBy": key}, received.Body)
+				assert.Equal(t, map[string]any{"model": lastModel, "seconds": float64(15), "size": "1280x720", "decodedBy": key}, received.Body)
 				assert.Equal(t, initialQuota-wantQuota, received.UserQuota, "each upstream attempt observes one wallet reservation")
 				assert.Equal(t, initialQuota-wantQuota, received.TokenQuota, "retries reuse the token reservation")
+			}
+			if tc.samePlugin {
+				pinnedValue, found := requestContext.Get(pluginruntime.ContextKeyPinnedEndpoint)
+				require.True(t, found)
+				pinned := pinnedValue.(pluginruntime.PinnedEndpoint)
+				assert.Len(t, pinned.Candidates, 1, "two target models share one plugin decoder")
+				records := service.VideoScheduleRecords(requestContext)
+				require.Len(t, records, 2)
+				require.Len(t, records[0].Candidates, 2, "both channel mappings remain available")
+				assert.Equal(t, []string{"unified-controller-a-upstream", "unified-controller-a-upstream-alt"}, []string{records[0].Candidates[0].MappedModel, records[0].Candidates[1].MappedModel})
 			}
 			if tc.firstOutcome == "unknown" {
 				require.NotNil(t, taskErr)
@@ -929,7 +951,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				assert.Equal(t, wantQuota, stored[0].Quota)
 				assert.Equal(t, wantQuota, logs[0].Quota)
 				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored[0].Status)
-				assert.Equal(t, tc.wantPlugins[len(tc.wantPlugins)-1]+"-upstream", stored[0].Properties.UpstreamModelName)
+				assert.Equal(t, lastModel, stored[0].Properties.UpstreamModelName)
 				require.NotNil(t, stored[0].PrivateData.BillingContext)
 				snapshot := stored[0].PrivateData.BillingContext.TieredSnapshot
 				require.NotNil(t, snapshot)

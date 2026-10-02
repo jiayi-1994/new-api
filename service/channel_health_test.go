@@ -583,6 +583,83 @@ func TestVideoTaskPersistedCountsOnlyPolledTasks(t *testing.T) {
 	}
 }
 
+func TestVideoTargetChannelsShareCapacityButKeepIndependentHealth(t *testing.T) {
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			useVideoHealthBackend(t, backend)
+			setting := operation_setting.GetVideoSchedulingSetting()
+			setting.SelectionPolicy = videosched.PolicyWeightedV1
+			setting.CapacityGroups = map[string]int{"shared-account": 2}
+			setting.MinSamples = 1
+			channels := make([]*model.Channel, 2)
+			tasks := make([]*model.Task, 2)
+			targets := []string{"videos-mini", "videos-standard"}
+			for i, target := range targets {
+				mapping := fmt.Sprintf(`{"videos-fast":%q}`, target)
+				plugin := `{"task_plugin_key":"seedance-hjmie"}`
+				mode, price := "per_video", 0.12
+				if i == 1 {
+					mode, price = "per_second", 0.01
+				}
+				channels[i] = &model.Channel{Id: 101 + i, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled,
+					Key: "same-account-key", BaseURL: common.GetPointer("https://same-account.example"), Models: "videos-fast", Group: "default", ModelMapping: &mapping, Setting: &plugin,
+					OtherSettings: fmt.Sprintf(`{"video_scheduling":{"capacity_group":"shared-account","models":{"videos-fast":{"mode":%q,"prices":{"720p":%g}}}}}`, mode, price)}
+			}
+			policy := videosched.Policy{MaxCostUSD: 100, Weights: videosched.DefaultWeights}
+			for stage, wantGroup := range []int{0, 1, 2, 1, 0} {
+				switch stage {
+				case 1, 2:
+					i := stage - 1
+					c := healthTestContext()
+					ObserveVideoSubmit(c, channels[i], "videos-fast", nil)
+					tasks[i] = &model.Task{ChannelId: channels[i].Id, Status: model.TaskStatusSubmitted}
+					tasks[i].PrivateData.SchedulingSummary = NewVideoSchedulingSummary(c, channels[i], "videos-fast")
+					require.NotNil(t, tasks[i].PrivateData.SchedulingSummary)
+					VideoTaskPersisted(c, tasks[i])
+				case 3:
+					tasks[0].Status = model.TaskStatusSuccess
+					ObserveVideoTerminal(tasks[0], false)
+				case 4:
+					tasks[1].Status = model.TaskStatusFailure
+					ObserveVideoTerminal(tasks[1], true)
+				}
+				group, err := GetVideoGroupInFlight("shared-account")
+				require.NoError(t, err)
+				assert.Equal(t, wantGroup, group, "stage %d", stage)
+				c := videoSchedProtocolRequest(t, map[string]any{"prompt": "capacity", "duration": 15, "resolution": "720p"}, VideoSchedDecision{Takeover: true})
+				SetVideoSalesFacts(c, VideoSalesFacts{Model: "videos-fast", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+				candidates := make([]videosched.Candidate, len(channels))
+				for i, channel := range channels {
+					candidates[i], _ = assembleVideoCandidate(c, "default", "videos-fast", channel, false, setting)
+					assert.Equal(t, targets[i], candidates[i].MappedModel)
+					assert.Equal(t, wantGroup, candidates[i].GroupInFlight)
+					assert.Equal(t, 2, candidates[i].GroupCapacity)
+					quote := videosched.Quote(candidates[i].Cost, candidates[i].Spec)
+					assert.Empty(t, quote.Reason)
+					assert.InDelta(t, []float64{0.12, 0.15}[i], quote.TotalUSD, 1e-9)
+				}
+				board := videosched.Evaluate(candidates, policy)
+				require.Len(t, board, 2)
+				for _, score := range board {
+					if wantGroup == 2 {
+						assert.Equal(t, "at capacity", score.Reason, "both targets must reject the third sequential submission")
+					} else {
+						assert.Empty(t, score.Reason, "stage %d, channel %d", stage, score.Candidate.ID)
+					}
+				}
+			}
+			for i, channel := range channels {
+				health, err := GetVideoChannelHealth(channel.Id, "videos-fast", 1)
+				require.NoError(t, err)
+				assert.Zero(t, health.InFlight)
+				assert.Equal(t, videosched.HealthStat{Rate: 1, Samples: 1}, health.Submit)
+				assert.Equal(t, videosched.HealthStat{Rate: float64(1 - i), Samples: 1}, health.Gen,
+					"shared upstream credentials and capacity do not merge each target channel's health")
+			}
+		})
+	}
+}
+
 func TestVideoHealthBucketsStayBoundedAndExpire(t *testing.T) {
 	for _, backend := range []string{"memory", "redis"} {
 		t.Run(backend, func(t *testing.T) {

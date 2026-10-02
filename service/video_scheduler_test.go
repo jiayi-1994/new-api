@@ -65,6 +65,63 @@ func referenceVideoFixture(t *testing.T, seconds float64, trailingHeader bool) [
 	return append(media, movie.Bytes()...)
 }
 
+func TestUnifiedVideoSalesAcrossPurchaseShapes(t *testing.T) {
+	previousGroups := ratio_setting.GroupRatio2JSONString()
+	previousGroupGroups := ratio_setting.GroupGroupRatio2JSONString()
+	previousQuota := common.QuotaPerUnit
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroups))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previousGroupGroups))
+		common.QuotaPerUnit = previousQuota
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"unified-test":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
+	common.QuotaPerUnit = 500000
+	for _, tc := range []struct {
+		tier    string
+		seconds int
+		factor  float64
+		quota   int
+		costs   []float64
+	}{
+		{"720p", 5, 1, 50000, []float64{0.12, 0.15, 0.045, 0.04, 0.05}},
+		{"720p", 10, 1, 100000, []float64{0.12, 0.15, 0.09, 0.08, 0.08}},
+		{"720p", 15, 1, 150000, []float64{0.12, 0.15, 0.135, 0.12, 0.11}},
+		{"1080p", 5, 2, 100000, []float64{0.24, 0.3, 0.09, 0.08, 0.08}},
+		{"1080p", 10, 2, 200000, []float64{0.24, 0.3, 0.18, 0.16, 0.14}},
+	} {
+		t.Run(fmt.Sprintf("%s/%ds", tc.tier, tc.seconds), func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			SetVideoSalesFacts(c, VideoSalesFacts{Model: "unified-test", Seconds: tc.seconds, Resolution: tc.tier, USDPerSecond: 0.02 * tc.factor})
+			output, input, inputPrice := float64(tc.seconds), 20.0, 0.001
+			spec := videosched.Spec{Tier: tc.tier, OutputSeconds: &output, References: map[string]int{"video": 2}, InputVideoSeconds: &input}
+			costs := []videosched.CostConfig{
+				{Mode: videosched.ModePerVideo, Prices: map[string]float64{tc.tier: 0.12 * tc.factor}},
+				{Mode: videosched.ModePerVideo, Prices: map[string]float64{"720p": 0.15, "1080p": 0.3}},
+				{Mode: videosched.ModePerSecond, Prices: map[string]float64{tc.tier: 0.009 * tc.factor}},
+				{Mode: videosched.ModePerSecond, Prices: map[string]float64{"720p": 0.008, "1080p": 0.016}},
+				{Mode: videosched.ModePerSecond, Prices: map[string]float64{"720p": 0.006, "1080p": 0.012}},
+			}
+			for index, cost := range costs {
+				rule := videosched.ReferenceCost{Mode: videosched.RefIncluded}
+				if index == 4 {
+					rule = videosched.ReferenceCost{Mode: videosched.RefPerInputSecond, Value: &inputPrice}
+				}
+				cost.References = map[string]map[string]videosched.ReferenceCost{"video": {tc.tier: rule}}
+				quote := videosched.Quote(cost, spec)
+				require.Empty(t, quote.Reason)
+				assert.InDelta(t, tc.costs[index], quote.TotalUSD, 1e-12, "purchase shape %d", index)
+				sale := EstimateVideoSell(c, "unified-test", nil, "unified-test", fmt.Sprintf("upstream-%d", index), nil, "text_to_video")
+				require.Equal(t, videosched.SellKnown, sale.Kind)
+				quota, clamp := common.QuotaRoundChecked(sale.USD * common.QuotaPerUnit)
+				require.Nil(t, clamp)
+				assert.Equal(t, tc.quota, quota, "purchase shape %d must not change the customer's bill", index)
+				assert.False(t, sale.Estimated)
+			}
+		})
+	}
+}
+
 func TestVideoInputDurationPurchaseQuote(t *testing.T) {
 	previousFetch := *system_setting.GetFetchSetting()
 	previousClient := ssrfProtectedHTTPClient
