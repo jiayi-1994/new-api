@@ -271,6 +271,7 @@ export type ModelSettings = {
 }
 
 export type BillingSettings = {
+  'billing_setting.video_sales': string
   QuotaForNewUser: number
   QuotaForInviter: number
   QuotaForInvitee: number

@@ -26,7 +26,9 @@ import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { ModelPriceCell } from '@/features/pricing/components/model-price-cell'
+import { VideoSalesPriceTable } from '@/features/pricing/components/video-sales-price-table'
 import { isDynamicPricingModel } from '@/features/pricing/lib/dynamic-price'
+import { useUnifiedVideoSales } from '@/features/system-settings/hooks/use-unified-video-sales'
 import {
   buildPreviewRows,
   createInitialLaneState,
@@ -62,6 +64,7 @@ export function ModelPricingPanel(props: {
     (state) => state.currency
   )
   const canEdit = useCanEditModelPricing()
+  const videoSales = useUnifiedVideoSales(props.modelName)
   const query = useModelPricing([props.modelName], Boolean(props.modelName))
   const save = useSaveModelPricing()
   const [entry, setEntry] = useState<ModelPricingEntry | null>(null)
@@ -195,35 +198,47 @@ export function ModelPricingPanel(props: {
               <h3 className='text-muted-foreground text-xs'>
                 {t('Current Billing')}
               </h3>
-              <div className='max-w-xs'>
-                <ModelPriceCell
-                  model={effectivePricing}
+              {videoSales ? (
+                <VideoSalesPriceTable
+                  model={{
+                    ...effectivePricing,
+                    billing_mode: 'video_sales',
+                    video_sales: videoSales,
+                  }}
                   options={{ tokenUnit: 'M' }}
-                  showExpression={false}
-                />
-              </div>
-              {isDynamicPricingModel(effectivePricing) ? (
-                <DynamicPricingBreakdown
-                  compact
-                  billingExpr={effectivePricing.billing_expr}
-                  usageSchema={entry.usage_schema}
                 />
               ) : (
-                effectivePricing.quota_type === 0 &&
-                Number.isFinite(effectivePricing.model_ratio) && (
-                  <dl className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3'>
-                    {details.map((row) => (
-                      <div key={row.key}>
-                        <dt className='text-muted-foreground'>{row.label}</dt>
-                        <dd className='mt-1 font-mono tabular-nums'>
-                          {row.value}
-                          {row.unit !== 'none' && ' / 1M'}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                )
+                <div className='max-w-xs'>
+                  <ModelPriceCell
+                    model={effectivePricing}
+                    options={{ tokenUnit: 'M' }}
+                    showExpression={false}
+                  />
+                </div>
               )}
+              {!videoSales &&
+                (isDynamicPricingModel(effectivePricing) ? (
+                  <DynamicPricingBreakdown
+                    compact
+                    billingExpr={effectivePricing.billing_expr}
+                    usageSchema={entry.usage_schema}
+                  />
+                ) : (
+                  effectivePricing.quota_type === 0 &&
+                  Number.isFinite(effectivePricing.model_ratio) && (
+                    <dl className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3'>
+                      {details.map((row) => (
+                        <div key={row.key}>
+                          <dt className='text-muted-foreground'>{row.label}</dt>
+                          <dd className='mt-1 font-mono tabular-nums'>
+                            {row.value}
+                            {row.unit !== 'none' && ' / 1M'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )
+                ))}
             </section>
             {save.isError && (
               <div>

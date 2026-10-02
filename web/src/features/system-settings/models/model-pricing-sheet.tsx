@@ -112,6 +112,7 @@ import { formatPricingNumber } from './pricing-format'
 import { TaskPluginPricingEditor } from './task-plugin-pricing-editor'
 import { TaskUsagePricingEditor } from './task-usage-pricing-editor'
 import { TieredPricingEditor } from './tiered-pricing-editor'
+import { UnifiedVideoPricingNotice } from './unified-video-pricing-notice'
 
 export type { ModelRatioData } from './model-pricing-core'
 
@@ -867,6 +868,9 @@ export const ModelPricingEditorPanel = forwardRef<
             {scrollHeader && (
               <div className='mb-4 space-y-3'>{scrollHeader}</div>
             )}
+            <div className='mb-4 empty:hidden'>
+              <UnifiedVideoPricingNotice modelName={watchedValues.name} />
+            </div>
             <div className='grid min-w-0 items-start gap-4 @min-[960px]/pricing-editor:grid-cols-[minmax(0,1fr)_260px]'>
               <FieldGroup className='min-w-0'>
                 {warnings.length > 0 && (

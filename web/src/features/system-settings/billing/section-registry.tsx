@@ -23,6 +23,7 @@ import { PricingSection } from '../general/pricing-section'
 import { QuotaSettingsSection } from '../general/quota-settings-section'
 import { PaymentSettingsSection } from '../integrations/payment-settings-section'
 import { RatioSettingsCard } from '../models/ratio-settings-card'
+import { VideoSalesSettingsCard } from '../models/video-sales-settings-card'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -112,6 +113,15 @@ const BILLING_SECTIONS = [
         groupDefaults={getGroupDefaults(settings)}
         toolPricesDefault={settings['tool_price_setting.prices']}
         visibleTabs={['models', 'unset-models', 'tool-prices', 'upstream-sync']}
+      />
+    ),
+  },
+  {
+    id: 'video-sales',
+    titleKey: 'Unified video sales',
+    build: (settings: BillingSettings) => (
+      <VideoSalesSettingsCard
+        defaultValue={settings['billing_setting.video_sales']}
       />
     ),
   },

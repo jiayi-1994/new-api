@@ -44,6 +44,82 @@ const originalColumnVisibility = localStorage.getItem(
   'model-ratio-column-visibility'
 )
 
+it.each([false, true])(
+  'shows unified sales as current billing even when paused=%s and preserves stored-price editing',
+  async (disabled) => {
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 1, username: 'administrator', role: 100 })
+    usePricingPreferencesStore.setState({ currency: 'USD' })
+    vi.spyOn(api, 'get').mockImplementation(async (url) => {
+      let data: unknown = []
+      if (url === '/api/option/') {
+        data = [
+          {
+            key: 'billing_setting.video_sales',
+            value: JSON.stringify({
+              'video-unified': {
+                disabled,
+                resolutions: {
+                  '720p': { usd_per_second: 0.02, seconds: [5, 10, 15] },
+                },
+              },
+            }),
+          },
+        ]
+      }
+      if (url === '/api/option/model_pricing') {
+        data = {
+          entries: [
+            {
+              model_name: 'Video-Unified',
+              version: 'v1',
+              configured: { ModelPrice: 9 },
+              effective: { ModelPrice: 9 },
+            },
+          ],
+        }
+      }
+      return { data: { success: true, data, vendors: [] } }
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { success: true, data: { effective: { ModelPrice: 9 } } },
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    clients.push(client)
+    render(
+      <QueryClientProvider client={client}>
+        <ModelPricingPanel modelName='Video-Unified' />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText(
+        'Unified video sales controls this model. Prices edited here are stored but do not affect video charges.'
+      )
+    ).toBeVisible()
+    const billing = await screen.findByRole('region', {
+      name: 'Current Billing',
+    })
+    expect(within(billing).queryByText('Per-request')).not.toBeInTheDocument()
+    if (disabled) {
+      expect(within(billing).getByText('Video sales paused')).toBeVisible()
+    } else {
+      expect(
+        within(billing).getByRole('columnheader', { name: 'Price per second' })
+      ).toBeVisible()
+      expect(within(billing).getByText('5, 10, 15')).toBeVisible()
+    }
+    await userEvent
+      .setup()
+      .click(screen.getByRole('tab', { name: 'Per-request (deprecated)' }))
+    expect(screen.getByRole('textbox', { name: 'Fixed price' })).toHaveValue(
+      '9'
+    )
+  }
+)
+
 afterEach(() => {
   cleanup()
   for (const client of clients) client.clear()

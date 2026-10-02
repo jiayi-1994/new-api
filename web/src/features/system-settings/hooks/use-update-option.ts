@@ -57,6 +57,12 @@ export function useUpdateOption() {
       if (data.success) {
         // Always refresh system-options
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        if (variables.key === 'billing_setting.video_sales') {
+          queryClient.invalidateQueries({ queryKey: ['pricing'] })
+          queryClient.invalidateQueries({ queryKey: ['models'] })
+          queryClient.invalidateQueries({ queryKey: ['model-pricing-config'] })
+          queryClient.invalidateQueries({ queryKey: ['model-pricing-preview'] })
+        }
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.has(variables.key)) {
