@@ -38,7 +38,7 @@ for (const entry of fixture.cases) {
 function submittedSpec(ctx) {
   const body = plugin.buildSubmitRequest({ ...ctx, baseUrl: "https://api.hjmie.cc.cd", apiKey: "fixture-only-key" }).body;
   return {
-    spec_version: 1, output_seconds: body.duration, seconds_kind: "exact", resolution: body.resolution,
+    spec_version: 2, reference_video_urls: body.videos || [], output_seconds: body.duration, seconds_kind: "exact", resolution: body.resolution,
     references: { video: (body.videos || []).length, image: (body.images || []).length, audio: (body.audios || []).length },
   };
 }
@@ -65,7 +65,7 @@ test("describeSpec counts each reference kind from the final body", () => {
   const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
   const ctx = { model: value.model, upstreamModel: value.model, requestBody: intent.requestBody };
   assert.deepEqual(plugin.describeSpec(ctx), {
-    spec_version: 1, output_seconds: 8, seconds_kind: "exact", resolution: "4k",
+    spec_version: 2, reference_video_urls: ["https://cdn.example/1.mp4"], output_seconds: 8, seconds_kind: "exact", resolution: "4k",
     references: { video: 1, image: 2, audio: 1 },
   });
   assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));

@@ -636,6 +636,10 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		return
 	}
 	candidate.Spec = spec
+	if err := resolveVideoInputSeconds(c, &candidate.Spec, candidate.Cost); err != nil {
+		candidate.Excluded = "input video metadata unavailable: " + err.Error()
+		candidate.Spec.Missing = append(slices.Clone(candidate.Spec.Missing), "input_video_seconds")
+	}
 	candidate.Sell = EstimateVideoSell(c, group, plugin, clientModel, mappedModel, body, action)
 	return
 }
@@ -856,7 +860,7 @@ func VideoScheduleBoard(scores []videosched.Score) []VideoScheduleRow {
 		}
 		if candidate.Spec.References != nil {
 			spec := candidate.Spec
-			row.Spec = &model.VideoSpecView{OutputSeconds: spec.OutputSeconds, SecondsKind: spec.SecondsKind, Tier: spec.Tier, References: spec.References, Missing: spec.Missing}
+			row.Spec = &model.VideoSpecView{OutputSeconds: spec.OutputSeconds, InputVideoSeconds: spec.InputVideoSeconds, SecondsKind: spec.SecondsKind, Tier: spec.Tier, References: spec.References, Missing: spec.Missing}
 			row.SellKind, row.SellUSD, row.SellEstimated = candidate.Sell.Kind, candidate.Sell.USD, candidate.Sell.Estimated
 		}
 		if quote := score.Quote; quote.Reason == "" && quote.Tier != "" {

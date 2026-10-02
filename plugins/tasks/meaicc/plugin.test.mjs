@@ -73,7 +73,7 @@ function submittedSpec(ctx) {
   for (const item of body.input.media || []) {
     references[item.type === "reference_video" ? "video" : item.type === "reference_voice" ? "audio" : "image"] += 1;
   }
-  return { spec_version: 1, output_seconds: body.parameters.duration, seconds_kind: "exact", resolution: body.parameters.resolution, references };
+  return { spec_version: 2, reference_video_urls: (body.input.media || []).filter((item) => item.type === "reference_video").map((item) => item.url), output_seconds: body.parameters.duration, seconds_kind: "exact", resolution: body.parameters.resolution, references };
 }
 
 test("describeSpec agrees with the submitted body and rejects what usage rejects", () => {
@@ -101,7 +101,7 @@ test("describeSpec classifies every media type into the three reference kinds", 
   const intent = plugin.protocols.openai_video.decodeRequest({ model: request.model, body: { kind: "json", value: request } });
   const ctx = { model: request.model, requestBody: intent.requestBody };
   assert.deepEqual(plugin.describeSpec(ctx), {
-    spec_version: 1, output_seconds: 12, seconds_kind: "exact", resolution: "1080p",
+    spec_version: 2, reference_video_urls: ["https://cdn.example/v.mp4"], output_seconds: 12, seconds_kind: "exact", resolution: "1080p",
     references: { video: 1, image: 3, audio: 2 },
   });
   assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));

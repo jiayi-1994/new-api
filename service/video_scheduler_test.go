@@ -1,16 +1,21 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,13 +25,17 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	videospec "github.com/QuantumNous/new-api/pkg/videosched/spec"
 	"github.com/QuantumNous/new-api/plugins"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/abema/go-mp4"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +43,303 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// A movie header after media payload exercises byte-range metadata reads.
+func referenceVideoFixture(t *testing.T, seconds float64, trailingHeader bool) []byte {
+	t.Helper()
+	var payload bytes.Buffer
+	_, err := mp4.Marshal(&payload, &mp4.Mvhd{Timescale: 1000, DurationV0: uint32(seconds * 1000)}, mp4.Context{})
+	require.NoError(t, err)
+	var movie bytes.Buffer
+	require.NoError(t, binary.Write(&movie, binary.BigEndian, uint32(payload.Len()+16)))
+	movie.WriteString("moov")
+	require.NoError(t, binary.Write(&movie, binary.BigEndian, uint32(payload.Len()+8)))
+	movie.WriteString("mvhd")
+	movie.Write(payload.Bytes())
+	if !trailingHeader {
+		return movie.Bytes()
+	}
+	media := make([]byte, 2<<20)
+	binary.BigEndian.PutUint32(media, uint32(len(media)))
+	copy(media[4:], "mdat")
+	return append(media, movie.Bytes()...)
+}
+
+func TestVideoInputDurationPurchaseQuote(t *testing.T) {
+	previousFetch := *system_setting.GetFetchSetting()
+	previousClient := ssrfProtectedHTTPClient
+	t.Cleanup(func() {
+		*system_setting.GetFetchSetting() = previousFetch
+		ssrfProtectedHTTPClient = previousClient
+	})
+	*system_setting.GetFetchSetting() = system_setting.FetchSetting{EnableSSRFProtection: true, AllowPrivateIp: true, AllowedPorts: []string{"1-65535"}}
+	ssrfProtectedHTTPClient = newProtectedFetchHTTPClientWithProxy(nil, nil, nil, func(*http.Request) (*url.URL, error) { return nil, nil })
+	media := map[string][]byte{
+		"/eight.mp4":    referenceVideoFixture(t, 8, true),
+		"/twelve.mov":   referenceVideoFixture(t, 12, false),
+		"/unknown.mp4":  referenceVideoFixture(t, 0, false),
+		"/oversize.mp4": referenceVideoFixture(t, relaycommon.MaxTaskDurationSeconds+1, false),
+		"/not-video":    []byte("not a media container"),
+		"/fraction.mp4": referenceVideoFixture(t, 8.25, false),
+	}
+	requests := make(map[string]int)
+	var requestMu sync.Mutex
+	snapshotRequests := func() map[string]int {
+		requestMu.Lock()
+		defer requestMu.Unlock()
+		return maps.Clone(requests)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("Cookie"))
+		assert.NotEmpty(t, r.Header.Get("Range"))
+		requestMu.Lock()
+		requests[r.URL.Path]++
+		requestMu.Unlock()
+		if r.URL.Path == "/unavailable" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		http.ServeContent(w, r, "video.mp4", time.Unix(1, 0), bytes.NewReader(media[r.URL.Path]))
+	}))
+	t.Cleanup(server.Close)
+	price := 0.02
+	cost := videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": 1}, References: map[string]map[string]videosched.ReferenceCost{
+		"video": {"*": {Mode: videosched.RefPerInputSecond, Value: &price}},
+	}}
+	output := 5.0
+	input := videosched.Spec{OutputSeconds: &output, Tier: "720p", References: map[string]int{"video": 2}, ReferenceVideoURLs: []string{server.URL + "/eight.mp4?signature=secret", server.URL + "/twelve.mov"}}
+	ctx := newVideoSchedTestContext(t)
+	ctx.Request.Header.Set("Authorization", "Bearer should-not-reach-media")
+	ctx.Request.Header.Set("Cookie", "session=should-not-reach-media")
+	require.NoError(t, resolveVideoInputSeconds(ctx, &input, cost))
+	require.NotNil(t, input.InputVideoSeconds)
+	assert.Equal(t, 20.0, *input.InputVideoSeconds)
+	quote := videosched.Quote(cost, input)
+	require.Empty(t, quote.Reason)
+	assert.InDelta(t, 1.4, quote.TotalUSD, 1e-9)
+	require.Len(t, quote.References, 1)
+	assert.Equal(t, 20.0, *quote.References[0].Quantity)
+	assert.Less(t, snapshotRequests()["/eight.mp4"], 4, "the payload is skipped by byte range")
+	before := snapshotRequests()
+	for _, seconds := range []float64{10, 30} {
+		input.OutputSeconds = &seconds
+		require.NoError(t, resolveVideoInputSeconds(ctx, &input, cost))
+		assert.InDelta(t, 1.4, videosched.Quote(cost, input).TotalUSD, 1e-9, "output duration cannot change an input fee")
+	}
+	assert.Equal(t, before, snapshotRequests(), "candidates and retries reuse the measured input")
+	input.ReferenceVideoURLs[1] = input.ReferenceVideoURLs[0]
+	require.NoError(t, resolveVideoInputSeconds(ctx, &input, cost))
+	assert.Equal(t, 16.0, *input.InputVideoSeconds, "each submitted input counts, even when its URL repeats")
+	assert.Equal(t, before, snapshotRequests(), "a repeated URL is downloaded only once")
+	encoded, err := common.Marshal(input)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "signature")
+	assert.NotContains(t, string(encoded), server.URL)
+	var replay videosched.Spec
+	require.NoError(t, common.Unmarshal(encoded, &replay))
+	assert.Equal(t, videosched.Quote(cost, input), videosched.Quote(cost, replay), "historical quotes need no media fetch")
+	t.Run("fractional seconds are preserved", func(t *testing.T) {
+		spec := videosched.Spec{References: map[string]int{"video": 1}, ReferenceVideoURLs: []string{server.URL + "/fraction.mp4"}}
+		require.NoError(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost))
+		assert.Equal(t, 8.25, *spec.InputVideoSeconds)
+		assert.InDelta(t, 1.165, videosched.Quote(cost, spec).TotalUSD, 1e-9)
+	})
+	t.Run("no input video needs no metadata and no surcharge", func(t *testing.T) {
+		spec := videosched.Spec{References: map[string]int{"video": 0}}
+		require.NoError(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost))
+		assert.Equal(t, 1.0, videosched.Quote(cost, spec).TotalUSD)
+		spec.References["video"] = 1
+		require.ErrorContains(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost), "every input video URL")
+	})
+	for _, path := range []string{"/unknown.mp4", "/oversize.mp4", "/not-video", "/unavailable"} {
+		t.Run(path, func(t *testing.T) {
+			spec := videosched.Spec{OutputSeconds: &output, References: map[string]int{"video": 1}, ReferenceVideoURLs: []string{server.URL + path}}
+			require.Error(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost))
+			assert.Nil(t, spec.InputVideoSeconds)
+			assert.Equal(t, "input video seconds unknown", videosched.Quote(cost, spec).Reason)
+		})
+	}
+	t.Run("private media follows the configured fetch policy", func(t *testing.T) {
+		system_setting.GetFetchSetting().AllowPrivateIp = false
+		defer func() { system_setting.GetFetchSetting().AllowPrivateIp = true }()
+		before := snapshotRequests()
+		spec := videosched.Spec{References: map[string]int{"video": 1}, ReferenceVideoURLs: []string{server.URL + "/twelve.mov?signature=secret"}}
+		err := resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost)
+		require.ErrorContains(t, err, "fetch policy")
+		assert.NotContains(t, err.Error(), "signature")
+		assert.Equal(t, before, snapshotRequests())
+	})
+	t.Run("other fee modes never read input media", func(t *testing.T) {
+		for _, mode := range []string{videosched.RefIncluded, videosched.RefPerInput, videosched.RefPerOutputSecond} {
+			other := cost
+			other.References = map[string]map[string]videosched.ReferenceCost{"video": {"*": {Mode: mode, Value: &price}}}
+			spec := videosched.Spec{OutputSeconds: &output, References: map[string]int{"video": 1}, ReferenceVideoURLs: []string{server.URL + "/unavailable"}}
+			before := snapshotRequests()
+			require.NoError(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, other))
+			assert.Equal(t, before, snapshotRequests())
+		}
+	})
+	t.Run("untrusted quantities and unsupported reference kinds cannot quote", func(t *testing.T) {
+		for _, seconds := range []float64{-1, 0, math.NaN(), math.Inf(1), relaycommon.MaxTaskDurationSeconds + 1} {
+			spec := videosched.Spec{InputVideoSeconds: &seconds, References: map[string]int{"video": 1}}
+			assert.Equal(t, "invalid input video seconds", videosched.Quote(cost, spec).Reason)
+		}
+		saved := dto.VideoSchedulingConfig{Models: map[string]dto.VideoModelCost{"video": {Mode: dto.VideoCostPerVideo, Prices: map[string]float64{"*": 1}, References: map[string]map[string]dto.VideoReferenceCost{"image": {"*": {Mode: dto.VideoRefPerInputSecond, Value: &price}}}}}}
+		require.ErrorContains(t, saved.Validate(100, relaycommon.MaxTaskDurationSeconds), "requires video")
+		saved.Models["video"].References["video"] = saved.Models["video"].References["image"]
+		delete(saved.Models["video"].References, "image")
+		require.NoError(t, saved.Validate(100, relaycommon.MaxTaskDurationSeconds))
+	})
+}
+
+func TestVideoInputMetadataReadLimits(t *testing.T) {
+	small, tail := referenceVideoFixture(t, 8, false), referenceVideoFixture(t, 8, true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/small-full":
+			_, _ = w.Write(small)
+		case "/large-full":
+			_, _ = w.Write(tail)
+		case "/bad-range":
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 1-%d/%d", len(small), len(small)+1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(small)
+		case "/truncated":
+			w.Header().Set("Content-Range", "bytes 0-999/1000")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(small)
+		case "/too-large":
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/2147483649", len(small)-1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(small)
+		case "/changing":
+			w.Header().Set("ETag", `"first"`)
+			if r.Header.Get("Range") != "bytes=0-32767" {
+				w.Header().Set("ETag", `"changed"`)
+			}
+			http.ServeContent(w, r, "video.mp4", time.Unix(1, 0), bytes.NewReader(tail))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	previousClient, previousFetch := ssrfProtectedHTTPClient, *system_setting.GetFetchSetting()
+	t.Cleanup(func() {
+		ssrfProtectedHTTPClient = previousClient
+		*system_setting.GetFetchSetting() = previousFetch
+	})
+	system_setting.GetFetchSetting().EnableSSRFProtection = true
+	ssrfProtectedHTTPClient = server.Client()
+	for _, tc := range []struct{ path, reason string }{
+		{"/small-full", ""},
+		{"/large-full", "read limit"},
+		{"/bad-range", "Content-Range"},
+		{"/truncated", "Content-Range"},
+		{"/too-large", "media size"},
+		{"/changing", "media changed"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			seconds, err := readReferenceVideoDuration(t.Context(), server.URL+tc.path, &videoReferenceMetadata{bytes: 8 << 20, requests: 256})
+			if tc.reason != "" {
+				require.ErrorContains(t, err, tc.reason)
+				assert.Zero(t, seconds)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 8.0, seconds)
+		})
+	}
+	for _, budget := range []videoReferenceMetadata{{bytes: 1, requests: 1}, {bytes: 1000, requests: 0}, {bytes: 0, requests: 1}} {
+		_, err := readReferenceVideoDuration(t.Context(), server.URL+"/small-full", &budget)
+		require.Error(t, err, "the shared request budget cannot be exceeded")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := readReferenceVideoDuration(ctx, server.URL+"/small-full", &videoReferenceMetadata{bytes: 8 << 20, requests: 256})
+	require.Error(t, err)
+}
+
+func TestVideoInputDurationDatabaseRoundTrip(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			db := useVideoReliabilityDatabase(t, dialect)
+			var version string
+			if dialect == "sqlite" {
+				require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+			} else {
+				require.NoError(t, db.Raw("SELECT version()").Scan(&version).Error)
+			}
+			t.Logf("%s: %s", dialect, version)
+			auditTables := []any{&model.VideoScheduleRun{}, &model.VideoScheduleDecision{}, &model.Ability{}}
+			require.NoError(t, db.Migrator().DropTable(auditTables...))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(auditTables...)) })
+			require.NoError(t, db.AutoMigrate(auditTables...))
+			createVideoSchedChannel(t, db, 9811, "default", "seedance-hjmie", 0, `{"video_scheduling":{"models":{"videos-fast":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"per_input_second","value":0.02}}}}}}}`, "")
+			var channel model.Channel
+			require.NoError(t, db.First(&channel, 9811).Error)
+			config, ok := VideoSchedulingConfigOf(&channel)
+			require.True(t, ok)
+			require.NoError(t, config.Validate(100, relaycommon.MaxTaskDurationSeconds))
+			output, input := 5.0, 20.0
+			candidate := videosched.Candidate{ID: 9811, Cost: videoCostConfig(config.Models["videos-fast"]), Spec: videosched.Spec{OutputSeconds: &output, InputVideoSeconds: &input, References: map[string]int{"video": 2}, ReferenceVideoURLs: []string{"https://media.example/private?token=secret"}}}
+			quote := videosched.Quote(candidate.Cost, candidate.Spec)
+			require.Empty(t, quote.Reason)
+			row := VideoScheduleBoard([]videosched.Score{{Candidate: &candidate, Quote: quote}})[0]
+			for i, spec := range []*model.VideoSpecView{{OutputSeconds: &output, References: map[string]int{"video": 1}}, row.Spec} {
+				task := model.Task{TaskID: fmt.Sprintf("input-duration-%d", i), Status: model.TaskStatusSuccess, PrivateData: model.TaskPrivateData{SchedulingSummary: &model.TaskSchedulingSummary{Spec: spec}}}
+				require.NoError(t, db.Create(&task).Error)
+				var restored model.Task
+				require.NoError(t, db.First(&restored, task.ID).Error)
+				assert.Equal(t, spec, restored.PrivateData.SchedulingSummary.Spec, "legacy absent and new measured durations remain distinct")
+			}
+			inputJSON, err := common.Marshal(VideoDecisionInput{Candidates: []videosched.Candidate{candidate}})
+			require.NoError(t, err)
+			boardJSON, err := common.Marshal([]VideoScheduleRow{row})
+			require.NoError(t, err)
+			audit := model.VideoScheduleAudit{Run: model.VideoScheduleRun{RequestID: "input-duration", StartedAt: time.Now().UnixMilli()}, Decisions: []model.VideoScheduleDecision{{SelectionSeq: 1, InputJSON: model.VideoAuditSnapshot(inputJSON), BoardJSON: model.VideoAuditSnapshot(boardJSON)}}}
+			require.NoError(t, model.InsertVideoScheduleAudit(t.Context(), &audit))
+			stored, err := model.GetVideoScheduleAudit(t.Context(), "input-duration")
+			require.NoError(t, err)
+			require.Len(t, stored.Decisions, 1)
+			assert.NotContains(t, string(stored.Decisions[0].InputJSON), "secret")
+			var replay VideoDecisionInput
+			require.NoError(t, common.UnmarshalJsonStr(string(stored.Decisions[0].InputJSON), &replay))
+			require.Len(t, replay.Candidates, 1)
+			assert.Equal(t, quote, videosched.Quote(replay.Candidates[0].Cost, replay.Candidates[0].Spec))
+		})
+	}
+}
+
+func TestVideoInputSourceSpecVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		version   int64
+		count     int64
+		urls      any
+		wantError string
+	}{
+		{"complete sources", 2, 2, []any{"https://media.example/a.mp4", "https://media.example/b.mp4"}, ""},
+		{"version one cannot reinterpret a source field", 1, 1, []any{"https://media.example/a.mp4"}, "requires spec_version 2"},
+		{"partial sources", 2, 2, []any{"https://media.example/a.mp4"}, "every submitted"},
+		{"not an array", 2, 1, "https://media.example/a.mp4", "every submitted"},
+		{"non HTTP source", 2, 1, []any{"file:///video.mp4"}, "HTTP(S)"},
+		{"embedded credentials", 2, 1, []any{"https://user:secret@media.example/a.mp4"}, "without credentials"},
+		{"future version", 3, 0, []any{}, "version unsupported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := map[string]any{"spec_version": tc.version, "references": map[string]any{"video": tc.count, "image": int64(0), "audio": int64(0)}, "reference_video_urls": tc.urls}
+			spec, _, err := videospec.Parse(raw)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, spec.ReferenceVideoURLs, int(tc.count))
+			assert.Nil(t, spec.InputVideoSeconds, "only the host's measured metadata can set duration")
+		})
+	}
+}
 
 func TestReliableVideoColdStartAndValidationOrder(t *testing.T) {
 	now := time.Unix(1800000000, 0).UTC()
@@ -1150,7 +1456,7 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 export function describeSpec(ctx) {
-  if (ctx.upstreamModel === "future") return {spec_version: 2, references: {video: 0, image: 0, audio: 0}};
+  if (ctx.upstreamModel === "future") return {spec_version: 3, references: {video: 0, image: 0, audio: 0}};
   if (ctx.upstreamModel === "opt-out") return {unsupported: true};
   if (ctx.upstreamModel === "broken") throw new Error("bad body");
   return {spec_version: 1, output_seconds: 5, resolution: "*", references: {video: 0, image: 0, audio: 0}};
@@ -1180,7 +1486,7 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		3205: "not schedulable: no cost table",
 		3206: "not schedulable: model not priced",
 		3207: "tried",
-		3208: "spec version unsupported: 2",
+		3208: "spec version unsupported: 3",
 		3209: "not schedulable: model opt-out",
 		3210: "spec invalid: ",
 	}

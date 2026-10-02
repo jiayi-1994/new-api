@@ -128,6 +128,12 @@ function SelectionDetails({ decision }: { decision: AuditDecision }) {
             {t('Base cost')}: {money(row.base_cost_usd)} · {t('Reference cost')}
             : {money(row.reference_cost_usd)}
           </span>
+          {row.spec?.input_video_seconds != null && (
+            <span className='text-muted-foreground block text-xs'>
+              {t('Total input video seconds')}:{' '}
+              {formatNumber(row.spec.input_video_seconds, locale)} s
+            </span>
+          )}
         </span>
       ),
     },

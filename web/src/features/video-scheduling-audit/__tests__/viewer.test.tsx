@@ -367,6 +367,53 @@ test('keyboard opens historical candidates and incomplete snapshots without trea
   )
 })
 
+test('a measured input video duration is displayed separately from the output duration', async () => {
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    let data: AuditStats | AuditDetail | AuditList = list
+    if (url.endsWith('/audit_stats')) data = stats
+    if (url.endsWith('/audits/request-1')) {
+      data = {
+        ...detail,
+        decisions: detail.decisions.map((decision) => ({
+          ...decision,
+          board_json: JSON.stringify([
+            {
+              id: 7,
+              name: 'Input duration channel',
+              p: 1,
+              q: 1,
+              s: 1,
+              total: 1,
+              cost_usd: 1.4,
+              base_cost_usd: 1,
+              reference_cost_usd: 0.4,
+              spec: {
+                output_seconds: 5,
+                input_video_seconds: 20,
+                references: { video: 2, image: 0, audio: 0 },
+              },
+            },
+          ]),
+        })),
+      }
+    }
+    return { data: { success: true, data } }
+  })
+  render(<Harness />)
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'request-1' })
+  )
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Scheduling audit details',
+  })
+  expect(
+    await within(dialog).findByText('Total input video seconds: 20 s')
+  ).toBeVisible()
+  expect(
+    within(dialog).queryByText('Total input video seconds: 5 s')
+  ).not.toBeInTheDocument()
+})
+
 test('non-root viewers make no audit requests', () => {
   const get = mockAuditAPI()
   useAuthStore

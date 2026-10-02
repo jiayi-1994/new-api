@@ -89,6 +89,7 @@ export type VideoReferenceMode =
   | 'per_request'
   | 'per_input'
   | 'per_output_second'
+  | 'per_input_second'
   | 'multiplier'
 
 export interface VideoReferenceCost {

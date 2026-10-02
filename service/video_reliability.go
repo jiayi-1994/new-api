@@ -243,7 +243,13 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	}
 	err := model.BeginVideoHealthAttempt(ctx, attempt, strict)
 	if err != nil {
-		videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
+		if errors.Is(err, model.ErrVideoHealthStateChanged) {
+			// A concurrent transition is an expected admission conflict. Keep
+			// reselection available with the latest state, including any block.
+			publishPersistedVideoReliability(ctx, attempt.ChannelID, attempt.ModelName)
+		} else {
+			videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
+		}
 		if strict {
 			return fmt.Errorf("%w: %w", ErrVideoHealthAdmission, err)
 		}
@@ -444,6 +450,25 @@ func releaseVideoValidationLease(c *gin.Context) {
 	}
 }
 
+// Restore first, then check ownership on the primary database. A terminal
+// callback can release its lease between the background snapshot and SET NX;
+// checking only before SET NX would resurrect that completed owner's slot.
+func restoreVideoValidationLease(ctx context.Context, attempt model.VideoHealthAttempt) error {
+	store := videoHealthStore()
+	if _, err := store.acquire(attempt.SlotKey, attempt.SlotToken, max(videoSubmissionLeaseTTL, time.Until(time.Unix(attempt.SlotExpires, 0)))); err != nil {
+		return err
+	}
+	active, err := model.VideoValidationOwnerActive(ctx, attempt.ID, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	if !active {
+		// Compare-and-delete cannot release a newer owner's reservation.
+		return store.release(attempt.SlotKey, attempt.SlotToken)
+	}
+	return nil
+}
+
 // refreshVideoReliability runs off the request path and recovers state from the
 // primary database. Missing Redis keys never initialize a new health state.
 func RefreshVideoReliability(ctx context.Context) {
@@ -481,7 +506,7 @@ func RefreshVideoReliability(ctx context.Context) {
 				continue
 			}
 			seen[lease.SlotKey] = true
-			if _, err := videoHealthStore().acquire(lease.SlotKey, lease.SlotToken, max(videoSubmissionLeaseTTL, time.Until(time.Unix(lease.SlotExpires, 0)))); err != nil {
+			if err := restoreVideoValidationLease(ctx, lease); err != nil {
 				restored = false
 				videoReliabilityWriteFailed(channelID, "", err)
 				break
@@ -575,7 +600,7 @@ func reconcileVideoReliability(ctx context.Context) error {
 		}
 		if a.SlotKey != "" && (a.SlotExpires > now || liveOwner) {
 			// NX restores a lost cache without stealing a newer owner's token.
-			if _, err := videoHealthStore().acquire(a.SlotKey, a.SlotToken, max(videoSubmissionLeaseTTL, time.Duration(a.SlotExpires-now)*time.Second)); err != nil {
+			if err := restoreVideoValidationLease(ctx, a); err != nil {
 				return err
 			}
 		}

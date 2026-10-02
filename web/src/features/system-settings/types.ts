@@ -493,6 +493,7 @@ export type VideoScheduleSimulateRequest = {
 
 export type VideoScheduleSpec = {
   output_seconds?: number
+  input_video_seconds?: number
   seconds_kind?: string
   tier?: string
   references: Partial<Record<'video' | 'image' | 'audio', number>>

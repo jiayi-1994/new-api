@@ -211,6 +211,35 @@ test('switching a reference fee to included hides its value and saves no value',
   ).toEqual({ video: { '*': { mode: 'included' } } })
 })
 
+test('a video fee can charge input seconds independently of output seconds', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = await openRouting(
+    editingChannel(
+      pricedConfig({
+        video: { '*': { mode: 'per_output_second', value: 0.2 } },
+      })
+    )
+  )
+  const videos = await screen.findByRole('group', { name: 'Reference videos' })
+  await user.click(within(videos).getByRole('combobox', { name: 'Fee mode' }))
+  await user.click(
+    await screen.findByRole('option', { name: 'Per input video second' })
+  )
+  expect(within(videos).getByText('USD/input video second')).toBeVisible()
+  expect(
+    within(videos).queryByText('USD/output second')
+  ).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { settings: string }
+  expect(
+    JSON.parse(payload.settings).video_scheduling.models['videos-mini']
+      .references
+  ).toEqual({ video: { '*': { mode: 'per_input_second', value: 0.2 } } })
+})
+
 test('a missing fee value blocks saving and brings the routing tab into focus', async () => {
   const put = vi.spyOn(api, 'put')
   const channel = editingChannel(

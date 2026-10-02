@@ -143,6 +143,7 @@ const (
 	VideoRefIncluded        = "included"
 	VideoRefPerRequest      = "per_request"
 	VideoRefPerInput        = "per_input"
+	VideoRefPerInputSecond  = "per_input_second"
 	VideoRefPerOutputSecond = "per_output_second"
 	VideoRefMultiplier      = "multiplier"
 
@@ -229,6 +230,9 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 				return fmt.Errorf("video_scheduling: model %s: unknown reference kind %q", model, kind)
 			}
 			for tier, rule := range rules {
+				if rule.Mode == VideoRefPerInputSecond && kind != "video" {
+					return fmt.Errorf("video_scheduling: model %s: input seconds requires video references", model)
+				}
 				if err := validateVideoTierKey(tier); err != nil {
 					return fmt.Errorf("video_scheduling: model %s: reference %s: %w", model, kind, err)
 				}
@@ -237,7 +241,7 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 					if rule.Value != nil {
 						return fmt.Errorf("video_scheduling: model %s: reference %s/%s: %s takes no value", model, kind, tier, rule.Mode)
 					}
-				case VideoRefPerRequest, VideoRefPerInput, VideoRefPerOutputSecond:
+				case VideoRefPerRequest, VideoRefPerInput, VideoRefPerInputSecond, VideoRefPerOutputSecond:
 					if rule.Value == nil || !usd(*rule.Value) {
 						return fmt.Errorf("video_scheduling: model %s: reference %s/%s: value must be within [0, %g] USD", model, kind, tier, maxCostUSD)
 					}

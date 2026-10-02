@@ -26,6 +26,7 @@ import {
   parseSidebarModulesAdmin,
   serializeSidebarModulesAdmin,
 } from '@/features/system-settings/maintenance/config'
+import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useSidebarConfig } from '../use-sidebar-config'
@@ -178,5 +179,29 @@ describe('audit log sidebar entry', () => {
       .map((item) => item.title)
     expect(titles).not.toContain('Usage Logs')
     expect(titles).toContain('Audit Logs')
+  })
+})
+
+describe('video scheduling audit sidebar entry', () => {
+  it('links to the existing audit page after Channels for super administrators', () => {
+    const { result } = sidebarFor()
+    const items =
+      result.current.find((group) => group.id === 'admin')?.items ?? []
+    const channelIndex = items.findIndex((item) => item.url === '/channels')
+    expect(items[channelIndex + 1]).toMatchObject({
+      title: 'Video scheduling audit',
+      url: '/video-scheduling/audit',
+      requiredRole: ROLE.SUPER_ADMIN,
+    })
+    expect(
+      items.filter((item) => checkIsActive('/video-scheduling/audit', item))
+    ).toEqual([items[channelIndex + 1]])
+  })
+
+  it('follows the existing channel navigation visibility setting', () => {
+    const { result } = sidebarFor({ admin: { enabled: true, channel: false } })
+    expect(
+      result.current.flatMap((group) => group.items).map((item) => item.url)
+    ).not.toContain('/video-scheduling/audit')
   })
 })

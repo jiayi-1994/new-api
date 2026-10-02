@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.2",
+  version: "1.0.3",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -345,7 +345,8 @@ export function describeSpec(ctx) {
   upstreamModel(ctx);
   const input = ctx.requestBody || {};
   return {
-    spec_version: 1,
+    spec_version: 2,
+    reference_video_urls: mediaURLs(input, ["videos"], "videos"),
     output_seconds: seconds(input.duration, "duration"),
     seconds_kind: "exact",
     resolution: resolution(input.resolution, "resolution"),

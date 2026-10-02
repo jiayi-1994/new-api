@@ -55,7 +55,7 @@ export const meta = {
   apiVersion: 1,
   key: "pidoi",
   name: "Pidoi Video",
-  version: "1.0.2",
+  version: "1.0.3",
   author: { name: "jiayi-1994" },
   description: { en: "Pidoi video generation with per-request or per-second pricing by model", zh: "通过 Pidoi 生成视频，按模型分别按次或按秒计费" },
   icon: "text:PI",
@@ -281,7 +281,8 @@ export function describeSpec(ctx) {
   const body = modelRequest(ctx);
   const model = MODELS[body.model];
   return {
-    spec_version: 1,
+    spec_version: 2,
+    reference_video_urls: body.reference_videos || [],
     output_seconds: body.seconds,
     seconds_kind: model.fixed ? "fixed" : "exact",
     resolution: model.resolutions ? body.resolution : "*",

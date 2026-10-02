@@ -184,11 +184,12 @@ type TaskSchedulingSummary struct {
 // seconds (nil = unknown), resolution tier, reference counts per kind, and the
 // fields the plugin could not determine.
 type VideoSpecView struct {
-	OutputSeconds *float64       `json:"output_seconds,omitempty"`
-	SecondsKind   string         `json:"seconds_kind,omitempty"`
-	Tier          string         `json:"tier,omitempty"`
-	References    map[string]int `json:"references"`
-	Missing       []string       `json:"missing,omitempty"`
+	OutputSeconds     *float64       `json:"output_seconds,omitempty"`
+	InputVideoSeconds *float64       `json:"input_video_seconds,omitempty"`
+	SecondsKind       string         `json:"seconds_kind,omitempty"`
+	Tier              string         `json:"tier,omitempty"`
+	References        map[string]int `json:"references"`
+	Missing           []string       `json:"missing,omitempty"`
 }
 
 // TaskProbeSlot is a probe lease; only the holder of Token may release Key.

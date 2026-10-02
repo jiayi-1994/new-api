@@ -37,6 +37,7 @@ export const VIDEO_REFERENCE_CHARGING_MODES: VideoReferenceMode[] = [
   'per_request',
   'per_input',
   'per_output_second',
+  'per_input_second',
   'multiplier',
 ]
 const MAX_TASK_DURATION_SECONDS = 3600
@@ -155,10 +156,12 @@ export function buildVideoSchedulingConfig(
         item.prices.map((row) => [normalizeTier(row.tier), Number(row.price)])
       ),
     }
-    if (Number(item.min_seconds) > 0)
+    if (Number(item.min_seconds) > 0) {
       cost.min_seconds = Number(item.min_seconds)
-    if (Number(item.max_seconds) > 0)
+    }
+    if (Number(item.max_seconds) > 0) {
       cost.max_seconds = Number(item.max_seconds)
+    }
     const allowed = parseSeconds(item.allowed_seconds)
     if (allowed.length) cost.allowed_seconds = allowed
     for (const row of item.references) {
@@ -205,6 +208,7 @@ const referenceDraftSchema = z.object({
     'per_request',
     'per_input',
     'per_output_second',
+    'per_input_second',
     'multiplier',
   ]),
   value: z.string(),
@@ -311,6 +315,12 @@ export const videoSchedulingDraftSchema = z
       item.references.forEach((row, rowIndex) => {
         if (!row.mode) return
         const path = ['models', index, 'references', rowIndex]
+        if (row.mode === 'per_input_second' && row.kind !== 'video') {
+          issue(
+            [...path, 'mode'],
+            'Input seconds pricing requires video references'
+          )
+        }
         const key = `${row.kind}/${normalizeTier(row.tier)}`
         const error = tierError(row.tier)
         if (error || seenRules.has(key)) {

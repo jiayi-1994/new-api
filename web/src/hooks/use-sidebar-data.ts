@@ -138,6 +138,13 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('Video scheduling audit'),
+            url: '/video-scheduling/audit',
+            configUrls: ['/channels'],
+            icon: ClipboardList,
+            requiredRole: ROLE.SUPER_ADMIN,
+          },
+          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,

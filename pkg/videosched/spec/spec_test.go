@@ -122,9 +122,9 @@ func TestParseRejects(t *testing.T) {
 }
 
 func TestParseVersionAndOptOut(t *testing.T) {
-	_, _, err := spec.Parse(valid(map[string]any{"spec_version": int64(2)}))
+	_, _, err := spec.Parse(valid(map[string]any{"spec_version": int64(3)}))
 	require.ErrorIs(t, err, spec.ErrVersion)
-	assert.Contains(t, err.Error(), "2")
+	assert.Contains(t, err.Error(), "3")
 
 	_, _, err = spec.Parse(map[string]any{"unsupported": true})
 	require.ErrorIs(t, err, spec.ErrOptOut, "an opt-out needs no other field")

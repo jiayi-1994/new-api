@@ -242,6 +242,183 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	require.Len(t, attempts, 1)
 }
 
+func useVideoReliabilityDatabase(t *testing.T, dialect string) *gorm.DB {
+	t.Helper()
+	var driver gorm.Dialector
+	switch dialect {
+	case "sqlite":
+		driver = sqlite.Open(filepath.Join(t.TempDir(), "health.db"))
+	case "mysql":
+		if os.Getenv("TEST_MYSQL_DSN") == "" {
+			t.Skip("TEST_MYSQL_DSN is not configured")
+		}
+		driver = mysql.Open(os.Getenv("TEST_MYSQL_DSN"))
+	case "postgres":
+		if os.Getenv("TEST_POSTGRES_DSN") == "" {
+			t.Skip("TEST_POSTGRES_DSN is not configured")
+		}
+		driver = postgres.New(postgres.Config{DSN: os.Getenv("TEST_POSTGRES_DSN"), PreferSimpleProtocol: true})
+	}
+	db, err := gorm.Open(driver, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), NamingStrategy: schema.NamingStrategy{TablePrefix: "vs_reliability_regression_"}})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	previousDB, previousKind := model.DB, common.MainDatabaseType()
+	model.DB = db
+	common.SetMainDatabaseType(common.DatabaseType(dialect))
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.SetMainDatabaseType(previousKind)
+		videoReliabilityCache.Clear()
+		videoReliabilityReconcileCursor.Store(0)
+		require.NoError(t, sqlDB.Close())
+	})
+	tables := []any{&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Task{}, &model.Channel{}}
+	require.NoError(t, db.Migrator().DropTable(tables...))
+	t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(tables...)) })
+	require.NoError(t, db.AutoMigrate(tables...))
+	videoReliabilityCache.Clear()
+	videoReliabilityReconcileCursor.Store(0)
+	return db
+}
+
+func TestVideoReliabilityAdmissionConflictRefreshesCache(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, backend := range []string{"memory", "redis"} {
+			t.Run(dialect+"/"+backend, func(t *testing.T) {
+				useVideoHealthBackend(t, backend)
+				db := useVideoReliabilityDatabase(t, dialect)
+				channel := scheduledTestChannel(7, "")
+				require.NoError(t, db.Create(channel).Error)
+				require.NoError(t, model.EnsureVideoHealthState(t.Context(), 7, "video", channel.VideoHealthIdentity()))
+				now := time.Now().Unix()
+				certificate, err := common.Marshal(videosched.ReliabilityEvidence{Version: 1, Source: "window", WindowSeconds: 1800, BatchStart: now - 7200, BatchEnd: now - 5400, AsOf: now - 3600, ValidatedAt: now - 3600, ExpiresAt: now + 86400, Submitted: 100, Accepted: 100, Succeeded: 100})
+				require.NoError(t, err)
+				require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", 7).Updates(map[string]any{"state": videosched.HealthNormal, "qualification_json": string(certificate)}).Error)
+				publishPersistedVideoReliability(t.Context(), 7, "video")
+				s := operation_setting.GetVideoSchedulingSetting()
+				s.Mode, s.SelectionPolicy = "on", videosched.PolicyStabilityCostV2
+				c := healthTestContext()
+				c.Set(common.RequestIdKey, "admission-conflict")
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+				common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, s)
+				BindVideoHealthChannel(c, channel, "video")
+				RequestPolicy(c).BeginAttempt(channel, "default")
+				c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 7, Version: 1, Flow: "normal", Model: "video", Identity: channel.VideoHealthIdentity()})
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 7}, OriginModelName: "video"}
+				// A cohort refresh advances the version after selection, without
+				// making the channel unhealthy or losing its certificate.
+				require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", 7).Update("version", 2).Error)
+				failures := VideoReliabilityCollectionFailures()
+				require.ErrorIs(t, BeginVideoHealthTransmission(c, info), model.ErrVideoHealthStateChanged)
+				assert.Equal(t, failures, VideoReliabilityCollectionFailures(), "an expected conflict is not a persistence outage")
+				view := GetVideoReliability(7, "video")
+				require.NotNil(t, view, "bounded reselection needs the current snapshot")
+				assert.EqualValues(t, 2, view.StateVersion)
+				c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 7, Version: view.StateVersion, Flow: "normal", Model: "video", Identity: channel.VideoHealthIdentity()})
+				require.NoError(t, BeginVideoHealthTransmission(c, info))
+				stopVideoHealthSubmissionOwner(c)
+				attempts, err := model.ListVideoHealthAttempts(t.Context(), "admission-conflict")
+				require.NoError(t, err)
+				require.Len(t, attempts, 1, "only the accepted admission is journaled")
+				// Refresh must also preserve a concurrent block, never resurrect
+				// the old normal snapshot or admit transport against that block.
+				require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", 7).Updates(map[string]any{"version": 3, "state": videosched.HealthBlocked}).Error)
+				RequestPolicy(c).BeginAttempt(channel, "default")
+				require.ErrorIs(t, BeginVideoHealthTransmission(c, info), model.ErrVideoHealthStateChanged)
+				view = GetVideoReliability(7, "video")
+				require.NotNil(t, view)
+				assert.Equal(t, videosched.HealthBlocked, view.State)
+				assert.EqualValues(t, 3, view.StateVersion)
+				// A real database failure still makes the cached state unavailable.
+				require.NoError(t, db.Migrator().DropTable(&model.VideoHealthState{}))
+				require.ErrorIs(t, BeginVideoHealthTransmission(c, info), ErrVideoHealthAdmission)
+				assert.Nil(t, GetVideoReliability(7, "video"))
+				assert.Greater(t, VideoReliabilityCollectionFailures(), failures)
+			})
+		}
+	}
+}
+
+func TestVideoReliabilityDoesNotRestoreTerminalSlot(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, backend := range []string{"memory", "redis"} {
+			for _, path := range []string{"reconcile", "refresh"} {
+				for _, replacement := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/%s/replacement=%t", dialect, backend, path, replacement), func(t *testing.T) {
+						useVideoHealthBackend(t, backend)
+						db := useVideoReliabilityDatabase(t, dialect)
+						channel := scheduledTestChannel(7, "")
+						channel.Models, channel.OtherSettings = "video", `{"video_scheduling":{"models":{"video":{"mode":"per_video","prices":{"*":1}}}}}`
+						require.NoError(t, db.Create(channel).Error)
+						require.NoError(t, model.EnsureVideoHealthState(t.Context(), 7, "video", channel.VideoHealthIdentity()))
+						now := time.Now().Unix()
+						attempt := model.VideoHealthAttempt{RequestID: "terminal-slot", AttemptSeq: 1, ChannelID: 7, ModelName: "video", ConfigIdentity: channel.VideoHealthIdentity(), StartedAt: now, WindowSeconds: 1800, StateVersion: 1, Flow: "explore", SubmitOutcome: "accepted", SlotKey: videoValidationKeys(7)[0], SlotToken: "old-owner", SlotExpires: now + 300}
+						require.NoError(t, db.Create(&attempt).Error)
+						task := model.Task{TaskID: "terminal-slot", ChannelId: 7, Status: model.TaskStatusSubmitted, VideoHealthAttemptID: &attempt.ID}
+						task.PrivateData.VideoHealth = &model.TaskVideoHealthReference{AttemptID: attempt.ID, RequestID: attempt.RequestID, AttemptSeq: 1, ChannelID: 7, Model: "video", Slot: &model.TaskProbeSlot{Key: attempt.SlotKey, Token: attempt.SlotToken}}
+						require.NoError(t, db.Create(&task).Error)
+						_, err := videoHealthStore().acquire(attempt.SlotKey, attempt.SlotToken, 5*time.Minute)
+						require.NoError(t, err)
+						// An unfinished durable task must still restore its slot after
+						// cache loss, even when both original lease deadlines passed.
+						require.NoError(t, db.Model(&attempt).Updates(map[string]any{"slot_expires": now - 1, "submit_lease_expires": now - 1}).Error)
+						require.NoError(t, videoHealthStore().release(attempt.SlotKey, attempt.SlotToken))
+						require.NoError(t, reconcileVideoReliability(t.Context()))
+						held, err := videoHealthStore().held(videoValidationKeys(7))
+						require.NoError(t, err)
+						require.Equal(t, 1, held)
+						videoReliabilityReconcileCursor.Store(0)
+						completed := false
+						// Finish after the reconciler has read its snapshot, before it
+						// restores leases. No sleeps or probabilistic race are needed.
+						require.NoError(t, db.Callback().Query().After("gorm:after_query").Register("test:terminal_between_snapshot_and_restore", func(tx *gorm.DB) {
+							matches := path == "reconcile" && tx.Statement.Table == "vs_reliability_regression_tasks"
+							if path == "refresh" {
+								matches = slices.Contains(tx.Statement.Selects, "slot_key")
+							}
+							if completed || !matches {
+								return
+							}
+							completed = true
+							task.Status = model.TaskStatusSuccess
+							require.NoError(t, db.Model(&task).Update("status", task.Status).Error)
+							observeVideoReliabilityTerminal(&task, VideoOutcomeSuccess, "success")
+							if replacement {
+								claimed, err := videoHealthStore().acquire(attempt.SlotKey, "new-owner", time.Minute)
+								require.NoError(t, err)
+								require.True(t, claimed)
+							}
+						}))
+						if path == "reconcile" {
+							require.NoError(t, reconcileVideoReliability(t.Context()))
+						} else {
+							RefreshVideoReliability(t.Context())
+						}
+						require.True(t, completed, "the terminal callback must win the intended race")
+						attempts, err := model.ListVideoHealthAttempts(t.Context(), attempt.RequestID)
+						require.NoError(t, err)
+						require.Len(t, attempts, 1)
+						assert.Equal(t, "success", attempts[0].FinalOutcome)
+						held, err = videoHealthStore().held(videoValidationKeys(7))
+						require.NoError(t, err)
+						if replacement {
+							assert.Equal(t, 1, held, "cleanup cannot remove a newer owner's reservation")
+							require.NoError(t, videoHealthStore().release(attempt.SlotKey, "new-owner"))
+						} else {
+							assert.Zero(t, held, "terminal completion must leave no restored lease")
+						}
+						held, err = videoHealthStore().held(videoValidationKeys(7))
+						require.NoError(t, err)
+						assert.Zero(t, held)
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestVideoValidationAtomicSlotsAndOwnerRelease(t *testing.T) {
 	for _, backend := range []string{"memory", "redis"} {
 		t.Run(backend, func(t *testing.T) {

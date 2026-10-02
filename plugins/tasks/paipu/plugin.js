@@ -100,7 +100,7 @@ export const meta = {
   apiVersion: 1,
   key: "paipu",
   name: "Paipu Video",
-  version: "2.2.2",
+  version: "2.2.3",
   author: { name: "jiayi-1994" },
   description: { en: "Paipu video generation; choose per-second, per-video or per-resolution pricing on each model's price page", zh: "通过 Paipu 生成视频，在各模型定价页自选按秒、按条或分辨率按条计费" },
   icon: "text:PP",
@@ -343,7 +343,8 @@ export function describeSpec(ctx) {
   const name = ctx.upstreamModel || ctx.model;
   const selected = body.resolution || (has(MODELS, body.model) ? MODELS[body.model][0] : TEMPLATES[name]);
   return {
-    spec_version: 1,
+    spec_version: 2,
+    reference_video_urls: body.videos || [],
     output_seconds: body.duration,
     seconds_kind: has(FIXED_DURATIONS, body.model) ? "fixed" : "exact",
     resolution: selected || "*",

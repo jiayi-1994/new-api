@@ -18,6 +18,8 @@ import (
 const (
 	KindExact = "exact"
 	KindFixed = "fixed" // the request cannot change it; channel constraints still apply
+	// Mirrors relay/common.MaxTaskDurationSeconds without a host dependency.
+	MaxDurationSeconds = 3600
 )
 
 // Base cost modes.
@@ -32,6 +34,7 @@ const (
 	RefIncluded        = "included"
 	RefPerRequest      = "per_request"       // Value USD once per request
 	RefPerInput        = "per_input"         // Value USD per submitted item of the kind
+	RefPerInputSecond  = "per_input_second"  // Value USD per second of all input videos
 	RefPerOutputSecond = "per_output_second" // Value USD per output second
 	RefMultiplier      = "multiplier"        // adds base × (Value − 1); Value ≥ 1
 )
@@ -52,11 +55,13 @@ const (
 
 // Spec is the validated request shape one candidate's plugin will submit.
 type Spec struct {
-	OutputSeconds *float64 // nil = unknown, distinct from zero
-	SecondsKind   string   // exact|fixed
-	Tier          string   // lowercase resolution or product key; "*" = the model has no tiers; "" = unknown
-	References    map[string]int
-	Missing       []string
+	OutputSeconds      *float64 // nil = unknown, distinct from zero
+	InputVideoSeconds  *float64 // total input video duration; nil = not measured
+	ReferenceVideoURLs []string `json:"-"` // transient plugin facts, never persisted in audit snapshots
+	SecondsKind        string   // exact|fixed
+	Tier               string   // lowercase resolution or product key; "*" = the model has no tiers; "" = unknown
+	References         map[string]int
+	Missing            []string
 }
 
 // ReferenceCost is one reference media rule. Value distinguishes a missing
@@ -296,6 +301,20 @@ func quoteReference(kind string, n int, rules map[string]ReferenceCost, spec Spe
 		quantity = 1
 	case RefPerInput:
 		quantity = float64(n)
+	case RefPerInputSecond:
+		if kind != "video" {
+			line.Reason = "input seconds requires video references"
+			return line
+		}
+		if spec.InputVideoSeconds == nil {
+			line.Reason = "input video seconds unknown"
+			return line
+		}
+		quantity = *spec.InputVideoSeconds
+		if !(quantity > 0) || quantity > MaxDurationSeconds || math.IsInf(quantity, 0) {
+			line.Reason = "invalid input video seconds"
+			return line
+		}
 	case RefPerOutputSecond:
 		if spec.OutputSeconds == nil {
 			line.Reason = "seconds unknown"

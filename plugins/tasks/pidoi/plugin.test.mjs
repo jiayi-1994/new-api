@@ -66,7 +66,8 @@ test('describeSpec agrees with the submitted body for every enabled model', () =
     const ctx = { model: intent.model, upstreamModel: intent.model, requestBody: intent.requestBody };
     const spec = plugin.describeSpec(ctx); // no credentials: the hook is read-only
     const submitted = plugin.buildSubmitRequest({ ...ctx, baseUrl: 'https://pidoi.com', authHeader: 'fixture-key' }).body;
-    assert.equal(spec.spec_version, 1);
+    assert.equal(spec.spec_version, 2);
+    assert.deepEqual(spec.reference_video_urls, submitted.reference_videos || []);
     assert.equal(spec.output_seconds, Number(submitted.seconds), intent.model);
     assert.ok(spec.resolution === '*' || spec.resolution === submitted.resolution, intent.model);
     assert.deepEqual(spec.references, {
@@ -86,11 +87,11 @@ test('describeSpec keeps tiers for per-request models and reports fixed lengths'
   };
   const none = { video: 0, image: 0, audio: 0 };
   assert.deepEqual(describe({ model: 'tejiasd-mini-720p', prompt: 'cat', seconds: 15, resolution: '480p' }),
-    { spec_version: 1, output_seconds: 15, seconds_kind: 'exact', resolution: '480p', references: none }, 'billed per request, still tiered');
+    { spec_version: 2, reference_video_urls: [], output_seconds: 15, seconds_kind: 'exact', resolution: '480p', references: none }, 'billed per request, still tiered');
   assert.deepEqual(describe({ model: 'tejiasd-mini-720p', prompt: 'cat', seconds: 10, resolution: '720p' }).resolution, '720p');
   assert.throws(() => describe({ model: 'tejiasd-mini-720p', prompt: 'cat', seconds: 15, resolution: '720p' }), /at most 12 seconds/);
   assert.deepEqual(describe({ model: 'sora-v3-933-pro', prompt: 'cat' }),
-    { spec_version: 1, output_seconds: 15, seconds_kind: 'fixed', resolution: '720p', references: none }, 'fixed length and default tier are filled in');
+    { spec_version: 2, reference_video_urls: [], output_seconds: 15, seconds_kind: 'fixed', resolution: '720p', references: none }, 'fixed length and default tier are filled in');
   assert.equal(describe({ model: 'veo-3.1-fast', prompt: 'cat', seconds: 8, resolution: '1080p' }).resolution, '*', 'no published tiers');
   assert.deepEqual(describe({
     model: 'sd-2.5-480p-plus', prompt: 'cat', seconds: 5,

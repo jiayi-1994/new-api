@@ -91,6 +91,8 @@ export interface VideoSpec {
   seconds_kind?: "exact" | "fixed";
   resolution?: string;
   references: {video: number; image: number; audio: number};
+  /** spec_version 2 only: every submitted input video URL, in order, including duplicates. Transient; never stored in audits. */
+  reference_video_urls?: readonly string[];
 }
 /** Optional, read-only scheduling facts; never billing usage. */
 export declare function describeSpec(ctx: DriverContext & {usagePurpose: "spec"}): VideoSpec | {unsupported: true};

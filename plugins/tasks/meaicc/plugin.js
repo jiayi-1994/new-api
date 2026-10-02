@@ -17,7 +17,7 @@ export const meta = {
   apiVersion: 1,
   key: "meaicc",
   name: "Meaicc Video",
-  version: "1.1.2",
+  version: "1.1.3",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through Meaicc, billed per request", zh: "通过 Meaicc 生成视频，按次计费" },
   icon: "text:M",
@@ -287,7 +287,8 @@ export function describeSpec(ctx) {
   const kinds = { reference_video: "video", first_frame: "image", last_frame: "image", reference_image: "image", reference_voice: "audio" };
   for (const item of body.input.media || []) references[kinds[item.type]] += 1;
   return {
-    spec_version: 1,
+    spec_version: 2,
+    reference_video_urls: (body.input.media || []).filter((item) => item.type === "reference_video").map((item) => item.url),
     output_seconds: body.parameters.duration,
     seconds_kind: "exact",
     resolution: body.parameters.resolution,

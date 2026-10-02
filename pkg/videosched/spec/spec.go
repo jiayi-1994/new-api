@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -14,11 +15,11 @@ import (
 )
 
 // Version is the highest describeSpec contract version this host prices.
-const Version = 1
+const Version = 2
 
 // MaxOutputSeconds mirrors relay/common.MaxTaskDurationSeconds; this leaf
 // package cannot import the host.
-const MaxOutputSeconds = 3600
+const MaxOutputSeconds = videosched.MaxDurationSeconds
 
 // MaxReferenceCount bounds each reference kind's count. It is a host safety
 // bound above every plugin's own limit (megabyai allows 128 in total).
@@ -31,8 +32,8 @@ var (
 	ErrVersion = errors.New("spec version unsupported")
 )
 
-// knownKeys are the top-level describeSpec fields of spec_version 1.
-var knownKeys = []string{"unsupported", "spec_version", "output_seconds", "seconds_kind", "resolution", "references"}
+// knownKeys are the top-level describeSpec fields through spec_version 2.
+var knownKeys = []string{"unsupported", "spec_version", "output_seconds", "seconds_kind", "resolution", "references", "reference_video_urls"}
 
 // Parse strictly validates a describeSpec result. A missing key, a key with a
 // wrong type and a legal zero are distinct: only output_seconds, seconds_kind
@@ -85,6 +86,23 @@ func Parse(raw map[string]any) (s videosched.Spec, ignored []string, err error) 
 			return s, nil, fmt.Errorf("references.%s must be an integer between 0 and %d", kind, MaxReferenceCount)
 		}
 		s.References[kind] = int(n)
+	}
+	if value, exists := raw["reference_video_urls"]; exists {
+		if version < 2 {
+			return s, nil, errors.New("reference_video_urls requires spec_version 2")
+		}
+		urls, ok := value.([]any)
+		if !ok || len(urls) != s.References["video"] {
+			return s, nil, errors.New("reference_video_urls must contain every submitted video URL")
+		}
+		for _, value := range urls {
+			address, ok := value.(string)
+			parsed, err := url.Parse(address)
+			if !ok || len(address) > 8192 || err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return s, nil, errors.New("reference_video_urls must be bounded HTTP(S) URLs without credentials")
+			}
+			s.ReferenceVideoURLs = append(s.ReferenceVideoURLs, address)
+		}
 	}
 
 	if value, ok := raw["output_seconds"]; ok {

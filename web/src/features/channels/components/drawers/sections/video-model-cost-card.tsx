@@ -82,11 +82,13 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
     { value: 'per_input', label: t('Per input') },
     { value: 'per_output_second', label: t('Per output second') },
     { value: 'multiplier', label: t('Base cost multiplier') },
+    { value: 'per_input_second', label: t('Per input video second') },
   ]
   const referenceUnits: Record<string, string> = {
     per_request: t('USD/request'),
     per_input: t('USD/input'),
     per_output_second: t('USD/output second'),
+    per_input_second: t('USD/input video second'),
     multiplier: t('× base cost'),
   }
   const kindLabels: Record<VideoReferenceKind, string> = {
@@ -309,6 +311,9 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
           </Button>
         </div>
         {VIDEO_REFERENCE_KINDS.map((kind) => {
+          const kindModeItems = referenceModeItems.filter(
+            (option) => kind === 'video' || option.value !== 'per_input_second'
+          )
           const rows = item.references
             .map((row, rowIndex) => ({ row, rowIndex }))
             .filter((entry) => entry.row.kind === kind)
@@ -322,6 +327,13 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
               <div className='text-muted-foreground text-xs font-medium'>
                 {kindLabels[kind]}
               </div>
+              {rows.some(({ row }) => row.mode === 'per_input_second') && (
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'Uses the total input duration from MP4/MOV metadata. Unreadable duration makes this channel unquotable.'
+                  )}
+                </p>
+              )}
               {rows.length === 0 && (
                 <p className='text-muted-foreground text-xs'>
                   {t('Not configured')}
@@ -359,7 +371,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                       render={({ field }) => (
                         <FormItem>
                           <Select
-                            items={referenceModeItems}
+                            items={kindModeItems}
                             value={field.value || NOT_CONFIGURED}
                             onValueChange={(value) =>
                               field.onChange(
@@ -373,7 +385,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent alignItemWithTrigger={false}>
-                              {referenceModeItems.map((option) => (
+                              {kindModeItems.map((option) => (
                                 <SelectItem
                                   key={option.value}
                                   value={option.value}

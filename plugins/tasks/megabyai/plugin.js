@@ -21,7 +21,7 @@ export const meta = {
   apiVersion: 1,
   key: "megabyai",
   name: "Mega Video",
-  version: "2.1.2",
+  version: "2.1.3",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Mega API", zh: "通过 Mega API 生成视频" },
   icon: "text:M",
@@ -289,7 +289,8 @@ export function extractUsage(ctx) {
 export function describeSpec(ctx) {
   const params = videoParams(ctx.requestBody);
   return {
-    spec_version: 1,
+    spec_version: 2,
+    reference_video_urls: params.referenceVideos || [],
     output_seconds: params.duration,
     seconds_kind: "exact",
     resolution: params.resolution,

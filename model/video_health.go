@@ -322,9 +322,15 @@ func activeVideoValidationAttempts(tx *gorm.DB, now int64) *gorm.DB {
 func ListVideoValidationOwners(ctx context.Context, channelID int, now int64) ([]VideoHealthAttempt, error) {
 	var owners []VideoHealthAttempt
 	err := activeVideoValidationAttempts(DB.WithContext(ctx), now).
-		Select("slot_key", "slot_token", "slot_expires").Where("channel_id = ?", channelID).
+		Select("id", "slot_key", "slot_token", "slot_expires").Where("channel_id = ?", channelID).
 		Order("id DESC").Limit(512).Find(&owners).Error
 	return owners, err
+}
+
+func VideoValidationOwnerActive(ctx context.Context, attemptID int64, now int64) (bool, error) {
+	var count int64
+	err := activeVideoValidationAttempts(DB.WithContext(ctx), now).Where("id = ?", attemptID).Count(&count).Error
+	return count > 0, err
 }
 
 // ObserveVideoHealthAttempt is idempotent for both the submit observation and
