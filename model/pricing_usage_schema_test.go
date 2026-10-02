@@ -303,12 +303,21 @@ func TestUnifiedVideoPricingDoesNotUseAPluginUsageSchema(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&Option{}))
 	saved := config.GlobalConfig.ExportAllConfigs()
 	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	previousPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPrices)) })
 	_, err := jsplugin.DefaultRegistry.Register(pricingUsagePluginSource("1.0.0", `{requests:{type:"number",unit:"count"}}`), jsplugin.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("pricing-usage-probe")) })
+	_, err = jsplugin.DefaultRegistry.Register(strings.ReplaceAll(pricingUsagePluginSource("1.0.0", `{seconds:{type:"number",unit:"second"}}`), "pricing-usage-probe", "pricing-video-probe"), jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("pricing-video-probe")) })
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		billing_setting.VideoSalesOption: `{"pricing-usage-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
+		billing_setting.VideoSalesOption:        `{"Pricing-Usage-Model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5,15]}}}}`,
+		"billing_setting.billing_mode":          `{"Pricing-Usage-Model":"tiered_expr"}`,
+		"billing_setting.billing_expr":          `{"Pricing-Usage-Model":"tier(\"old\", u(\"requests\") * 3)"}`,
+		billing_setting.PluginBillingExprOption: `{"pricing-video-probe::Pricing-Usage-Model":"u(\"seconds\") * 9"}`,
 	}))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"Pricing-Usage-Model":7}`))
 	snapshot, err := GetModelPricingSnapshot([]string{"pricing-usage-model"})
 	require.NoError(t, err)
 	require.Len(t, snapshot.Entries, 1)
@@ -321,4 +330,54 @@ func TestUnifiedVideoPricingDoesNotUseAPluginUsageSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, preview.UnsupportedReason, "unified video sales")
 	assert.Empty(t, preview.Expression)
+
+	for i, name := range []string{"pricing-usage-model", "PRICING-USAGE-MODEL"} {
+		mapping := fmt.Sprintf(`{%q:%q}`, name, fmt.Sprintf("private-upstream-%d", i))
+		channelID := 940 + i
+		require.NoError(t, DB.Create(&Channel{Id: channelID, Type: constant.ChannelTypeTaskPlugin,
+			Key: "pricing-video-key", Status: common.ChannelStatusEnabled, Models: name, ModelMapping: &mapping}).Error)
+		require.NoError(t, DB.Create(&Ability{Group: []string{"default", "vip"}[i], Model: name, ChannelId: channelID, Enabled: true}).Error)
+	}
+	require.NoError(t, DB.Create(&Model{ModelName: "Pricing-Usage-Model", Status: 1, NameRule: NameRuleExact,
+		Description: "Unified video", Endpoints: `{"openai":"/v1/chat/completions","openai-video":"/private-submit"}`}).Error)
+	InitChannelCache()
+	for _, disabled := range []bool{false, true} {
+		salesJSON := fmt.Sprintf(`{"Pricing-Usage-Model":{"disabled":%t,"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5,15]}}}}`, disabled)
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: salesJSON}))
+		InvalidatePricingCache()
+		prices := GetPricing()
+		require.Len(t, prices, 1, "case variants and private mapped targets must not create extra catalog entries")
+		price := prices[0]
+		assert.Equal(t, "Pricing-Usage-Model", price.ModelName)
+		assert.Equal(t, "Unified video", price.Description)
+		assert.ElementsMatch(t, []string{"default", "vip"}, price.EnableGroup)
+		assert.Equal(t, "video_sales", price.BillingMode)
+		require.NotNil(t, price.VideoSales)
+		assert.Equal(t, disabled, price.VideoSales.Disabled)
+		assert.Equal(t, billing_setting.VideoSalesTier{USDPerSecond: 0.02, Seconds: []int{5, 15}}, price.VideoSales.Resolutions["720p"])
+		assert.Zero(t, price.QuotaType)
+		assert.Zero(t, price.ModelPrice)
+		assert.Zero(t, price.ModelRatio)
+		assert.Zero(t, price.CompletionRatio)
+		assert.Nil(t, price.CacheRatio)
+		assert.Nil(t, price.CreateCacheRatio)
+		assert.Nil(t, price.ImageRatio)
+		assert.Nil(t, price.AudioRatio)
+		assert.Nil(t, price.AudioCompletionRatio)
+		assert.Empty(t, price.BillingExpr)
+		assert.Empty(t, price.BillingPluginVariants)
+		assert.Empty(t, price.BillingUsageSchema)
+		assert.Empty(t, price.BillingUsageExamples)
+		assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, price.SupportedEndpointTypes)
+		assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, GetModelSupportEndpointTypes("PRICING-USAGE-MODEL"))
+		assert.ElementsMatch(t, []string{"default", "vip"}, GetModelEnableGroups("pricing-usage-model"))
+		assert.Equal(t, []int{0}, GetModelQuotaTypes("PRICING-USAGE-MODEL"))
+		endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointTypeOpenAIVideo)
+		require.True(t, ok)
+		assert.Equal(t, endpoint, GetSupportedEndpointMap()[string(constant.EndpointTypeOpenAIVideo)])
+		encoded, err := common.Marshal(price)
+		require.NoError(t, err)
+		assert.Contains(t, string(encoded), `"video_sales":`)
+		assert.NotContains(t, string(encoded), "private-upstream")
+	}
 }

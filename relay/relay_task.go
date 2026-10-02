@@ -568,9 +568,15 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 
 	// 通用 TaskDto 格式
+	item := TaskModel2Dto(originTask)
+	if originTask.IsUnifiedVideoSale() {
+		properties := originTask.Properties
+		properties.UpstreamModelName = ""
+		item.Properties = properties
+	}
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: item,
 	})
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)

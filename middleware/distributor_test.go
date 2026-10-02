@@ -14,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -166,6 +168,29 @@ func TestTokenModelLimitAllowsLegacyAliasAndModifierVariant(t *testing.T) {
 
 	wildcard := map[string]bool{"gemini-2.5-flash-thinking-*": true}
 	assert.True(t, TokenModelLimitAllows(wildcard, "gemini-2.5-flash-thinking-8192"))
+	assert.False(t, TokenModelLimitAllows(map[string]bool{"GPT-CUSTOM": true}, "gpt-custom"), "ordinary models remain case-sensitive")
+
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{"video-public":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`}))
+	for _, tc := range []struct {
+		name    string
+		allowed map[string]bool
+		want    bool
+	}{
+		{name: "canonical", allowed: map[string]bool{"video-public": true}, want: true},
+		{name: "folded", allowed: map[string]bool{"ViDeO-PuBlIc": true}, want: true},
+		{name: "false is not permission", allowed: map[string]bool{"video-public": false}},
+		{name: "different sale", allowed: map[string]bool{"video-other": true}},
+		{name: "private upstream", allowed: map[string]bool{"private-video-target": true}},
+		{name: "missing permission"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, TokenModelLimitAllows(tc.allowed, "VIDEO-PUBLIC"))
+		})
+	}
 }
 
 func TestTokenModelLimitAllowsExemptAtNameByFullName(t *testing.T) {

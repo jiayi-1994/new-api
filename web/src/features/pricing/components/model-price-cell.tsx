@@ -30,8 +30,17 @@ import {
   getDynamicPricingSummary,
   isUnconfiguredTaskUsageModel,
 } from '../lib/dynamic-price'
-import { isTokenBasedModel } from '../lib/model-helpers'
-import { formatPrice, formatRequestPrice } from '../lib/price'
+import {
+  getDisplayGroupRatio,
+  getVideoSalesTiers,
+  isTokenBasedModel,
+  isVideoSalesModel,
+} from '../lib/model-helpers'
+import {
+  formatPrice,
+  formatRequestPrice,
+  formatVideoSalesPrice,
+} from '../lib/price'
 import { taskUsageUnitLabel } from '../lib/task-price-display'
 import type { PricingModel, TokenUnit } from '../types'
 
@@ -95,7 +104,32 @@ export function ModelPriceCell(props: {
     unit: tokenUnitLabel,
   })
 
-  if (dynamic) {
+  if (isVideoSalesModel(props.model)) {
+    if (props.model.video_sales?.disabled) {
+      return (
+        <span className='text-muted-foreground text-sm'>
+          {t('Video sales paused')}
+        </span>
+      )
+    }
+    const tiers = getVideoSalesTiers(props.model)
+    if (tiers.length === 0) {
+      return (
+        <span className='text-muted-foreground text-sm'>
+          {t('Not configured')}
+        </span>
+      )
+    }
+    metrics = tiers.map((tier) => ({
+      label: tier.resolution,
+      value: formatVideoSalesPrice(tier.usd_per_second, {
+        ...options,
+        groupRatio: getDisplayGroupRatio(props.model, options.selectedGroup),
+        showCurrencySymbol: false,
+      }),
+    }))
+    caption = `${currencyLabel} / ${t('second')}`
+  } else if (dynamic) {
     if (dynamic.isSpecialExpression) {
       return (
         <span className='block max-w-full min-w-0'>

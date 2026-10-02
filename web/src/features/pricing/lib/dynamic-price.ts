@@ -36,7 +36,7 @@ import {
   type ParsedTier,
 } from './billing-expr'
 import { compileBillingExpression } from './billing-expression/parser'
-import { getDisplayGroupRatio } from './model-helpers'
+import { getDisplayGroupRatio, isVideoSalesModel } from './model-helpers'
 import { withPluginPricing } from './plugin-pricing'
 import {
   evaluateTaskVisualConfig,
@@ -141,6 +141,7 @@ function isTaskPricingTier(tier: DynamicPricingTier): tier is ParsedTaskTier {
 }
 
 export function isDynamicPricingModel(model: PricingModel): boolean {
+  if (isVideoSalesModel(model)) return false
   if (model.billing_plugin_variants?.length) {
     return model.billing_plugin_variants.some(
       (variant) =>
@@ -151,6 +152,7 @@ export function isDynamicPricingModel(model: PricingModel): boolean {
 }
 
 export function hasTaskUsageSchema(model: PricingModel): boolean {
+  if (isVideoSalesModel(model)) return false
   return Object.keys(model.billing_usage_schema ?? {}).length > 0
 }
 
@@ -159,6 +161,7 @@ export function isTaskUsagePricingModel(model: PricingModel): boolean {
 }
 
 export function isUnconfiguredTaskUsageModel(model: PricingModel): boolean {
+  if (isVideoSalesModel(model)) return false
   if (model.billing_plugin_variants?.length) {
     return model.billing_plugin_variants.every((variant) =>
       variant.billing_mode === 'ratio'
@@ -386,6 +389,7 @@ export function getDynamicPricingSummary(
   model: PricingModel,
   options: DynamicPriceOptions
 ): DynamicPricingSummary | null {
+  if (isVideoSalesModel(model)) return null
   const variants = model.billing_plugin_variants
   if (variants?.length) {
     const summaries = variants.flatMap((variant) => {
@@ -596,6 +600,7 @@ export function getCardExamplePrice(
   model: PricingModel,
   options: DynamicPriceOptions
 ): CardExamplePrice | null {
+  if (isVideoSalesModel(model)) return null
   if (model.billing_plugin_variants?.length) {
     const variant = model.billing_plugin_variants.find(
       (provider) => provider.billing_expr

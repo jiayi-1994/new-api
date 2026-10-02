@@ -298,6 +298,50 @@ func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *mod
 	return log
 }
 
+func TestUnifiedVideoLogsKeepUpstreamModelInAdminScope(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 44, 44
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+	for _, unified := range []bool{false, true} {
+		task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+		task.Properties = model.Properties{OriginModelName: "public-video", UpstreamModelName: "private-upstream-video"}
+		var snapshot *billingexpr.BillingSnapshot
+		if unified {
+			snapshot = &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest, UsageFacts: map[string]any{"seconds": float64(15), "resolution": "720p"}}
+		}
+		task.PrivateData.BillingContext.TieredSnapshot = snapshot
+		info := &relaycommon.RelayInfo{
+			UserId: userID, OriginModelName: "public-video", UsingGroup: "default",
+			ChannelMeta:           &relaycommon.ChannelMeta{ChannelId: channelID, UpstreamModelName: "private-upstream-video", IsModelMapped: true},
+			TaskRelayInfo:         &relaycommon.TaskRelayInfo{Action: "text_to_video"},
+			TieredBillingSnapshot: snapshot, PriceData: types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		}
+		log := callLogTaskConsumption(t, info, task)
+		var submitted map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(log.Other, &submitted))
+		for _, other := range []map[string]any{submitted, taskBillingOther(task).Snapshot()} {
+			assert.Equal(t, true, other["is_model_mapped"])
+			if unified {
+				assert.NotContains(t, other, "upstream_model_name")
+				admin, ok := other["admin_info"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "private-upstream-video", admin["upstream_model_name"])
+			} else {
+				assert.Equal(t, "private-upstream-video", other["upstream_model_name"])
+			}
+		}
+		userLogs, err := model.GetLogByTokenId(0)
+		require.NoError(t, err)
+		require.NotEmpty(t, userLogs)
+		if unified {
+			assert.NotContains(t, userLogs[0].Other, "private-upstream-video")
+		} else {
+			assert.Contains(t, userLogs[0].Other, "private-upstream-video")
+		}
+	}
+}
+
 func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 40, 40

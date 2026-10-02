@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -490,10 +491,20 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 }
 
 // TokenModelLimitAllows reports whether a token model-limit map authorizes
-// model. Exact name, wildcard-normalized name, and routing-normalized name
-// (modifiers and legacy aliases stripped) are all accepted. The Responses
-// WebSocket relay shares this rule so both transports admit the same names.
+// model. Unified video sales use one ASCII-folded public identity; upstream
+// mappings never grant access to that identity. Other models retain exact,
+// wildcard-normalized, and routing-normalized matching. Listings and relay
+// transports share this rule so every surface admits the same names.
 func TokenModelLimitAllows(limit map[string]bool, model string) bool {
+	if _, _, unified := billing_setting.GetVideoSales(model); unified {
+		folded := jsplugin.ASCIIFold(model)
+		for name, allowed := range limit {
+			if allowed && jsplugin.ASCIIFold(name) == folded {
+				return true
+			}
+		}
+		return false
+	}
 	if limit[model] {
 		return true
 	}

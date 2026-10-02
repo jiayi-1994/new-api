@@ -39,6 +39,7 @@ import {
 } from '../constants'
 import { hasTaskUsageSchema } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
+import { isVideoSalesModel } from '../lib/model-helpers'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
@@ -156,7 +157,7 @@ export const PricingSidebar = memo(function PricingSidebar(
     const vendors = new Map<string, number>()
     const tags = new Map<string, number>()
     const endpoints = new Map<string, number>()
-    const quotas = { token: 0, request: 0, task: 0 }
+    const quotas = { token: 0, request: 0, task: 0, video: 0 }
     for (const model of props.models) {
       if (model.vendor_name) {
         vendors.set(
@@ -172,7 +173,9 @@ export const PricingSidebar = memo(function PricingSidebar(
       for (const endpoint of new Set(model.supported_endpoint_types ?? [])) {
         endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1)
       }
-      if (hasTaskUsageSchema(model)) {
+      if (isVideoSalesModel(model)) {
+        quotas.video++
+      } else if (hasTaskUsageSchema(model)) {
         quotas.task++
       } else if (model.quota_type === 0) {
         quotas.token++
@@ -233,6 +236,11 @@ export const PricingSidebar = memo(function PricingSidebar(
       value: QUOTA_TYPES.TASK,
       label: quotaTypeLabels[QUOTA_TYPES.TASK],
       count: counts.quotas.task,
+    },
+    {
+      value: QUOTA_TYPES.VIDEO,
+      label: quotaTypeLabels[QUOTA_TYPES.VIDEO],
+      count: counts.quotas.video,
     },
   ]
 

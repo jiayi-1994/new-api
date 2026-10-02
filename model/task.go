@@ -73,6 +73,16 @@ type Task struct {
 	Data                   json.RawMessage `json:"data" gorm:"type:json"`
 }
 
+// IsUnifiedVideoSale follows the persisted sale contract, even after the
+// model's current sales configuration is changed or removed.
+func (t *Task) IsUnifiedVideoSale() bool {
+	if t == nil || t.PrivateData.BillingContext == nil {
+		return false
+	}
+	snapshot := t.PrivateData.BillingContext.TieredSnapshot
+	return snapshot != nil && snapshot.SalesSource == billingexpr.SalesSourceVideoRequest
+}
+
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)

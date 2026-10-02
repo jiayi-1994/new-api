@@ -55,6 +55,16 @@ export type BillingPluginVariant = {
   billing_usage_examples?: BillingUsageExample[]
 }
 
+export type VideoSalesTier = {
+  usd_per_second: number
+  seconds: number[]
+}
+
+export type VideoSalesModel = {
+  disabled?: boolean
+  resolutions: Record<string, VideoSalesTier>
+}
+
 export type PricingModel = {
   billing_plugin_variants?: BillingPluginVariant[]
   id: number
@@ -81,6 +91,8 @@ export type PricingModel = {
   group_ratio?: Record<string, number>
   /** Billing mode (e.g. "tiered_expr") used to flag dynamic pricing */
   billing_mode?: string
+  /** Unified video retail prices, independent of provider billing. */
+  video_sales?: VideoSalesModel
   /** Raw expression describing dynamic / tiered billing */
   billing_expr?: string
   /** Task-plugin usage facts and their billing units. */

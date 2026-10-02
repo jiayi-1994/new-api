@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
@@ -20,8 +21,8 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -249,22 +250,33 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	}
 	models := service.GetGroupsEnabledModels(ownerGroups)
-	for _, modelName := range models {
-		if modelLimitEnable {
-			matchingName := ratio_setting.RoutingMatchModelName(modelName)
-			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
-				continue
-			}
+	seenModels := make(map[string]bool, len(models))
+	ownerModelNames := make([]string, 0, len(models))
+	for _, abilityModel := range models {
+		modelName := abilityModel
+		if canonical, _, unified := billing_setting.GetVideoSales(modelName); unified {
+			modelName = canonical
+		}
+		if seenModels[modelName] {
+			continue
+		}
+		if modelLimitEnable && !middleware.TokenModelLimitAllows(tokenModelLimit, modelName) {
+			continue
 		}
 		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)
+		ownerModelNames = append(ownerModelNames, abilityModel)
+		seenModels[modelName] = true
 	}
 
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
-		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
+		owners := getPreferredModelOwners(ownerModelNames, ownerGroups)
+		for i, modelName := range userModelNames {
+			ownerByModel[modelName] = owners[ownerModelNames[i]]
+		}
 	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {

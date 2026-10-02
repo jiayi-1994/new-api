@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -319,6 +320,68 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, missingExprPricing.BillingMode)
 	require.Empty(t, missingExprPricing.BillingExpr)
+}
+
+func TestListModelsUnifiedVideoUsesPublicNameAndExistingAccessLimits(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	db := setupModelListControllerTestDB(t)
+	saved := config.GlobalConfig.ExportAllConfigs()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		model.InvalidatePricingCache()
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{
+		"zz-public-video":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}},
+		"zz-vip-video":{"resolutions":{"720p":{"usd_per_second":0.03,"seconds":[15]}}},
+		"zz-no-route-video":{"resolutions":{"720p":{"usd_per_second":0.04,"seconds":[15]}}}
+	}`}))
+	for i, name := range []string{"zz-public-video", "ZZ-PUBLIC-VIDEO", "zz-vip-video"} {
+		group := "default"
+		if i == 2 {
+			group = "vip"
+		}
+		mapping := fmt.Sprintf(`{%q:%q}`, name, fmt.Sprintf("private-video-%d", i))
+		require.NoError(t, db.Create(&model.Channel{Id: 810 + i, Type: constant.ChannelTypeTaskPlugin,
+			Key: "video-list-key", Status: common.ChannelStatusEnabled, Group: group, Models: name, ModelMapping: &mapping}).Error)
+		require.NoError(t, db.Create(&model.Ability{Group: group, Model: name, ChannelId: 810 + i, Enabled: true}).Error)
+	}
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "zz-unpriced-model", ChannelId: 813, Enabled: true}).Error)
+	model.InvalidatePricingCache()
+	for _, tc := range []struct {
+		name      string
+		group     string
+		limited   bool
+		allowed   map[string]bool
+		wantModel string
+	}{
+		{name: "ordinary user", group: "default", wantModel: "zz-public-video"},
+		{name: "canonical token name", group: "default", limited: true, allowed: map[string]bool{"zz-public-video": true}, wantModel: "zz-public-video"},
+		{name: "original ability token name", group: "default", limited: true, allowed: map[string]bool{"ZZ-PUBLIC-VIDEO": true}, wantModel: "zz-public-video"},
+		{name: "model outside group", group: "default", limited: true, allowed: map[string]bool{"zz-vip-video": true}},
+		{name: "configured without ability", group: "default", limited: true, allowed: map[string]bool{"zz-no-route-video": true}},
+		{name: "mapped upstream only", group: "default", limited: true, allowed: map[string]bool{"private-video-0": true}},
+		{name: "empty token model limit", group: "default", limited: true},
+		{name: "other group", group: "vip", wantModel: "zz-vip-video"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			common.SetContextKey(ctx, constant.ContextKeyUserGroup, tc.group)
+			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, tc.limited)
+			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, tc.allowed)
+			ListModels(ctx, constant.ChannelTypeOpenAI)
+			payload := decodeListModelsPayload(t, recorder)
+			if tc.wantModel == "" {
+				assert.Empty(t, payload.Data)
+				return
+			}
+			require.Len(t, payload.Data, 1)
+			assert.Equal(t, tc.wantModel, payload.Data[0].Id)
+			assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, payload.Data[0].SupportedEndpointTypes)
+			assert.NotContains(t, recorder.Body.String(), "private-video")
+		})
+	}
 }
 
 func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T) {

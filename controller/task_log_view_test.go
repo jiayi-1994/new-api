@@ -1,14 +1,57 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/relay"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnifiedVideoTaskViewsHideOnlyUpstreamModel(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	task.Properties = model.Properties{OriginModelName: "public-video", UpstreamModelName: "private-upstream-video"}
+	for _, unified := range []bool{false, true} {
+		if unified {
+			task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest}}
+		}
+		require.NoError(t, model.DB.Save(task).Error)
+		for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser, common.RoleRootUser} {
+			item := tasksToDto([]*model.Task{task}, false, role)[0]
+			properties, ok := item.Properties.(model.Properties)
+			require.True(t, ok)
+			assert.Equal(t, "public-video", properties.OriginModelName)
+			if unified && role < common.RoleAdminUser {
+				assert.Empty(t, properties.UpstreamModelName)
+			} else {
+				assert.Equal(t, "private-upstream-video", properties.UpstreamModelName)
+			}
+		}
+		assert.Equal(t, "private-upstream-video", task.Properties.UpstreamModelName, "views must not mutate the persisted task")
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Set("id", task.UserId)
+		c.Set("role", common.RoleRootUser)
+		c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/video/generations/"+task.TaskID, nil)
+		require.Nil(t, relay.RelayTaskFetch(c, relayconstant.RelayModeVideoFetchByID))
+		assert.Equal(t, http.StatusOK, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "public-video")
+		if unified {
+			assert.NotContains(t, recorder.Body.String(), "private-upstream-video", "token responses omit upstream names even for an administrator's token")
+		} else {
+			assert.Contains(t, recorder.Body.String(), "private-upstream-video")
+		}
+	}
+}
 
 func TestTaskLogDTOSeparatesUserAdminAndRootDetails(t *testing.T) {
 	task := &model.Task{

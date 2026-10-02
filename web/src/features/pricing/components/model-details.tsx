@@ -78,7 +78,11 @@ import {
   type DynamicPriceEntry,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  getAvailableGroups,
+  isTokenBasedModel,
+  isVideoSalesModel,
+} from '../lib/model-helpers'
 import { withPluginPricing } from '../lib/plugin-pricing'
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import {
@@ -104,6 +108,7 @@ import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelDetailsApi } from './model-details-api'
 import { ModelDetailsPerformance } from './model-details-performance'
+import { VideoSalesPriceTable } from './video-sales-price-table'
 
 // ----------------------------------------------------------------------------
 // Local UI helpers
@@ -712,6 +717,15 @@ function PriceSection(props: {
     },
   ]
 
+  if (isVideoSalesModel(props.model)) {
+    return (
+      <section>
+        <SectionTitle>{t('Base Price')}</SectionTitle>
+        <VideoSalesPriceTable model={props.model} options={props} />
+      </section>
+    )
+  }
+
   if (dynamicSummary) {
     if (dynamicSummary.isSpecialExpression) {
       return (
@@ -999,6 +1013,20 @@ type GroupPricingSectionProps = {
 
 function GroupPricingSection(props: GroupPricingSectionProps) {
   const { t } = useTranslation()
+  if (isVideoSalesModel(props.model)) {
+    if (props.model.video_sales?.disabled) return null
+    return (
+      <section>
+        <SectionTitle>{t('Pricing by Group')}</SectionTitle>
+        <VideoSalesPriceTable
+          model={props.model}
+          options={props}
+          groups={getAvailableGroups(props.model, props.usableGroup)}
+          groupRatio={props.groupRatio}
+        />
+      </section>
+    )
+  }
   const variants = props.model.billing_plugin_variants
   if (!variants?.length) {
     return <ProviderGroupPricingSection {...props} />
@@ -1482,6 +1510,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
     props.model.billing_usage_schema
   )
   const showBasePrices =
+    isVideoSalesModel(props.model) ||
     !props.model.billing_usage_schema ||
     simpleTaskPricing ||
     taskTiers.length === 0

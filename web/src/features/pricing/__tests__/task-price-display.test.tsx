@@ -28,10 +28,16 @@ import {
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
+import { CachedPriceCell } from '../components/cached-price-cell'
 import { DynamicPricingBreakdown } from '../components/dynamic-pricing-breakdown'
 import { ModelCard } from '../components/model-card'
 import { ModelDetailsContent } from '../components/model-details'
 import { ModelPriceCell } from '../components/model-price-cell'
+import { QUOTA_TYPES, SORT_OPTIONS } from '../constants'
+import { getBillingModeLabelKey } from '../lib/billing-mode'
+import { getDynamicPricingSummary } from '../lib/dynamic-price'
+import { filterByQuotaType, sortModels } from '../lib/filters'
+import { isTokenBasedModel } from '../lib/model-helpers'
 import { getTaskPricingDisplayTiers } from '../lib/task-matrix-display'
 import {
   hasSimpleTaskPricing,
@@ -99,6 +105,189 @@ const model: PricingModel = {
   },
 }
 const clients: QueryClient[] = []
+
+const unifiedVideo: PricingModel = {
+  ...model,
+  model_name: 'video-unified',
+  billing_mode: 'video_sales',
+  model_ratio: 0,
+  model_price: 0,
+  cache_ratio: 0.1,
+  enable_groups: ['default', 'premium', 'free'],
+  group_ratio: { default: 1, premium: 2, free: 0 },
+  video_sales: {
+    resolutions: {
+      '720p': { usd_per_second: 0.06, seconds: [5, 10, 15] },
+      '1080p': { usd_per_second: 0.12, seconds: [5, 10] },
+    },
+  },
+  billing_plugin_variants: [
+    {
+      plugin_key: 'legacy-provider',
+      plugin_name: 'Legacy provider',
+      billing_expr: 'tier("legacy", u("seconds") * 99)',
+      billing_usage_schema: { seconds: { type: 'number', unit: 'second' } },
+    },
+  ],
+}
+
+it('classifies unified retail models independently of legacy quota and provider prices', () => {
+  expect(isTokenBasedModel(unifiedVideo)).toBe(false)
+  expect(getBillingModeLabelKey(unifiedVideo)).toBe('Video billing')
+  expect(getDynamicPricingSummary(unifiedVideo, { tokenUnit: 'M' })).toBeNull()
+  expect(filterByQuotaType([unifiedVideo], QUOTA_TYPES.VIDEO)).toEqual([
+    unifiedVideo,
+  ])
+  for (const quotaType of [
+    QUOTA_TYPES.TOKEN,
+    QUOTA_TYPES.REQUEST,
+    QUOTA_TYPES.TASK,
+  ]) {
+    expect(filterByQuotaType([unifiedVideo], quotaType)).toEqual([])
+  }
+  const cheaper: PricingModel = {
+    ...unifiedVideo,
+    model_name: 'cheaper-video',
+    video_sales: {
+      resolutions: { '720p': { usd_per_second: 0.03, seconds: [5] } },
+    },
+  }
+  expect(sortModels([unifiedVideo, cheaper], SORT_OPTIONS.PRICE_LOW)).toEqual([
+    cheaper,
+    unifiedVideo,
+  ])
+})
+
+it('shows unified per-resolution sales prices in cards, lists, and group detail tables', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore
+    .getState()
+    .setConfig({
+      currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+    })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <ModelCard
+          model={unifiedVideo}
+          onClick={vi.fn()}
+          selectedGroup='premium'
+        />
+        <ModelPriceCell
+          model={unifiedVideo}
+          options={{ selectedGroup: 'premium' }}
+        />
+        <ModelDetailsContent
+          model={unifiedVideo}
+          groupRatio={{ default: 1, premium: 2, free: 0 }}
+          usableGroup={{
+            default: { desc: '', ratio: 1 },
+            premium: { desc: '', ratio: 2 },
+            free: { desc: '', ratio: 0 },
+          }}
+          endpointMap={{}}
+          autoGroups={[]}
+          priceRate={1}
+          usdExchangeRate={1}
+          tokenUnit='M'
+        />
+      </QueryClientProvider>
+    )
+    expect(screen.getAllByText('USD / second')).toHaveLength(2)
+    expect(screen.getAllByText('0.12')).toHaveLength(2)
+    expect(screen.getAllByText('0.24')).toHaveLength(2)
+    const base = screen.getByRole('table', { name: 'Base Price' })
+    expect(
+      within(base).getByRole('row', { name: '720p $0.06 5, 10, 15' })
+    ).toBeVisible()
+    expect(
+      within(base).getByRole('row', { name: '1080p $0.12 5, 10' })
+    ).toBeVisible()
+    const groups = screen.getByRole('table', { name: 'Pricing by Group' })
+    expect(
+      within(groups).getByRole('row', { name: 'premium 720p $0.12 5, 10, 15' })
+    ).toBeVisible()
+    expect(
+      within(groups).getByRole('row', { name: 'free 720p $0 5, 10, 15' })
+    ).toBeVisible()
+    expect(screen.queryByText('Legacy provider')).not.toBeInTheDocument()
+    expect(screen.queryByText('Raw expression')).not.toBeInTheDocument()
+    expect(screen.queryByText('Token-based')).not.toBeInTheDocument()
+    expect(screen.queryByText('Input')).not.toBeInTheDocument()
+    const cached = render(<CachedPriceCell model={unifiedVideo} options={{}} />)
+    expect(cached.container).toHaveTextContent(/^—$/)
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
+
+it('keeps video prices in sync with recharge, currency, free groups, and paused sales', async () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore
+    .getState()
+    .setConfig({
+      currency: {
+        ...DEFAULT_CURRENCY_CONFIG,
+        quotaDisplayType: 'CNY',
+        usdExchangeRate: 7,
+      },
+    })
+  try {
+    const { rerender } = render(
+      <ModelPriceCell
+        model={unifiedVideo}
+        options={{
+          selectedGroup: 'premium',
+          showRechargePrice: true,
+          priceRate: 3.5,
+          usdExchangeRate: 7,
+        }}
+      />
+    )
+    expect(screen.getByText('0.42')).toBeVisible()
+    expect(screen.getByText('CNY / second')).toBeVisible()
+    rerender(
+      <ModelPriceCell
+        model={unifiedVideo}
+        options={{ selectedGroup: 'free' }}
+      />
+    )
+    expect(screen.getAllByText('0')).toHaveLength(2)
+    const paused = {
+      ...unifiedVideo,
+      video_sales: { disabled: true, resolutions: {} },
+    }
+    rerender(<ModelPriceCell model={paused} />)
+    expect(screen.getByText('Video sales paused')).toBeVisible()
+    expect(screen.queryByText('0')).not.toBeInTheDocument()
+    await act(() => i18next.changeLanguage('zhTW'))
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    clients.push(client)
+    rerender(
+      <QueryClientProvider client={client}>
+        <ModelDetailsContent
+          model={unifiedVideo}
+          groupRatio={{ default: 1 }}
+          usableGroup={{ default: { desc: '', ratio: 1 } }}
+          endpointMap={{}}
+          autoGroups={[]}
+          priceRate={1}
+          usdExchangeRate={7}
+          tokenUnit='M'
+        />
+      </QueryClientProvider>
+    )
+    expect(screen.getAllByText('5, 10, 15')).toHaveLength(2)
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
 
 it('shows nested task conditions and prices in detail and group tables without ambiguous log matches', () => {
   vi.spyOn(api, 'get').mockResolvedValue({ data: { data: { groups: [] } } })

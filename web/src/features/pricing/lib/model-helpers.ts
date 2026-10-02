@@ -105,5 +105,17 @@ export function replaceModelInPath(path: string, modelName: string): string {
  * Check if model is token-based pricing
  */
 export function isTokenBasedModel(model: PricingModel): boolean {
-  return model.quota_type === QUOTA_TYPE_VALUES.TOKEN
+  return (
+    !isVideoSalesModel(model) && model.quota_type === QUOTA_TYPE_VALUES.TOKEN
+  )
+}
+
+export function isVideoSalesModel(model: PricingModel): boolean {
+  return model.billing_mode === 'video_sales'
+}
+
+export function getVideoSalesTiers(model: PricingModel) {
+  return Object.entries(model.video_sales?.resolutions ?? {})
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([resolution, tier]) => ({ resolution, ...tier }))
 }

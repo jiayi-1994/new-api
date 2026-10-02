@@ -45,6 +45,7 @@ type Pricing struct {
 	EnableGroup            []string                             `json:"enable_groups"`
 	SupportedEndpointTypes []constant.EndpointType              `json:"supported_endpoint_types"`
 	BillingMode            string                               `json:"billing_mode,omitempty"`
+	VideoSales             *billing_setting.VideoSalesModel     `json:"video_sales,omitempty"`
 	BillingExpr            string                               `json:"billing_expr,omitempty"`
 	BillingUsageSchema     map[string]jsplugin.UsageFieldSchema `json:"billing_usage_schema,omitempty"`
 	BillingUsageExamples   []jsplugin.UsageExample              `json:"billing_usage_examples,omitempty"`
@@ -111,6 +112,9 @@ func GetVendors() []PricingVendor {
 func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	if model == "" {
 		return make([]constant.EndpointType, 0)
+	}
+	if _, _, unified := billing_setting.GetVideoSales(model); unified {
+		return []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	}
 	modelSupportEndpointsLock.RLock()
 	defer modelSupportEndpointsLock.RUnlock()
@@ -197,11 +201,20 @@ func updatePricing() {
 		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
 		return
 	}
+	// Canonicalize only the catalog copy. Channel endpoint inference still
+	// needs the original public name from each channel's ability.
+	catalogAbilities := make([]AbilityWithChannel, len(enableAbilities))
+	copy(catalogAbilities, enableAbilities)
+	for i := range catalogAbilities {
+		if canonical, _, unified := billing_setting.GetVideoSales(catalogAbilities[i].Model); unified {
+			catalogAbilities[i].Model = canonical
+		}
+	}
 	// 预加载模型元数据与供应商一次，避免循环查询
 	var allMeta []Model
 	_ = DB.Find(&allMeta).Error
 	names := make([]string, 0, len(enableAbilities))
-	for _, ability := range enableAbilities {
+	for _, ability := range catalogAbilities {
 		names = append(names, ability.Model)
 	}
 	metaMap := resolveModelMetadata(allMeta, names)
@@ -215,7 +228,7 @@ func updatePricing() {
 	}
 
 	// 初始化默认供应商映射
-	initDefaultVendorMapping(metaMap, vendorMap, enableAbilities)
+	initDefaultVendorMapping(metaMap, vendorMap, catalogAbilities)
 
 	// 构建对前端友好的供应商列表
 	vendorsList = make([]PricingVendor, 0, len(vendorMap))
@@ -230,7 +243,7 @@ func updatePricing() {
 
 	modelGroupsMap := make(map[string]*types.Set[string])
 
-	for _, ability := range enableAbilities {
+	for _, ability := range catalogAbilities {
 		groups, ok := modelGroupsMap[ability.Model]
 		if !ok {
 			groups = types.NewSet[string]()
@@ -245,6 +258,10 @@ func updatePricing() {
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
+		if canonical, _, unified := billing_setting.GetVideoSales(ability.Model); unified {
+			modelSupportEndpointsStr[canonical] = []string{string(constant.EndpointTypeOpenAIVideo)}
+			continue
+		}
 		endpoints := modelSupportEndpointsStr[ability.Model]
 		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs)
 		for _, channelType := range channelTypes {
@@ -257,6 +274,9 @@ func updatePricing() {
 
 	// 再补充模型自定义端点：若配置有效则追加到已有推断，不再裁剪渠道真实能力
 	for modelName, meta := range metaMap {
+		if _, _, unified := billing_setting.GetVideoSales(modelName); unified {
+			continue
+		}
 		if strings.TrimSpace(meta.Endpoints) == "" {
 			continue
 		}
@@ -298,7 +318,10 @@ func updatePricing() {
 		}
 	}
 	// 2. 自定义端点（models 表）覆盖默认
-	for _, meta := range metaMap {
+	for modelName, meta := range metaMap {
+		if _, _, unified := billing_setting.GetVideoSales(modelName); unified {
+			continue
+		}
 		if strings.TrimSpace(meta.Endpoints) == "" {
 			continue
 		}
@@ -343,6 +366,12 @@ func updatePricing() {
 			pricing.Icon = meta.Icon
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
+		}
+		if _, sales, unified := billing_setting.GetVideoSales(model); unified {
+			pricing.BillingMode = "video_sales"
+			pricing.VideoSales = &sales
+			pricingMap = append(pricingMap, pricing)
+			continue
 		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {

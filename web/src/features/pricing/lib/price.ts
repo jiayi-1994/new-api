@@ -20,7 +20,11 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
-import { getConfiguredGroupRatio, getDisplayGroupRatio } from './model-helpers'
+import {
+  getConfiguredGroupRatio,
+  getDisplayGroupRatio,
+  isVideoSalesModel,
+} from './model-helpers'
 
 // ----------------------------------------------------------------------------
 // Price Calculation Utilities
@@ -151,7 +155,10 @@ export function formatPrice(
   selectedGroup?: string,
   showCurrencySymbol = true
 ): string {
-  if (model.quota_type === QUOTA_TYPE_VALUES.REQUEST) {
+  if (
+    isVideoSalesModel(model) ||
+    model.quota_type === QUOTA_TYPE_VALUES.REQUEST
+  ) {
     return '-'
   }
 
@@ -187,7 +194,10 @@ export function formatGroupPrice(
   usdExchangeRate = 1,
   groupRatio: Record<string, number>
 ): string {
-  if (model.quota_type === QUOTA_TYPE_VALUES.REQUEST) {
+  if (
+    isVideoSalesModel(model) ||
+    model.quota_type === QUOTA_TYPE_VALUES.REQUEST
+  ) {
     return '-'
   }
 
@@ -220,7 +230,10 @@ export function formatFixedPrice(
   usdExchangeRate = 1,
   groupRatio: Record<string, number>
 ): string {
-  if (model.quota_type !== QUOTA_TYPE_VALUES.REQUEST) {
+  if (
+    isVideoSalesModel(model) ||
+    model.quota_type !== QUOTA_TYPE_VALUES.REQUEST
+  ) {
     return '-'
   }
 
@@ -252,7 +265,10 @@ export function formatRequestPrice(
   selectedGroup?: string,
   showCurrencySymbol = true
 ): string {
-  if (model.quota_type !== QUOTA_TYPE_VALUES.REQUEST) {
+  if (
+    isVideoSalesModel(model) ||
+    model.quota_type !== QUOTA_TYPE_VALUES.REQUEST
+  ) {
     return '-'
   }
 
@@ -271,6 +287,31 @@ export function formatRequestPrice(
     showSymbol: showCurrencySymbol,
     digitsLarge: 4,
     digitsSmall: 4,
+    abbreviate: false,
+  })
+}
+
+/** Format a unified retail tier, using the same group and recharge semantics as other prices. */
+export function formatVideoSalesPrice(
+  usdPerSecond: number,
+  options: {
+    groupRatio?: number
+    showRechargePrice?: boolean
+    priceRate?: number
+    usdExchangeRate?: number
+    showCurrencySymbol?: boolean
+  } = {}
+): string {
+  const price = applyRechargeRate(
+    usdPerSecond * (options.groupRatio ?? 1),
+    options.showRechargePrice ?? false,
+    options.priceRate ?? 1,
+    options.usdExchangeRate ?? 1
+  )
+  return formatBillingCurrencyFromUSD(price, {
+    showSymbol: options.showCurrencySymbol ?? true,
+    digitsLarge: 4,
+    digitsSmall: 6,
     abbreviate: false,
   })
 }

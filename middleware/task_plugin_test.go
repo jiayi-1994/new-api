@@ -2172,6 +2172,89 @@ return {model: ctx.model, requestBody: {seconds: ctx.requestBody.seconds, resolu
 	}
 }
 
+func TestUnifiedVideoTokenLimitUsesSalesIdentityThroughDistribution(t *testing.T) {
+	setupTaskPluginRouteDB(t)
+	require.NoError(t, appI18n.Init())
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.VideoHealthRequest{}))
+	oldMemory, oldRedis := common.MemoryCacheEnabled, common.RedisEnabled
+	oldScheduling := *operation_setting.GetVideoSchedulingSetting()
+	oldSales := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	oldGroupRatios := ratio_setting.GroupRatio2JSONString()
+	common.MemoryCacheEnabled, common.RedisEnabled = true, false
+	scheduling := operation_setting.GetVideoSchedulingSetting()
+	scheduling.Mode, scheduling.SelectionPolicy = operation_setting.VideoSchedulingModeShadow, videosched.PolicyWeightedV1
+	scheduling.Models, scheduling.CapacityGroups = nil, nil
+	scheduling.PriceWeight, scheduling.QualityWeight, scheduling.ServiceWeight = 1, 0, 0
+	scheduling.ExploreShare, scheduling.ProbeRatio, scheduling.TieEpsilon = 0, 0, 0
+	scheduling.AuditEnabled = false
+	scheduling.UnknownSellPolicy, scheduling.MaxCostToSellRatio = "exclude", 1
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled, common.RedisEnabled = oldMemory, oldRedis
+		*operation_setting.GetVideoSchedulingSetting() = oldScheduling
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: oldSales}))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{"video-public":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`}))
+	const key = "unified-token-limit"
+	source := taskProtocolPluginSource(key, "1.0.0", `["private-video-target"]`, "/v1/videos", `return {model:ctx.model,requestBody:ctx.requestBody};`) + `
+export function describeSpec(ctx) {return {spec_version:1,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.resolution,references:{video:0,image:0,audio:0}};}
+`
+	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	for i, publicName := range []string{"VIDEO-PUBLIC", "video-public"} {
+		mapping := fmt.Sprintf(`{%q:"private-video-target"}`, publicName)
+		binding := `{"task_plugin_key":"unified-token-limit"}`
+		channel := &model.Channel{Id: 981 + i, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled,
+			Key: "token-test-key", Name: "public video", Models: publicName, Group: "default", ModelMapping: &mapping, Setting: &binding,
+			OtherSettings: `{"video_scheduling":{"models":{"video-public":{"mode":"per_video","prices":{"720p":0.1}}}}}`}
+		require.NoError(t, model.DB.Create(channel).Error)
+		require.NoError(t, channel.AddAbilities(model.DB))
+		model.InitChannelCache()
+		for _, tc := range []struct {
+			name    string
+			allowed map[string]bool
+			want    int
+		}{
+			{name: "canonical permission", allowed: map[string]bool{"video-public": true}, want: http.StatusNoContent},
+			{name: "channel spelling permission", allowed: map[string]bool{"VIDEO-PUBLIC": true}, want: http.StatusNoContent},
+			{name: "other case permission", allowed: map[string]bool{"ViDeO-PuBlIc": true}, want: http.StatusNoContent},
+			{name: "false permission", allowed: map[string]bool{"video-public": false}, want: http.StatusForbidden},
+			{name: "upstream permission", allowed: map[string]bool{"private-video-target": true}, want: http.StatusForbidden},
+			{name: "missing permission", want: http.StatusForbidden},
+		} {
+			t.Run(fmt.Sprintf("%d_channels/%s", i+1, tc.name), func(t *testing.T) {
+				reached := false
+				router := gin.New()
+				router.POST("/v1/videos", func(c *gin.Context) {
+					c.Set(common.RequestIdKey, t.Name())
+					common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+					common.SetContextKey(c, constant.ContextKeyTokenModelLimit, tc.allowed)
+				}, PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+					assert.Equal(t, "VIDEO-PUBLIC", c.GetString("resolved_task_model"), "the alias resolver rewrites the client spelling before authorization")
+					// Isolate the authorization regression from startup calibration;
+					// selection still runs the production weighted scheduler.
+					common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true})
+				}, Distribute(), func(c *gin.Context) {
+					reached = true
+					assert.NotZero(t, c.GetInt("channel_id"))
+					c.Status(http.StatusNoContent)
+				})
+				request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"video-public","seconds":15,"resolution":"720p"}`))
+				request.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, request)
+				assert.Equal(t, tc.want, recorder.Code, recorder.Body.String())
+				assert.Equal(t, tc.want == http.StatusNoContent, reached)
+			})
+		}
+	}
+}
+
 func TestUnifiedVideoRejectsNativeLegacyAndOtherHostProtocols(t *testing.T) {
 	const name = "unified-route-model"
 	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
