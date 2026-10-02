@@ -39,6 +39,9 @@ type batchPollingAdaptor struct {
 	batchCalls int
 	batchIDs   []string
 	results    map[string]*BatchTaskResult
+	// polled pairs the channel the adaptor was initialized with and the
+	// channel of each task it was asked to poll.
+	polled [][2]int
 }
 
 func (a *batchPollingAdaptor) FetchMode() string { return "batch" }
@@ -47,6 +50,7 @@ func (a *batchPollingAdaptor) FetchBatchTasks(_ string, _ string, tasks []*model
 	a.batchIDs = a.batchIDs[:0]
 	for _, task := range tasks {
 		a.batchIDs = append(a.batchIDs, task.GetUpstreamTaskID())
+		a.polled = append(a.polled, [2]int{a.initChannelMeta().ChannelId, task.ChannelId})
 	}
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
 }
@@ -296,6 +300,33 @@ func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
 	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return nil }
 	assert.NotPanics(t, func() { DispatchPlatformUpdate(context.Background(), "missing-plugin", taskChannels, tasks) })
 	GetTaskAdaptorFunc = previousFactory
+}
+
+func TestRunTaskPollingOnceKeepsSameUpstreamIDPerChannel(t *testing.T) {
+	truncate(t)
+	const firstChannel, secondChannel, upstreamID = 121, 122, "shared_upstream"
+	seedTaskPollingChannel(t, firstChannel, true)
+	seedTaskPollingChannel(t, secondChannel, true)
+	first := seedPollingTask(t, firstChannel, "task_first", upstreamID)
+	second := seedPollingTask(t, secondChannel, "task_second", upstreamID)
+	// A zero submit time would be swept as timed out before polling.
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id IN ?", []int64{first.ID, second.ID}).Update("submit_time", time.Now().Unix()).Error)
+
+	batch := &batchPollingAdaptor{}
+	previousFactory, previousLimit := GetTaskAdaptorFunc, constant.TaskQueryLimit
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return batch }
+	constant.TaskQueryLimit = 100
+	t.Cleanup(func() { GetTaskAdaptorFunc, constant.TaskQueryLimit = previousFactory, previousLimit })
+
+	RunTaskPollingOnce(context.Background(), nil)
+
+	assert.ElementsMatch(t, [][2]int{{firstChannel, firstChannel}, {secondChannel, secondChannel}}, batch.polled,
+		"each task is polled once, with its own channel's credentials")
+	for _, task := range []*model.Task{first, second} {
+		var persisted model.Task
+		require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+		assert.Equal(t, "https://example.com/result", persisted.GetResultURL(), task.TaskID)
+	}
 }
 
 func TestUpdateBatchTasksSettlesTieredUsageForTerminalStates(t *testing.T) {

@@ -167,8 +167,11 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 			continue
 		}
 		summary.PlatformsScanned++
-		taskChannelM := make(map[int][]string)
-		taskM := make(map[string]*model.Task)
+		// Upstream task IDs are unique only within one upstream account, so one
+		// lookup map cannot hold two channels' tasks sharing an ID. A colliding
+		// task waits for the next dispatch round; normally there is one round.
+		var roundTasks []map[string]*model.Task
+		var roundChannels []map[int][]string
 		nullTaskIds := make([]int64, 0)
 		for _, task := range tasks {
 			upstreamID := task.GetUpstreamTaskID()
@@ -177,8 +180,16 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 				nullTaskIds = append(nullTaskIds, task.ID)
 				continue
 			}
-			taskM[upstreamID] = task
-			taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], upstreamID)
+			round := 0
+			for round < len(roundTasks) && roundTasks[round][upstreamID] != nil {
+				round++
+			}
+			if round == len(roundTasks) {
+				roundTasks = append(roundTasks, make(map[string]*model.Task))
+				roundChannels = append(roundChannels, make(map[int][]string))
+			}
+			roundTasks[round][upstreamID] = task
+			roundChannels[round][task.ChannelId] = append(roundChannels[round][task.ChannelId], upstreamID)
 		}
 		if len(nullTaskIds) > 0 {
 			summary.NullTasksFailed += len(nullTaskIds)
@@ -192,11 +203,9 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 				logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %v", nullTaskIds))
 			}
 		}
-		if len(taskChannelM) == 0 {
-			continue
+		for round := range roundTasks {
+			DispatchPlatformUpdate(ctx, platform, roundChannels[round], roundTasks[round])
 		}
-
-		DispatchPlatformUpdate(ctx, platform, taskChannelM, taskM)
 	}
 	if report != nil && ctx.Err() == nil {
 		report(totalPlatforms, totalPlatforms)
