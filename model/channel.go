@@ -1014,7 +1014,13 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelOtherSettings.ValidateToolLossPolicy(); err != nil {
 		return err
 	}
+	normalizedVideoTiers := false
 	if channelOtherSettings.VideoScheduling != nil {
+		var err error
+		normalizedVideoTiers, err = channelOtherSettings.VideoScheduling.NormalizeTiers()
+		if err != nil {
+			return err
+		}
 		maxCostUSD, err := operation_setting.VideoSchedMaxCostUSD()
 		if err != nil {
 			return err
@@ -1040,6 +1046,23 @@ func (channel *Channel) ValidateSettings() error {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
 		}
+	}
+	if normalizedVideoTiers {
+		// Preserve unrelated and unknown settings when saving normalized tiers.
+		var settings map[string]json.RawMessage
+		if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
+			return err
+		}
+		videoSettings, err := common.Marshal(channelOtherSettings.VideoScheduling)
+		if err != nil {
+			return err
+		}
+		settings["video_scheduling"] = videoSettings
+		encoded, err := common.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		channel.OtherSettings = string(encoded)
 	}
 	return nil
 }

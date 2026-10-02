@@ -261,6 +261,8 @@ func TestQuoteSecondsRules(t *testing.T) {
 	perVideo := CostConfig{Mode: ModePerVideo, Prices: map[string]float64{"720p": 1}}
 	withRange := CostConfig{Mode: ModePerVideo, Prices: map[string]float64{"720p": 1}, MinSeconds: 4, MaxSeconds: 10}
 	discrete := CostConfig{Mode: ModePerSecond, Prices: map[string]float64{"720p": 1}, AllowedSeconds: []int{5, 10}}
+	combinations := CostConfig{Mode: ModePerSecond, Prices: map[string]float64{"*": 0.01}, MinSeconds: 8, MaxSeconds: 10, AllowedSeconds: []int{8},
+		AllowedSecondsByResolution: map[string][]int{"720p": {5, 10, 15}, "1080p": {5, 10}, "4k": {5}}}
 	noSeconds := Spec{Tier: "720p"}
 	fixed := spec("720p", 6)
 	fixed.SecondsKind = KindFixed
@@ -281,6 +283,15 @@ func TestQuoteSecondsRules(t *testing.T) {
 		{"allowed discrete value", discrete, spec("720p", 10), "", 10},
 		{"disallowed discrete value", discrete, spec("720p", 6), "seconds 6 not allowed", 0},
 		{"fixed seconds still checked", discrete, fixed, "seconds 6 not allowed", 0},
+		{"combination overrides all model-wide rules", combinations, spec("720p", 15), "", .15},
+		{"combination below model-wide minimum", combinations, spec("720p", 5), "", .05},
+		{"same duration unsupported at higher resolution", combinations, spec("1080p", 15), "seconds 15 not allowed", 0},
+		{"combination does not fall back to old allowed list", combinations, spec("720p", 8), "seconds 8 not allowed", 0},
+		{"unknown seconds with combination", combinations, noSeconds, "seconds unknown", 0},
+		{"resolution absent from combinations", combinations, spec("480p", 5), "tier 480p has no allowed seconds", 0},
+		{"wildcard price does not allow unknown resolution", combinations, spec("", 5), "tier  has no allowed seconds", 0},
+		{"2160p uses canonical 4k combination", combinations, spec("2160p", 5), "", .05},
+		{"fractional seconds cannot match combination", combinations, spec("720p", 5.5), "seconds 5.5 not allowed", 0},
 		{"negative seconds", perVideo, spec("720p", -1), "invalid seconds", 0},
 		{"nan seconds", perVideo, spec("720p", math.NaN()), "invalid seconds", 0},
 		{"inf seconds", perVideo, spec("720p", math.Inf(1)), "invalid seconds", 0},
@@ -292,6 +303,35 @@ func TestQuoteSecondsRules(t *testing.T) {
 			require.Equal(t, tc.reason, q.Reason)
 			assert.InDelta(t, tc.usd, q.TotalUSD, eps)
 		})
+	}
+}
+
+func TestQuoteResolutionAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, requested, configured, wantTier string
+		prices                                map[string]float64
+		want                                  float64
+	}{
+		{"new canonical table", "2160p", "4k", "4k", map[string]float64{"4k": .20}, .22},
+		{"legacy table", "4k", "2160p", "2160p", map[string]float64{"2160p": .20}, .22},
+		{"exact tier wins for old ambiguous table", "4k", "4k", "4k", map[string]float64{"4k": .20, "2160p": .50}, .22},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cost := CostConfig{Mode: ModePerVideo, Prices: tc.prices,
+				AllowedSecondsByResolution: map[string][]int{tc.configured: {5}},
+				References:                 map[string]map[string]ReferenceCost{"image": {tc.configured: rule(RefPerRequest, .02)}}}
+			quote := Quote(cost, spec(tc.requested, 5, "image"))
+			require.Empty(t, quote.Reason)
+			assert.Equal(t, tc.wantTier, quote.Tier)
+			assert.InDelta(t, tc.want, quote.TotalUSD, eps)
+			require.Len(t, quote.References, 1)
+			assert.Equal(t, tc.configured, quote.References[0].Tier)
+		})
+	}
+	for _, capabilities := range []map[string][]int{{}, {"720p": nil}} {
+		quote := Quote(CostConfig{Mode: ModePerVideo, Prices: map[string]float64{"720p": .1}, AllowedSecondsByResolution: capabilities}, spec("720p", 5))
+		assert.NotEmpty(t, quote.Reason, "invalid empty capability must never quote unrestricted")
+		assert.Zero(t, quote.TotalUSD)
 	}
 }
 

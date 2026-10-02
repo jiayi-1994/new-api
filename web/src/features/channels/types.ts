@@ -104,6 +104,7 @@ export interface VideoModelCost {
   min_seconds?: number
   max_seconds?: number
   allowed_seconds?: number[]
+  allowed_seconds_by_resolution?: Record<string, number[]>
   references?: Partial<
     Record<VideoReferenceKind, Record<string, VideoReferenceCost>>
   >

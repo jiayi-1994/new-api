@@ -145,6 +145,23 @@ func TestVideoInputDurationPurchaseQuote(t *testing.T) {
 		assert.Equal(t, 8.25, *spec.InputVideoSeconds)
 		assert.InDelta(t, 1.165, videosched.Quote(cost, spec).TotalUSD, 1e-9)
 	})
+	for _, tc := range []struct{ requested, configured string }{{"2160p", "4k"}, {"4k", "2160p"}} {
+		t.Run("input reference tier "+tc.requested+" matches "+tc.configured, func(t *testing.T) {
+			aliasedCost := videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{tc.configured: 1},
+				References: map[string]map[string]videosched.ReferenceCost{"video": {
+					tc.configured: {Mode: videosched.RefPerInputSecond, Value: &price}, "*": {Mode: videosched.RefIncluded},
+				}}}
+			spec := videosched.Spec{OutputSeconds: &output, Tier: tc.requested, References: map[string]int{"video": 1}, ReferenceVideoURLs: []string{server.URL + "/twelve.mov"}}
+			before := snapshotRequests()
+			require.NoError(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, aliasedCost))
+			require.NotNil(t, spec.InputVideoSeconds)
+			assert.Equal(t, 12.0, *spec.InputVideoSeconds)
+			assert.Greater(t, snapshotRequests()["/twelve.mov"], before["/twelve.mov"], "matching the tier must read actual input media")
+			quote := videosched.Quote(aliasedCost, spec)
+			require.Empty(t, quote.Reason)
+			assert.InDelta(t, 1.24, quote.TotalUSD, 1e-9)
+		})
+	}
 	t.Run("no input video needs no metadata and no surcharge", func(t *testing.T) {
 		spec := videosched.Spec{References: map[string]int{"video": 0}}
 		require.NoError(t, resolveVideoInputSeconds(newVideoSchedTestContext(t), &spec, cost))
@@ -1490,6 +1507,7 @@ export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requ
 	for _, tc := range []struct {
 		name, model, mapping, tier, priceTier, excluded string
 		seconds                                         int
+		allowedSeconds                                  string
 	}{
 		{name: "alias mapped", model: "video-unified", mapping: `{"video-unified":"real-video"}`, seconds: 15, tier: "720p", priceTier: "720p"},
 		{name: "folded alias mapping", model: "Video-Unified", mapping: `{"video-unified":"real-video"}`, seconds: 15, tier: "720p", priceTier: "720p"},
@@ -1503,6 +1521,9 @@ export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requ
 		{name: "tier without a purchase price", model: "real-video", seconds: 15, tier: "720p", priceTier: "1080p", excluded: "tier 720p not priced"},
 		{name: "2160p matches 4k", model: "real-video", seconds: 15, tier: "2160p", priceTier: "4k"},
 		{name: "pixels match 4k", model: "real-video", seconds: 15, tier: "3840x2160", priceTier: "4k"},
+		{name: "supported resolution duration", model: "real-video", seconds: 15, tier: "720p", priceTier: "720p", allowedSeconds: `{"720p":[5,10,15],"1080p":[5,10]}`},
+		{name: "unsupported duration combination", model: "real-video", seconds: 15, tier: "720p", priceTier: "720p", allowedSeconds: `{"720p":[5,10]}`, excluded: "seconds 15 not allowed"},
+		{name: "resolution absent from combinations", model: "real-video", seconds: 15, tier: "720p", priceTier: "720p", allowedSeconds: `{"1080p":[15]}`, excluded: "tier 720p has no allowed seconds"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newVideoSchedTestContext(t)
@@ -1513,8 +1534,12 @@ export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requ
 				resolution = "4k"
 			}
 			SetVideoSalesFacts(c, VideoSalesFacts{Model: tc.model, Seconds: 15, Resolution: resolution, USDPerSecond: 0.02})
+			capabilities := ""
+			if tc.allowedSeconds != "" {
+				capabilities = `,"allowed_seconds_by_resolution":` + tc.allowedSeconds
+			}
 			channel := &model.Channel{Id: 551, Models: tc.model, Status: common.ChannelStatusEnabled, ModelMapping: &tc.mapping,
-				OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{%q:{"mode":"per_video","prices":{%q:0.12}}}}}`, tc.model, tc.priceTier)}
+				OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{%q:{"mode":"per_video","prices":{%q:0.12}%s}}}}`, tc.model, tc.priceTier, capabilities)}
 			candidate, _ := assembleVideoCandidate(c, "default", tc.model, channel, false, operation_setting.GetVideoSchedulingSetting())
 			if candidate.Excluded == "" {
 				candidate.Excluded = videosched.Quote(candidate.Cost, candidate.Spec).Reason

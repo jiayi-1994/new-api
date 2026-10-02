@@ -293,7 +293,7 @@ func validateVideoSalesOption(value string) error {
 }
 
 func UpdateOption(key string, value string) error {
-	if strings.HasPrefix(key, "video_scheduling_setting.") {
+	if strings.HasPrefix(key, "video_scheduling_setting.") || key == billing_setting.VideoSalesOption {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
 	if IsRequestPolicyOption(key) {
@@ -332,6 +332,18 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	if value, ok := values[billing_setting.VideoSalesOption]; ok {
+		sales, err := billing_setting.ParseVideoSales(value)
+		if err != nil {
+			return err
+		}
+		normalized, err := common.Marshal(sales)
+		if err != nil {
+			return err
+		}
+		values = maps.Clone(values)
+		values[billing_setting.VideoSalesOption] = string(normalized)
 	}
 	for key := range values {
 		if IsPasskeyDomainOption(key) {

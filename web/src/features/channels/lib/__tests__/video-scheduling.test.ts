@@ -38,6 +38,7 @@ const storedConfig: VideoSchedulingConfig = {
       prices: { '720p': 0.05, '*': 0 },
       max_seconds: 12,
       allowed_seconds: [5, 10],
+      allowed_seconds_by_resolution: { '720p': [5, 10, 15], '1080p': [5, 10] },
       references: {
         video: { '720p': { mode: 'per_input', value: 0 } },
         image: { '*': { mode: 'included' } },
@@ -84,7 +85,8 @@ function savedSettings(draft: VideoSchedulingDraft) {
 
 describe('video scheduling channel settings', () => {
   test('an untouched stored config saves back unchanged, keeping explicit zeros and unknown settings', () => {
-    const settings = savedSettings(storedDraft())
+    const validated = channelFormSchema.parse(storedForm())
+    const settings = savedSettings(draftOf(validated))
 
     expect(settings.video_scheduling).toEqual(storedConfig)
     expect(settings.other_key).toBe(true)

@@ -114,8 +114,9 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 	for _, tc := range []struct{ name, value, wantErr string }{
 		{name: "valid", value: `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5,15]},"4k":{"usd_per_second":0.1,"seconds":[5]}}}}`},
 		{name: "case duplicate", value: `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5]}}},"Video-Unified":{"resolutions":{"720p":{"usd_per_second":0.01,"seconds":[5]}}}}`, wantErr: "differ only in letter case"},
-		{name: "2160p is written 4k", value: `{"m":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: `as "4k"`},
-		{name: "upper case tier", value: `{"m":{"resolutions":{"720P":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: `as "720p"`},
+		{name: "2160p is written 4k", value: `{"m":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`},
+		{name: "upper case tier", value: `{"m":{"resolutions":{"720P":{"usd_per_second":0.1,"seconds":[5]}}}}`},
+		{name: "duplicate canonical tier", value: `{"m":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]},"4k":{"usd_per_second":0.2,"seconds":[10]}}}}`, wantErr: "duplicate resolution"},
 		{name: "unknown tier", value: `{"m":{"resolutions":{"hd":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "<height>p or 4k"},
 		{name: "zero price", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0,"seconds":[5]}}}}`, wantErr: "positive number"},
 		{name: "no seconds", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[]}}}}`, wantErr: "sellable duration"},

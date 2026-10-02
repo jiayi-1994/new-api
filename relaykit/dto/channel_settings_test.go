@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -763,11 +764,21 @@ func TestVideoSchedulingConfigValidate(t *testing.T) {
 		{name: "max seconds over host limit", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"max_seconds":3601}}}`, wantErr: "seconds"},
 		{name: "min above max", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"min_seconds":10,"max_seconds":5}}}`, wantErr: "min_seconds"},
 		{name: "non-positive allowed seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds":[0]}}}`, wantErr: "allowed_seconds"},
+		{name: "resolution combinations", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[5,10,15],"1080p":[5,10],"4k":[5]}}}}`},
+		{name: "empty combinations", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{}}}}`, wantErr: "must contain a resolution"},
+		{name: "wildcard combination tier", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"*":[5]}}}}`, wantErr: "invalid resolution"},
+		{name: "product combination tier", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"pro":[5]}}}}`, wantErr: "invalid resolution"},
+		{name: "pixel combination tier", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"1280x720":[5]}}}}`, wantErr: "invalid resolution"},
+		{name: "noncanonical combination tier", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"0720p":[5]}}}}`, wantErr: "invalid resolution"},
+		{name: "empty tier seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[]}}}}`, wantErr: "must contain a duration"},
+		{name: "zero tier seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[0]}}}}`, wantErr: "within [1, 3600]"},
+		{name: "tier seconds over host limit", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[3601]}}}}`, wantErr: "within [1, 3600]"},
+		{name: "duplicate tier seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[5,5]}}}}`, wantErr: "duplicate duration"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var cfg VideoSchedulingConfig
-			require.NoError(t, json.Unmarshal([]byte(tt.json), &cfg))
+			require.NoError(t, kitutil.Unmarshal([]byte(tt.json), &cfg))
 			err := cfg.Validate(bound, 3600)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -779,9 +790,41 @@ func TestVideoSchedulingConfigValidate(t *testing.T) {
 	}
 
 	var cfg VideoSchedulingConfig
-	require.NoError(t, json.Unmarshal([]byte(valid), &cfg))
+	require.NoError(t, kitutil.Unmarshal([]byte(valid), &cfg))
 	rules := cfg.Models["videos-mini"].References
 	require.NotNil(t, rules["video"]["720p"].Value, "explicit zero must stay distinct from a missing value")
 	assert.Zero(t, *rules["video"]["720p"].Value)
 	assert.Nil(t, rules["image"]["*"].Value)
+}
+
+func TestVideoSchedulingNormalizeTiers(t *testing.T) {
+	for _, tc := range []struct {
+		name, entry string
+		wantError   bool
+	}{
+		{"normalize all tiered tables", `{"mode":"per_video","prices":{"2160p":0.2,"pro":0.3},"allowed_seconds_by_resolution":{"2160p":[5]},"references":{"video":{"2160p":{"mode":"included"},"*":{"mode":"unsupported"}}}}`, false},
+		{"conflicting prices", `{"mode":"per_video","prices":{"2160p":0.2,"4k":0.2}}`, true},
+		{"conflicting capabilities", `{"mode":"per_video","prices":{"4k":0.2},"allowed_seconds_by_resolution":{"2160p":[5],"4k":[5]}}`, true},
+		{"conflicting references", `{"mode":"per_video","prices":{"4k":0.2},"references":{"video":{"2160p":{"mode":"included"},"4k":{"mode":"included"}}}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cost VideoModelCost
+			require.NoError(t, kitutil.Unmarshal([]byte(tc.entry), &cost))
+			cfg := VideoSchedulingConfig{Models: map[string]VideoModelCost{"video": cost}}
+			changed, err := cfg.NormalizeTiers()
+			if tc.wantError {
+				require.ErrorContains(t, err, "2160p and 4k")
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, changed)
+			require.NoError(t, cfg.Validate(100, 3600))
+			assert.Equal(t, map[string]float64{"4k": .2, "pro": .3}, cfg.Models["video"].Prices)
+			assert.Equal(t, map[string][]int{"4k": {5}}, cfg.Models["video"].AllowedSecondsByResolution)
+			assert.Equal(t, map[string]VideoReferenceCost{"4k": {Mode: VideoRefIncluded}, "*": {Mode: VideoRefUnsupported}}, cfg.Models["video"].References["video"])
+			changed, err = cfg.NormalizeTiers()
+			require.NoError(t, err)
+			assert.False(t, changed)
+		})
+	}
 }

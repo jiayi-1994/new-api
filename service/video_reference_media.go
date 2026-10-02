@@ -36,7 +36,7 @@ func resolveVideoInputSeconds(c *gin.Context, spec *videosched.Spec, cost videos
 		return nil
 	}
 	rules := cost.References["video"]
-	rule, found := rules[spec.Tier]
+	rule, _, found := videosched.LookupVideoTier(rules, spec.Tier)
 	if !found || spec.Tier == "" {
 		rule = rules["*"]
 	}

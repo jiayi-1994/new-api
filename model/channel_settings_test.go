@@ -68,6 +68,19 @@ func TestChannelValidateSettingsVideoSchedulingCostBound(t *testing.T) {
 	require.NoError(t, (&Channel{OtherSettings: `{"tool_loss_policy":"allow"}`}).ValidateSettings(), "channels without video_scheduling skip the bound")
 }
 
+func TestChannelVideoSchedulingNormalizesSavedResolutionTiers(t *testing.T) {
+	channel := &Channel{OtherSettings: `{"future_setting":{"id":9007199254740993},"tool_loss_policy":"allow","video_scheduling":{"models":{"video-unified":{"mode":"per_second","prices":{"2160p":0.03},"allowed_seconds_by_resolution":{"2160p":[5,10]}}}}}`}
+	require.NoError(t, channel.ValidateSettings())
+	assert.JSONEq(t, `{"future_setting":{"id":9007199254740993},"tool_loss_policy":"allow","video_scheduling":{"quality":0,"capacity":0,"models":{"video-unified":{"mode":"per_second","prices":{"4k":0.03},"allowed_seconds_by_resolution":{"4k":[5,10]}}}}}`, channel.OtherSettings)
+	saved := channel.OtherSettings
+	require.NoError(t, channel.ValidateSettings())
+	assert.Equal(t, saved, channel.OtherSettings, "validation is idempotent")
+	channel.OtherSettings = `{"video_scheduling":{"models":{"m":{"mode":"per_video","prices":{"2160p":0.1,"4k":0.2}}}}}`
+	previous := channel.OtherSettings
+	require.Error(t, channel.ValidateSettings())
+	assert.Equal(t, previous, channel.OtherSettings, "invalid aliases must not mutate saved settings")
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

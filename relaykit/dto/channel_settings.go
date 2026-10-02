@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -169,6 +170,9 @@ type VideoModelCost struct {
 	MinSeconds     int                `json:"min_seconds,omitempty"`
 	MaxSeconds     int                `json:"max_seconds,omitempty"`
 	AllowedSeconds []int              `json:"allowed_seconds,omitempty"`
+	// AllowedSecondsByResolution, when present, replaces the model-wide
+	// duration constraints. An absent tier cannot accept any duration.
+	AllowedSecondsByResolution map[string][]int `json:"allowed_seconds_by_resolution,omitempty"`
 	// References maps kind (video|image|audio) -> tier|"*" -> rule. A missing
 	// kind or tier is unpriced, never included.
 	References map[string]map[string]VideoReferenceCost `json:"references,omitempty"`
@@ -177,6 +181,49 @@ type VideoModelCost struct {
 type VideoReferenceCost struct {
 	Mode  string   `json:"mode"`
 	Value *float64 `json:"value,omitempty"` // USD or dimensionless multiplier; nil is distinct from 0
+}
+
+// NormalizeTiers gives 2160p and 4k one saved identity across prices,
+// duration capabilities and reference surcharges. Other product tiers retain
+// their existing names. Two aliases in one table are ambiguous, even if the
+// configured values happen to be equal.
+func (c *VideoSchedulingConfig) NormalizeTiers() (changed bool, err error) {
+	if c == nil {
+		return false, nil
+	}
+	for model, cost := range c.Models {
+		normalized, err := normalizeVideoTierTable(cost.Prices)
+		if err != nil {
+			return changed, fmt.Errorf("video_scheduling: model %s: prices: %w", model, err)
+		}
+		changed = changed || normalized
+		normalized, err = normalizeVideoTierTable(cost.AllowedSecondsByResolution)
+		if err != nil {
+			return changed, fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution: %w", model, err)
+		}
+		changed = changed || normalized
+		for kind, rules := range cost.References {
+			normalized, err = normalizeVideoTierTable(rules)
+			if err != nil {
+				return changed, fmt.Errorf("video_scheduling: model %s: reference %s: %w", model, kind, err)
+			}
+			changed = changed || normalized
+		}
+	}
+	return changed, nil
+}
+
+func normalizeVideoTierTable[V any](tiers map[string]V) (bool, error) {
+	value, found := tiers["2160p"]
+	if !found {
+		return false, nil
+	}
+	if _, duplicate := tiers["4k"]; duplicate {
+		return false, fmt.Errorf("2160p and 4k identify the same tier")
+	}
+	tiers["4k"] = value
+	delete(tiers, "2160p")
+	return true, nil
 }
 
 // Validate checks the save-time shape of the scheduling config. maxCostUSD
@@ -223,6 +270,31 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 		for _, seconds := range cost.AllowedSeconds {
 			if seconds <= 0 || seconds > maxSeconds {
 				return fmt.Errorf("video_scheduling: model %s: allowed_seconds must be within [1, %d]", model, maxSeconds)
+			}
+		}
+		if cost.AllowedSecondsByResolution != nil && len(cost.AllowedSecondsByResolution) == 0 {
+			return fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution must contain a resolution", model)
+		}
+		for tier, allowed := range cost.AllowedSecondsByResolution {
+			if tier != "4k" {
+				digits, hasSuffix := strings.CutSuffix(tier, "p")
+				height, err := strconv.Atoi(digits)
+				if !hasSuffix || err != nil || height <= 0 || strconv.Itoa(height) != digits {
+					return fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution has invalid resolution %q", model, tier)
+				}
+			}
+			if len(allowed) == 0 {
+				return fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution[%s] must contain a duration", model, tier)
+			}
+			seen := make(map[int]bool, len(allowed))
+			for _, seconds := range allowed {
+				if seconds <= 0 || seconds > maxSeconds {
+					return fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution[%s] must be within [1, %d]", model, tier, maxSeconds)
+				}
+				if seen[seconds] {
+					return fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution[%s] has duplicate duration %d", model, tier, seconds)
+				}
+				seen[seconds] = true
 			}
 		}
 		for kind, rules := range cost.References {

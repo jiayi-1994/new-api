@@ -75,12 +75,13 @@ type ReferenceCost struct {
 // base price excludes reference surcharges. An absent References kind or tier
 // is unpriced, never included.
 type CostConfig struct {
-	Mode           string
-	Prices         map[string]float64 // tier -> USD; "*" matches any tier
-	MinSeconds     int
-	MaxSeconds     int
-	AllowedSeconds []int
-	References     map[string]map[string]ReferenceCost // kind -> tier|"*" -> rule
+	Mode                       string
+	Prices                     map[string]float64 // tier -> USD; "*" matches any tier
+	MinSeconds                 int
+	MaxSeconds                 int
+	AllowedSeconds             []int
+	AllowedSecondsByResolution map[string][]int                    // non-nil replaces model-wide duration constraints
+	References                 map[string]map[string]ReferenceCost // kind -> tier|"*" -> rule
 }
 
 // CostQuote is the purchase cost of one spec. A non-empty Reason invalidates
@@ -220,8 +221,7 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 	}
 
 	tier := strings.ToLower(strings.TrimSpace(spec.Tier))
-	key := tier
-	base, ok := cost.Prices[key]
+	base, key, ok := LookupVideoTier(cost.Prices, tier)
 	switch {
 	case tier == "":
 		// Never guess the cheapest tier: only a lone wildcard price quotes blind.
@@ -240,7 +240,14 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 		return CostQuote{Reason: "invalid price"}
 	}
 
-	constrained := cost.MinSeconds > 0 || cost.MaxSeconds > 0 || len(cost.AllowedSeconds) > 0
+	allowed := cost.AllowedSeconds
+	if cost.AllowedSecondsByResolution != nil {
+		allowed, _, ok = LookupVideoTier(cost.AllowedSecondsByResolution, tier)
+		if !ok {
+			return CostQuote{Reason: "tier " + tier + " has no allowed seconds"}
+		}
+	}
+	constrained := cost.AllowedSecondsByResolution != nil || cost.MinSeconds > 0 || cost.MaxSeconds > 0 || len(allowed) > 0
 	quantity := 1.0
 	if spec.OutputSeconds == nil {
 		if cost.Mode == ModePerSecond || constrained {
@@ -251,10 +258,10 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 		if !(seconds > 0) || math.IsInf(seconds, 0) { // also rejects NaN
 			return CostQuote{Reason: "invalid seconds"}
 		}
-		if (cost.MinSeconds > 0 && seconds < float64(cost.MinSeconds)) || (cost.MaxSeconds > 0 && seconds > float64(cost.MaxSeconds)) {
+		if cost.AllowedSecondsByResolution == nil && ((cost.MinSeconds > 0 && seconds < float64(cost.MinSeconds)) || (cost.MaxSeconds > 0 && seconds > float64(cost.MaxSeconds))) {
 			return CostQuote{Reason: fmt.Sprintf("seconds %g out of range", seconds)}
 		}
-		if len(cost.AllowedSeconds) > 0 && !slices.ContainsFunc(cost.AllowedSeconds, func(allowed int) bool { return float64(allowed) == seconds }) {
+		if (cost.AllowedSecondsByResolution != nil || len(allowed) > 0) && !slices.ContainsFunc(allowed, func(value int) bool { return float64(value) == seconds }) {
 			return CostQuote{Reason: fmt.Sprintf("seconds %g not allowed", seconds)}
 		}
 		if cost.Mode == ModePerSecond {
@@ -269,6 +276,22 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 	return CostQuote{Tier: key, BaseUSD: usd}
 }
 
+// LookupVideoTier preserves exact product keys and legacy 2160p tables while
+// accepting the canonical 4k spelling used by newly saved channel settings.
+func LookupVideoTier[V any](tiers map[string]V, tier string) (value V, key string, found bool) {
+	if value, found = tiers[tier]; found {
+		return value, tier, true
+	}
+	key = tier
+	if tier == "2160p" {
+		key = "4k"
+	} else if tier == "4k" {
+		key = "2160p"
+	}
+	value, found = tiers[key]
+	return value, key, found
+}
+
 // quoteReference prices one reference kind carrying n items. The rule is
 // matched on the request tier and falls back to an explicit "*"; the tier the
 // base price hit never hides a tier-specific surcharge.
@@ -279,7 +302,10 @@ func quoteReference(kind string, n int, rules map[string]ReferenceCost, spec Spe
 		return line
 	}
 	tier := strings.ToLower(strings.TrimSpace(spec.Tier))
-	rule, ok := rules[tier]
+	rule, key, ok := LookupVideoTier(rules, tier)
+	if ok {
+		tier = key
+	}
 	if tier == "" || !ok {
 		tier = "*"
 		rule, ok = rules[tier]

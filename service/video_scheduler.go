@@ -761,6 +761,7 @@ func videoCostConfig(cost dto.VideoModelCost) videosched.CostConfig {
 	config := videosched.CostConfig{
 		Mode: cost.Mode, Prices: cost.Prices,
 		MinSeconds: cost.MinSeconds, MaxSeconds: cost.MaxSeconds, AllowedSeconds: cost.AllowedSeconds,
+		AllowedSecondsByResolution: cost.AllowedSecondsByResolution,
 	}
 	if len(cost.References) > 0 {
 		config.References = make(map[string]map[string]videosched.ReferenceCost, len(cost.References))

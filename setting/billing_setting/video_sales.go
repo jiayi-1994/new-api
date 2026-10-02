@@ -63,9 +63,8 @@ func VideoTierForHeight(height int) string {
 	return strconv.Itoa(height) + "p"
 }
 
-// ParseVideoSales validates a complete video_sales document. Tier names must
-// already be canonical and model names must differ beyond letter case, so a
-// lookup can never match two entries with different prices.
+// ParseVideoSales validates and normalizes a complete video_sales document.
+// A lookup must never match two entries with different prices.
 func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
 	var sales map[string]VideoSalesModel
 	if err := common.UnmarshalJsonStr(value, &sales); err != nil {
@@ -84,13 +83,14 @@ func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
 		if len(entry.Resolutions) == 0 {
 			return nil, fmt.Errorf("video_sales: model %s needs at least one resolution", model)
 		}
+		resolutions := make(map[string]VideoSalesTier, len(entry.Resolutions))
 		for tier, price := range entry.Resolutions {
 			canonical, ok := CanonicalVideoTier(tier)
 			if !ok {
 				return nil, fmt.Errorf("video_sales: model %s: resolution %q must be <height>p or 4k", model, tier)
 			}
-			if canonical != tier {
-				return nil, fmt.Errorf("video_sales: model %s: write resolution %q as %q", model, tier, canonical)
+			if _, duplicate := resolutions[canonical]; duplicate {
+				return nil, fmt.Errorf("video_sales: model %s: duplicate resolution %q", model, canonical)
 			}
 			if math.IsNaN(price.USDPerSecond) || math.IsInf(price.USDPerSecond, 0) || price.USDPerSecond <= 0 {
 				return nil, fmt.Errorf("video_sales: model %s %s: usd_per_second must be a positive number", model, tier)
@@ -103,7 +103,10 @@ func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
 					return nil, fmt.Errorf("video_sales: model %s %s: seconds must be within [1, %d]", model, tier, relaycommon.MaxTaskDurationSeconds)
 				}
 			}
+			resolutions[canonical] = price
 		}
+		entry.Resolutions = resolutions
+		sales[model] = entry
 	}
 	return sales, nil
 }

@@ -3,8 +3,10 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,4 +55,35 @@ export function parseTaskResult() { return {}; }
 	require.NoError(t, err, "a real upstream model name may also be the public unified model")
 
 	assert.Error(t, validateOptionValue(billing_setting.VideoSalesOption, `{"video-unified":"not an object"}`))
+}
+
+func TestVideoSalesSaveNormalizesResolutionAliases(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&Option{}))
+	previousMap := common.OptionMap
+	previousSales := config.GlobalConfig.ExportAllConfigs()
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() {
+		common.OptionMap = previousMap
+		require.NoError(t, config.GlobalConfig.LoadFromDB(previousSales))
+		DB.Where(&Option{Key: billing_setting.VideoSalesOption}).Delete(&Option{})
+	})
+	const input = `{"normalized-video":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`
+	const expected = `{"normalized-video":{"resolutions":{"4k":{"usd_per_second":0.1,"seconds":[5]}}}}`
+	for _, bulk := range []bool{false, true} {
+		var err error
+		if bulk {
+			err = UpdateOptionsBulk(map[string]string{billing_setting.VideoSalesOption: input})
+		} else {
+			err = UpdateOption(billing_setting.VideoSalesOption, input)
+		}
+		require.NoError(t, err)
+		var stored Option
+		require.NoError(t, DB.Where(&Option{Key: billing_setting.VideoSalesOption}).First(&stored).Error)
+		assert.JSONEq(t, expected, stored.Value)
+		assert.JSONEq(t, expected, common.OptionMap[billing_setting.VideoSalesOption])
+		_, sale, ok := billing_setting.GetVideoSales("normalized-video")
+		require.True(t, ok)
+		assert.Contains(t, sale.Resolutions, "4k")
+		assert.NotContains(t, sale.Resolutions, "2160p")
+	}
 }

@@ -58,6 +58,7 @@ export type VideoModelDraft = {
   min_seconds: string
   max_seconds: string
   allowed_seconds: string
+  allowed_seconds_by_resolution?: Record<string, number[]>
   references: VideoReferenceDraft[]
 }
 
@@ -112,6 +113,7 @@ export function parseVideoSchedulingDraft(
       min_seconds: cost.min_seconds ? String(cost.min_seconds) : '',
       max_seconds: cost.max_seconds ? String(cost.max_seconds) : '',
       allowed_seconds: (cost.allowed_seconds ?? []).join(', '),
+      allowed_seconds_by_resolution: cost.allowed_seconds_by_resolution,
       references: VIDEO_REFERENCE_KINDS.flatMap((kind) =>
         Object.entries(cost.references?.[kind] ?? {}).map(([tier, rule]) => ({
           kind,
@@ -164,6 +166,9 @@ export function buildVideoSchedulingConfig(
     }
     const allowed = parseSeconds(item.allowed_seconds)
     if (allowed.length) cost.allowed_seconds = allowed
+    if (item.allowed_seconds_by_resolution !== undefined) {
+      cost.allowed_seconds_by_resolution = item.allowed_seconds_by_resolution
+    }
     for (const row of item.references) {
       if (!row.mode) continue
       const rules = (cost.references ??= {})
@@ -228,6 +233,12 @@ export const videoSchedulingDraftSchema = z
         min_seconds: z.string(),
         max_seconds: z.string(),
         allowed_seconds: z.string(),
+        allowed_seconds_by_resolution: z
+          .record(
+            z.string(),
+            z.array(z.number().int().positive().max(MAX_TASK_DURATION_SECONDS))
+          )
+          .optional(),
         references: z.array(referenceDraftSchema),
       })
     ),
