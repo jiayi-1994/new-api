@@ -23,6 +23,7 @@ import (
 	videospec "github.com/QuantumNous/new-api/pkg/videosched/spec"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -617,7 +618,11 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.Excluded = "not schedulable: no execution plugin"
 		return
 	}
+	sales, unified := GetVideoSalesFacts(c)
 	mappedModel, _, err := relaycommon.MapModelName(channel.GetModelMapping(), clientModel)
+	if unified {
+		mappedModel, err = MapUnifiedVideoModel(channel.GetModelMapping(), clientModel, plugin)
+	}
 	if err != nil {
 		candidate.Excluded = "not schedulable: " + err.Error()
 		return
@@ -635,6 +640,14 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.Excluded = "spec invalid: " + err.Error()
 		return
 	}
+	if unified {
+		tier, known := billing_setting.CanonicalVideoTier(spec.Tier)
+		if spec.OutputSeconds == nil || *spec.OutputSeconds != float64(sales.Seconds) || !known || tier != sales.Resolution {
+			candidate.Excluded = "spec does not match unified sale"
+			return
+		}
+		spec.Tier = tier
+	}
 	candidate.Spec = spec
 	if err := resolveVideoInputSeconds(c, &candidate.Spec, candidate.Cost); err != nil {
 		candidate.Excluded = "input video metadata unavailable: " + err.Error()
@@ -642,6 +655,54 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 	}
 	candidate.Sell = EstimateVideoSell(c, group, plugin, clientModel, mappedModel, body, action)
 	return
+}
+
+// MapUnifiedVideoModel resolves the same upstream identity for candidate
+// quoting and submission. Public names may be declared upstream names too;
+// only an unknown name without a channel mapping is excluded.
+func MapUnifiedVideoModel(mapping, publicName string, plugin *jsplugin.LoadedPlugin) (string, error) {
+	if plugin == nil {
+		return "", errors.New("no execution plugin")
+	}
+	var modelMap map[string]string
+	if mapping != "" {
+		if err := common.UnmarshalJsonStr(mapping, &modelMap); err != nil {
+			return "", errors.New("unmarshal_model_mapping_failed")
+		}
+	}
+	fold := jsplugin.ASCIIFold(publicName)
+	start, target := publicName, ""
+	for _, key := range slices.Sorted(maps.Keys(modelMap)) {
+		if jsplugin.ASCIIFold(key) != fold || modelMap[key] == "" {
+			continue
+		}
+		if target != "" && target != modelMap[key] {
+			return "", errors.New("ambiguous upstream mapping")
+		}
+		start, target = key, modelMap[key]
+	}
+	upstream, mapped, err := relaycommon.MapModelName(mapping, start)
+	if err != nil {
+		return "", err
+	}
+	if !mapped {
+		upstream = ""
+		for _, name := range plugin.Meta.Models {
+			if jsplugin.ASCIIFold(name) == fold {
+				upstream = name
+				break
+			}
+		}
+		if upstream == "" {
+			return "", errors.New("no upstream mapping")
+		}
+	}
+	// Paipu templates derive their real target from ctx.model. They cannot
+	// preserve an arbitrary public identity and a separate upstream identity.
+	if plugin.Meta.Key == "paipu" && (upstream == "paipu-video" || strings.HasPrefix(upstream, "paipu-video-")) {
+		return "", errors.New("upstream mapping must name a real model, not a Paipu template")
+	}
+	return upstream, nil
 }
 
 // videoCandidateRequest resolves the plugin that executes the request on

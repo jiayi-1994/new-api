@@ -80,6 +80,9 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 	default:
 		return VideoSalesFacts{}, errors.New("request must be a JSON or form body")
 	}
+	if count, present := fields["n"]; present && count != float64(1) && count != "1" {
+		return VideoSalesFacts{}, errors.New("unified video models support exactly one output (n must be 1)")
+	}
 
 	seconds := 0
 	for _, name := range []string{"seconds", "duration"} {

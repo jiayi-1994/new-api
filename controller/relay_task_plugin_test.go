@@ -24,6 +24,8 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -704,6 +706,259 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			info.Billing.Refund(c)
 			require.NoError(t, db.First(&updated, user.Id).Error)
 			assert.Equal(t, initial-want, updated.Quota, "terminal settlement is idempotent")
+		})
+	}
+}
+
+func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
+	service.InitHttpClient()
+	database, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.Task{}, &model.Log{},
+		&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{})
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+	oldRedis, oldMemory, oldBatch := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled
+	oldConsume, oldExport, oldErrors, oldRetry := common.LogConsumeEnabled, common.DataExportEnabled, constant.ErrorLogEnabled, common.RetryTimes
+	billingConfig := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+	oldSetting, oldSales := *operation_setting.GetVideoSchedulingSetting(), billingConfig.VideoSales
+	oldRatios := ratio_setting.GroupRatio2JSONString()
+	model.DB, model.LOG_DB = database, database
+	common.SetDatabaseTypes(dialect, dialect)
+	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled = false, true, false
+	common.LogConsumeEnabled, common.DataExportEnabled, constant.ErrorLogEnabled, common.RetryTimes = true, false, false, 1
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.SetDatabaseTypes(oldMain, oldLog)
+		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled = oldRedis, oldMemory, oldBatch
+		common.LogConsumeEnabled, common.DataExportEnabled, constant.ErrorLogEnabled, common.RetryTimes = oldConsume, oldExport, oldErrors, oldRetry
+		*operation_setting.GetVideoSchedulingSetting(), billingConfig.VideoSales = oldSetting, oldSales
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldRatios))
+	})
+	scheduling := operation_setting.GetVideoSchedulingSetting()
+	scheduling.Mode, scheduling.SelectionPolicy = operation_setting.VideoSchedulingModeShadow, videosched.PolicyWeightedV1
+	scheduling.Models, scheduling.CapacityGroups = nil, nil
+	scheduling.PriceWeight, scheduling.QualityWeight, scheduling.ServiceWeight = 1, 0, 0
+	scheduling.ExploreShare, scheduling.ProbeRatio, scheduling.TieEpsilon = 0, 0, 0
+	scheduling.UnknownSellPolicy, scheduling.MaxCostToSellRatio = "exclude", 1
+	billingConfig.VideoSales = map[string]billing_setting.VideoSalesModel{
+		"unified-controller-video": {Resolutions: map[string]billing_setting.VideoSalesTier{
+			"720p": {USDPerSecond: .02, Seconds: []int{15}},
+		}},
+	}
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	for _, key := range []string{"unified-controller-a", "unified-controller-b"} {
+		plugin, err := pluginruntime.DefaultRegistry.Register(fmt.Sprintf(`
+export const meta = {apiVersion:1,key:%q,name:"Unified submission fixture",version:"1.0.0",author:{name:"Test"},models:[%q],fetchMode:"per_task",protocols:["openai_video"],usageSchema:{requests:{type:"number",unit:"count",description:"Video generation unit price"}}};
+export const protocols = {openai_video:{
+  decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size,decodedBy:meta.key}};},
+  render(ctx,task) {return task.data;}
+}};
+export function describeSpec(ctx) {return {spec_version:1,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.size,references:{video:0,image:0,audio:0}};}
+export function buildSubmitRequest(ctx) {
+  if (ctx.requestBody.decodedBy !== meta.key) throw new Error("wrong plugin decoder");
+  return {url:ctx.baseUrl+"/"+meta.key,body:{model:ctx.upstreamModel,seconds:ctx.requestBody.seconds,size:ctx.requestBody.size,decodedBy:ctx.requestBody.decodedBy}};
+}
+export function parseSubmitResponse(ctx,response) {
+  if (response.body.reject) return {rejected:{reason:"upstream capacity exhausted"}};
+  return {taskId:response.body.id,taskData:response.body,immediate:{status:"SUCCESS",progress:"100%%"}};
+}
+export function extractUsage() {return {requests:1};}
+export function extractUsageOnComplete() {return {requests:1};}
+export function buildQueryRequest() {throw new Error("immediate task must not poll");}
+export function parseTaskResult() {throw new Error("immediate task must not poll");}
+export function listArtifacts() {return [];}
+export function buildContentRequest() {throw new Error("fixture has no artifacts");}
+`, key, key+"-upstream"), pluginruntime.Options{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, pluginruntime.DefaultRegistry.Unregister(plugin.Meta.Key)) })
+	}
+
+	for caseIndex, tc := range []struct {
+		name         string
+		firstOutcome string
+		wantPlugins  []string
+		wantStatus   int
+	}{
+		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK},
+		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK},
+		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK},
+		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway},
+		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initialQuota := common.QuotaRound(20 * common.QuotaPerUnit)
+			wantQuota := common.QuotaRound(.30 * common.QuotaPerUnit)
+			user := model.User{Username: fmt.Sprintf("unified_%d", caseIndex), AffCode: fmt.Sprintf("unified_%d", caseIndex), Quota: initialQuota}
+			require.NoError(t, database.Create(&user).Error)
+			token := model.Token{UserId: user.Id, Name: "unified fixture", Key: fmt.Sprintf("unified-fixture-%d", caseIndex), RemainQuota: initialQuota}
+			require.NoError(t, database.Create(&token).Error)
+			t.Cleanup(func() {
+				// Each scenario has its own upstream and candidate pool.
+				require.NoError(t, database.Where("1 = 1").Delete(&model.Ability{}).Error)
+				require.NoError(t, database.Where("1 = 1").Delete(&model.Channel{}).Error)
+			})
+			type upstreamRequest struct {
+				Plugin     string
+				Body       map[string]any
+				UserQuota  int
+				TokenQuota int
+				Err        error
+			}
+			requests := make(chan upstreamRequest, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received := upstreamRequest{Plugin: strings.TrimPrefix(r.URL.Path, "/")}
+				received.Err = common.DecodeJson(r.Body, &received.Body)
+				var balance model.User
+				var allowance model.Token
+				if err := database.First(&balance, user.Id).Error; received.Err == nil {
+					received.Err = err
+				}
+				if err := database.First(&allowance, token.Id).Error; received.Err == nil {
+					received.Err = err
+				}
+				received.UserQuota, received.TokenQuota = balance.Quota, allowance.RemainQuota
+				requests <- received
+				w.Header().Set("Content-Type", "application/json")
+				if received.Plugin == "unified-controller-a" {
+					switch tc.firstOutcome {
+					case "rejected":
+						_, _ = io.WriteString(w, `{"reject":true}`)
+						return
+					case "unknown":
+						_, _ = io.WriteString(w, `{"receipt":"ambiguous"}`)
+						return
+					}
+				}
+				_, _ = io.WriteString(w, `{"id":"upstream-completed"}`)
+			}))
+			defer server.Close()
+			for i, key := range []string{"unified-controller-a", "unified-controller-b"} {
+				binding := fmt.Sprintf(`{"task_plugin_key":%q}`, key)
+				mapping := fmt.Sprintf(`{"unified-controller-video":%q}`, key+"-upstream")
+				prices := `"720p":0.12`
+				if tc.firstOutcome == "all_excluded" || i == 0 && tc.firstOutcome == "excluded" {
+					prices = `"1080p":0.12`
+				}
+				mode := "per_video"
+				if i == 1 && prices == `"720p":0.12` {
+					mode, prices = "per_second", `"720p":0.009`
+				}
+				channel := model.Channel{Id: 41000 + caseIndex*2 + i, Name: key, Type: constant.ChannelTypeTaskPlugin,
+					Status: common.ChannelStatusEnabled, Models: "unified-controller-video", Group: "default", Key: "fixture",
+					BaseURL: &server.URL, Setting: &binding, ModelMapping: &mapping, AutoBan: common.GetPointer(0),
+					Priority: common.GetPointer(int64(2 - i)), Weight: common.GetPointer(uint(100)),
+					OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{"unified-controller-video":{"mode":%q,"prices":{%s}}}}}`, mode, prices)}
+				require.NoError(t, database.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(database))
+			}
+			model.InitChannelCache()
+			// Refund is asynchronous. Synchronize on its final token write, without
+			// polling or sleeping, before inspecting balances or restoring globals.
+			refunded := make(chan struct{}, 1)
+			callback := fmt.Sprintf("test:unified-refund-%d", caseIndex)
+			require.NoError(t, database.Callback().Update().After("gorm:commit_or_rollback_transaction").Register(callback, func(tx *gorm.DB) {
+				if tx.Error == nil && strings.Contains(tx.Statement.SQL.String(), "remain_quota +") {
+					refunded <- struct{}{}
+				}
+			}))
+			defer func() { require.NoError(t, database.Callback().Update().Remove(callback)) }()
+			var outcome *taskSubmissionOutcome
+			var taskErr *dto.TaskError
+			var requestContext *gin.Context
+			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key,
+				OriginModelName: "unified-controller-video", TokenGroup: "default", UsingGroup: "default", UserGroup: "default",
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: fmt.Sprintf("task_unified_%d", caseIndex)}}
+			info.UserSetting.BillingPreference = "wallet_only"
+			router := gin.New()
+			router.POST("/v1/videos", middleware.PinTaskPluginEndpoint(), middleware.PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				requestContext = c
+				c.Set("username", user.Username)
+				common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+				// Runtime readiness is covered separately; exercise takeover selection
+				// here using the request and sale frozen by the real entry middleware.
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true})
+				first, _, selectErr := service.SelectChannelForRequest(c, info.OriginModelName, &service.RetryParam{Ctx: c, TokenGroup: "default", ModelName: info.OriginModelName, Retry: common.GetPointer(0)})
+				if selectErr != nil {
+					c.Status(selectErr.StatusCode)
+					return
+				}
+				require.Nil(t, middleware.SetupContextForSelectedChannel(c, first, info.OriginModelName))
+				outcome, taskErr = executeTaskSubmission(c, info)
+				if taskErr != nil {
+					c.Status(taskErr.StatusCode)
+				}
+			})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"unified-controller-video","seconds":15,"size":"1280x720"}`))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(recorder, request)
+			require.NotNil(t, requestContext, recorder.Body.String())
+			assert.Equal(t, tc.wantStatus, recorder.Code)
+			require.Len(t, requests, len(tc.wantPlugins))
+			for _, key := range tc.wantPlugins {
+				received := <-requests
+				require.NoError(t, received.Err)
+				assert.Equal(t, key, received.Plugin)
+				assert.Equal(t, map[string]any{"model": key + "-upstream", "seconds": float64(15), "size": "1280x720", "decodedBy": key}, received.Body)
+				assert.Equal(t, initialQuota-wantQuota, received.UserQuota, "each upstream attempt observes one wallet reservation")
+				assert.Equal(t, initialQuota-wantQuota, received.TokenQuota, "retries reuse the token reservation")
+			}
+			if tc.firstOutcome == "unknown" {
+				require.NotNil(t, taskErr)
+				assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
+				events := service.RequestPolicy(requestContext).Events()
+				require.NotEmpty(t, events)
+				assert.Equal(t, "submit_outcome_unknown", events[len(events)-1].Decision.Reason)
+				select {
+				case <-refunded:
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "asynchronous refund did not finish")
+				}
+			}
+			var stored []model.Task
+			var logs []model.Log
+			require.NoError(t, database.Where("user_id = ?", user.Id).Find(&stored).Error)
+			require.NoError(t, database.Where("user_id = ?", user.Id).Find(&logs).Error)
+			charged := 0
+			if tc.wantStatus == http.StatusOK {
+				charged = wantQuota
+				require.Nil(t, taskErr)
+				require.NotNil(t, outcome)
+				require.Len(t, stored, 1)
+				require.Len(t, logs, 1)
+				assert.Equal(t, wantQuota, stored[0].Quota)
+				assert.Equal(t, wantQuota, logs[0].Quota)
+				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored[0].Status)
+				assert.Equal(t, tc.wantPlugins[len(tc.wantPlugins)-1]+"-upstream", stored[0].Properties.UpstreamModelName)
+				require.NotNil(t, stored[0].PrivateData.BillingContext)
+				snapshot := stored[0].PrivateData.BillingContext.TieredSnapshot
+				require.NotNil(t, snapshot)
+				assert.Equal(t, map[string]any{"seconds": float64(15), "resolution": "720p"}, snapshot.UsageFacts)
+				assert.Equal(t, wantQuota, info.Billing.GetPreConsumedQuota())
+				require.NoError(t, info.Billing.Reserve(wantQuota), "same-price final reserve does not charge again")
+				var other map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+				assert.Equal(t, snapshot.UsageFacts, other["usage_facts"])
+			} else {
+				assert.Nil(t, outcome)
+				assert.Empty(t, stored)
+				assert.Empty(t, logs)
+				if tc.firstOutcome == "all_excluded" {
+					assert.Nil(t, info.Billing, "no reservation before candidate admission")
+					records := service.VideoScheduleRecords(requestContext)
+					require.Len(t, records, 1)
+					require.Len(t, records[0].Candidates, 2)
+					for _, candidate := range records[0].Candidates {
+						assert.Equal(t, "tier 720p not priced", candidate.Excluded)
+					}
+				}
+			}
+			require.NoError(t, database.First(&user, user.Id).Error)
+			require.NoError(t, database.First(&token, token.Id).Error)
+			assert.Equal(t, initialQuota-charged, user.Quota)
+			assert.Equal(t, charged, user.UsedQuota)
+			assert.Equal(t, initialQuota-charged, token.RemainQuota)
+			assert.Equal(t, charged, token.UsedQuota)
 		})
 	}
 }

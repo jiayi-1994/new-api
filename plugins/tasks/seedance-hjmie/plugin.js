@@ -169,7 +169,9 @@ function normalize(ctx) {
   const model = input.model;
   if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
   if (ctx.model && model !== ctx.model) throw new Error("model does not match the selected model");
-  if (!MODELS.includes(model)) throw new Error("unsupported video model: " + model);
+  // The first decode precedes channel selection, so a public alias may not yet
+  // have an upstream identity. Submission and describeSpec validate it again.
+  if (ctx.upstreamModel) upstreamModel(ctx);
   if (typeof input.prompt !== "string" || !input.prompt.trim()) throw new Error("prompt is required");
 
   const duration = scalarAlias(input, ["seconds", "duration"], seconds);

@@ -1475,6 +1475,100 @@ export function describeSpec(ctx) {
 }
 `
 
+func TestUnifiedVideoCandidatesRequireTheFrozenSaleSpec(t *testing.T) {
+	useVideoHealthBackend(t, "memory")
+	const source = `
+export const meta = {apiVersion:1,key:"unified-spec",name:"Unified spec",version:"1.0.0",author:{name:"Test"},models:["real-video"],fetchMode:"per_task"};
+export function buildSubmitRequest(){return {url:"https://example.com"};}
+export function parseSubmitResponse(){return {taskId:"one"};}
+export function buildQueryRequest(){return {url:"https://example.com"};}
+export function parseTaskResult(){return {status:"SUCCESS"};}
+export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.resolution,references:{video:0,image:0,audio:0}};}
+`
+	plugin, err := jsplugin.NewRegistry().Register(source, jsplugin.Options{})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, model, mapping, tier, priceTier, excluded string
+		seconds                                         int
+	}{
+		{name: "alias mapped", model: "video-unified", mapping: `{"video-unified":"real-video"}`, seconds: 15, tier: "720p", priceTier: "720p"},
+		{name: "folded alias mapping", model: "Video-Unified", mapping: `{"video-unified":"real-video"}`, seconds: 15, tier: "720p", priceTier: "720p"},
+		{name: "known real model without mapping", model: "REAL-VIDEO", seconds: 15, tier: "720p", priceTier: "720p"},
+		{name: "unknown public name without mapping", model: "video-unified", seconds: 15, tier: "720p", priceTier: "720p", excluded: "no upstream mapping"},
+		{name: "ambiguous folded mapping", model: "video-unified", mapping: `{"Video-Unified":"real-video","video-unified":"other-video"}`, seconds: 15, tier: "720p", priceTier: "720p", excluded: "ambiguous upstream mapping"},
+		{name: "wrong seconds", model: "real-video", seconds: 10, tier: "720p", priceTier: "720p", excluded: "spec does not match unified sale"},
+		{name: "wrong resolution", model: "real-video", seconds: 15, tier: "1080p", priceTier: "720p", excluded: "spec does not match unified sale"},
+		{name: "wildcard tier", model: "real-video", seconds: 15, tier: "*", priceTier: "*", excluded: "spec does not match unified sale"},
+		{name: "empty tier", model: "real-video", seconds: 15, tier: "", priceTier: "*", excluded: "resolution must be a non-empty string"},
+		{name: "tier without a purchase price", model: "real-video", seconds: 15, tier: "720p", priceTier: "1080p", excluded: "tier 720p not priced"},
+		{name: "2160p matches 4k", model: "real-video", seconds: 15, tier: "2160p", priceTier: "4k"},
+		{name: "pixels match 4k", model: "real-video", seconds: 15, tier: "3840x2160", priceTier: "4k"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+			c.Set("task_request", map[string]any{"seconds": tc.seconds, "resolution": tc.tier})
+			resolution := "720p"
+			if tc.priceTier == "4k" {
+				resolution = "4k"
+			}
+			SetVideoSalesFacts(c, VideoSalesFacts{Model: tc.model, Seconds: 15, Resolution: resolution, USDPerSecond: 0.02})
+			channel := &model.Channel{Id: 551, Models: tc.model, Status: common.ChannelStatusEnabled, ModelMapping: &tc.mapping,
+				OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{%q:{"mode":"per_video","prices":{%q:0.12}}}}}`, tc.model, tc.priceTier)}
+			candidate, _ := assembleVideoCandidate(c, "default", tc.model, channel, false, operation_setting.GetVideoSchedulingSetting())
+			if candidate.Excluded == "" {
+				candidate.Excluded = videosched.Quote(candidate.Cost, candidate.Spec).Reason
+			}
+			if tc.excluded != "" {
+				assert.Contains(t, candidate.Excluded, tc.excluded)
+				return
+			}
+			require.Empty(t, candidate.Excluded)
+			assert.Equal(t, "real-video", candidate.MappedModel)
+			assert.Equal(t, resolution, candidate.Spec.Tier)
+			assert.Equal(t, 15.0, *candidate.Spec.OutputSeconds)
+			assert.Equal(t, 0.12, videosched.Quote(candidate.Cost, candidate.Spec).TotalUSD)
+			assert.InDelta(t, 0.3, candidate.Sell.USD, 1e-12)
+		})
+	}
+}
+
+func TestUnifiedVideoNewAPIChannelChoosesTheMappedTargetsPlugin(t *testing.T) {
+	registry := jsplugin.NewRegistry()
+	const source = `
+export const meta = {apiVersion:1,key:%q,name:"Unified target",version:"1.0.0",author:{name:"Test"},models:%s,fetchMode:"per_task",upstreams:["new_api"],protocols:["openai_video"]};
+export function buildSubmitRequest(){return {url:"https://example.com"};}
+export function parseSubmitResponse(){return {taskId:"one"};}
+export function buildQueryRequest(){return {url:"https://example.com"};}
+export function parseTaskResult(){return {status:"SUCCESS"};}
+export function listArtifacts(){return [];}
+export function buildContentRequest(){return {url:"https://example.com/result.mp4"};}
+export const protocols={openai_video:{decodeRequest(ctx){return {kind:"submit",model:ctx.model,requestBody:ctx.body.value};},render(ctx,task){return task.data;}}};
+`
+	_, err := registry.Register(fmt.Sprintf(source, "unified-alpha", `["target-a","target-alt"]`), jsplugin.Options{})
+	require.NoError(t, err)
+	_, err = registry.Register(fmt.Sprintf(source, "unified-beta", `["target-b"]`), jsplugin.Options{})
+	require.NoError(t, err)
+	generation := registry.Generation()
+	candidates := append(generation.LookupEndpointCandidates(http.MethodPost, "/v1/videos", "target-a"), generation.LookupEndpointCandidates(http.MethodPost, "/v1/videos", "target-b")...)
+	require.Len(t, candidates, 2)
+	for _, tc := range []struct{ target, plugin string }{{"target-b", "unified-beta"}, {"target-alt", "unified-alpha"}} {
+		t.Run(tc.target, func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Generation: generation, Plugin: candidates[0].Plugin, Model: "video-unified", Candidates: candidates})
+			SetVideoSalesFacts(c, VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+			binding := `{"task_extend_plugin_keys":["unified-alpha","unified-beta"]}`
+			mapping := fmt.Sprintf(`{"video-unified":%q}`, tc.target)
+			channel := &model.Channel{Type: constant.ChannelTypeNewAPI, Setting: &binding, ModelMapping: &mapping}
+			for _, expected := range []string{"unified-alpha", "unified-beta"} {
+				candidate, ok := PinnedEndpointCandidateForChannel(c, channel, expected)
+				require.True(t, ok)
+				assert.Equal(t, tc.plugin, candidate.Plugin.Meta.Key, "selection follows this channel's target, including a plugin's other declared targets")
+			}
+		})
+	}
+}
+
 func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	useVideoHealthBackend(t, "memory")
@@ -2167,6 +2261,11 @@ func TestParseVideoSalesFactsAcceptsOnlyTheSoldSpec(t *testing.T) {
 		want          VideoSalesFacts
 	}{
 		{name: "json size", body: jsonBody(map[string]any{"seconds": float64(15), "size": "1280x720"}), want: VideoSalesFacts{Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "one explicit output", body: jsonBody(map[string]any{"n": float64(1), "seconds": float64(15), "size": "1280x720"}), want: VideoSalesFacts{Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "one multipart output", body: formBody(map[string][]string{"n": {"1"}, "seconds": {"5"}, "resolution": {"720p"}}), want: VideoSalesFacts{Seconds: 5, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "multiple outputs", body: jsonBody(map[string]any{"n": float64(2), "seconds": float64(15), "size": "1280x720"}), wantErr: "exactly one output"},
+		{name: "zero outputs", body: jsonBody(map[string]any{"n": float64(0), "seconds": float64(15), "size": "1280x720"}), wantErr: "exactly one output"},
+		{name: "repeated multipart count", body: formBody(map[string][]string{"n": {"1", "1"}, "seconds": {"5"}, "resolution": {"720p"}}), wantErr: "exactly one output"},
 		{name: "portrait size and agreeing aliases", body: jsonBody(map[string]any{"duration": "15", "seconds": float64(15), "size": "720x1280", "resolution": "720P"}), want: VideoSalesFacts{Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
 		{name: "3840x2160 is 4k", body: jsonBody(map[string]any{"seconds": float64(5), "size": "3840x2160"}), want: VideoSalesFacts{Seconds: 5, Resolution: "4k", USDPerSecond: 0.1}},
 		{name: "2160p is 4k", body: formBody(map[string][]string{"seconds": {"5"}, "resolution": {"2160p"}}), want: VideoSalesFacts{Seconds: 5, Resolution: "4k", USDPerSecond: 0.1}},

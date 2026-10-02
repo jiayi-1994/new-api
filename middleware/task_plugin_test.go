@@ -2099,3 +2099,112 @@ func TestPrepareTaskPluginEndpointKeepsEachSharedCandidateDecodedBody(t *testing
 	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
 	assert.Equal(t, service.VideoSchedDecision{Shadow: true}, decision)
 }
+
+func TestUnifiedVideoEndpointCombinesDirectAndMappedTargets(t *testing.T) {
+	setupTaskPluginRouteDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Option{}))
+	common.OptionMapRWMutex.Lock()
+	savedOptionMap := common.OptionMap
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = savedOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+	})
+	for _, spec := range []struct{ key, models string }{
+		{"unified-alpha", `["unified-up-a","unified-up-aa"]`},
+		{"unified-beta", `["unified-up-b"]`},
+		{"unified-gamma", `["unified-up-b"]`},
+	} {
+		source := taskProtocolPluginSource(spec.key, "1.0.0", spec.models, "/v1/videos", `
+if (ctx.upstreamModel) throw new Error("pre-channel decode must not pick a target");
+return {model: ctx.model, requestBody: {seconds: ctx.requestBody.seconds, resolution: ctx.requestBody.resolution}};`)
+		_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(spec.key)) })
+	}
+	for _, spec := range []struct{ model, mapping string }{
+		{"Video-Unified", `{"video-unified":"unified-up-a"}`},
+		{"video-unified", `{"video-unified":"unified-up-aa"}`},
+		{"video-unified", `{"video-unified":"unified-up-b"}`},
+		{"unified-up-a", `{"unified-up-a":"unified-up-b"}`},
+	} {
+		channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: spec.model, Key: "fixture", Models: spec.model, ModelMapping: &spec.mapping}
+		require.NoError(t, model.DB.Create(channel).Error)
+	}
+	// Read the ordinary alias first: only opting into video_sales allows a
+	// cross-plugin alias, and saving that option must invalidate the view.
+	_, aliasBefore := model.ResolveTaskModelAlias(jsplugin.DefaultRegistry.Generation(), "video-unified")
+	require.False(t, aliasBefore)
+	require.NoError(t, model.UpdateOption(billing_setting.VideoSalesOption, `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}},"unified-up-a":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`))
+
+	for _, name := range []string{"video-unified", "Video-Unified", "UNIFIED-UP-A"} {
+		t.Run(name, func(t *testing.T) {
+			reached := false
+			router := gin.New()
+			router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				reached = true
+				pinned := c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
+				assert.Empty(t, pinned.MappedModel)
+				keys := make([]string, 0, len(pinned.Candidates))
+				for _, candidate := range pinned.Candidates {
+					keys = append(keys, candidate.Plugin.Meta.Key)
+				}
+				assert.Equal(t, []string{"unified-alpha", "unified-beta", "unified-gamma"}, keys)
+				facts, ok := service.GetVideoSalesFacts(c)
+				require.True(t, ok)
+				assert.Equal(t, 15, facts.Seconds)
+				assert.Equal(t, "720p", facts.Resolution)
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(fmt.Sprintf(`{"model":%q,"seconds":15,"resolution":"720p"}`, name)))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+			assert.True(t, reached)
+		})
+	}
+}
+
+func TestUnifiedVideoRejectsNativeLegacyAndOtherHostProtocols(t *testing.T) {
+	const name = "unified-route-model"
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{"unified-route-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`}))
+	source := `
+export const meta = {apiVersion:1,key:"unified-route-test",name:"Unified Route",version:"1.0.0",author:{name:"Test"},models:["unified-route-model"],fetchMode:"per_task",routes:[{method:"POST",path:"/unified-native",type:"submit",decode:"decode",render:"created"}]};
+export const native = {decode(ctx) { return {kind:"submit",model:ctx.body.value.model}; },created(ctx,task) { return task; }};
+export function buildSubmitRequest() { return {}; }
+export function parseSubmitResponse() { return {}; }
+export function buildQueryRequest() { return {}; }
+export function parseTaskResult() { return {}; }
+`
+	plugin, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(plugin.Meta.Key)) })
+	for _, path := range []string{"/unified-native", "/v1/tasks/unified-route-test", "/v1/responses"} {
+		t.Run(path, func(t *testing.T) {
+			router := gin.New()
+			reached := false
+			stop := func(c *gin.Context) { reached = true; c.Status(http.StatusNoContent) }
+			router.POST("/unified-native", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), stop)
+			router.POST("/v1/tasks/:key", PrepareTaskPluginSubmit(), stop)
+			router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), stop)
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"`+name+`","seconds":15,"resolution":"720p"}`))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), "unified video models require POST /v1/videos")
+			assert.False(t, reached)
+		})
+	}
+}

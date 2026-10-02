@@ -224,8 +224,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	mappedBeforeValidate := info.OriginModelName != ""
 	if mappedBeforeValidate {
 		info.UpstreamModelName = info.OriginModelName
-		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		var mappingErr error
+		if _, unified := service.GetVideoSalesFacts(c); unified {
+			pinnedValue, _ := c.Get(jsplugin.ContextKeyPinnedPlugin)
+			pinned, _ := pinnedValue.(jsplugin.PinnedPlugin)
+			info.UpstreamModelName, mappingErr = service.MapUnifiedVideoModel(c.GetString("model_mapping"), info.OriginModelName, pinned.Plugin)
+			info.IsModelMapped = info.UpstreamModelName != info.OriginModelName
+		} else {
+			mappingErr = helper.ModelMappedHelper(c, info, nil)
+		}
+		if mappingErr != nil {
+			return nil, service.TaskErrorWrapperLocal(mappingErr, "model_mapping_failed", http.StatusBadRequest)
 		}
 	}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
@@ -264,6 +273,20 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if sales, unified := service.GetVideoSalesFacts(c); unified {
 		if info.TokenGroup == "auto" {
 			taskErr := service.TaskErrorWrapperLocal(errors.New("unified video models cannot use the auto group"), "video_sales_auto_group", http.StatusBadRequest)
+			taskErr.NoRetry = true
+			return nil, taskErr
+		}
+		endpointValue, _ := c.Get(jsplugin.ContextKeyPinnedEndpoint)
+		endpoint, _ := endpointValue.(jsplugin.PinnedEndpoint)
+		_, pinned, _ := service.GetChannelConstraints(c).ResolvedPin()
+		if endpoint.Protocol != "openai_video" || endpoint.Operation.Name != "create" || info.LockedChannel != nil || pinned || info.OriginTaskID != "" || len(info.OriginTasks) > 0 {
+			taskErr := service.TaskErrorWrapperLocal(errors.New("unified video models require a new OpenAI video request without a fixed channel or origin task"), "video_sales_unsupported_request", http.StatusBadRequest)
+			taskErr.NoRetry = true
+			return nil, taskErr
+		}
+		decision := service.VideoSchedDecisionFrom(c)
+		if !decision.Takeover || decision.Reason != "" {
+			taskErr := service.TaskErrorWrapperLocal(errors.New("unified video scheduling is unavailable"), "video_sales_scheduler_unavailable", http.StatusServiceUnavailable)
 			taskErr.NoRetry = true
 			return nil, taskErr
 		}

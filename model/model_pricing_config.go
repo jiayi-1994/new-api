@@ -271,6 +271,12 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 			ModelPricingDescription: ModelPricingDescription{Effective: effectiveModelPricing(values, name)}}
 		entry.CacheWriteMode = ResolveCacheWriteMode(name, configured)
 		entry.BillingDetails = ResolveLegacyBillingDetails(name, entry.Effective, configured)
+		if _, _, unified := billing_setting.GetVideoSales(name); unified {
+			// Unified sales are edited separately; upstream usage schemas and
+			// provider prices do not describe this model's effective sale.
+			result.Entries = append(result.Entries, entry)
+			continue
+		}
 		if plugin, ok := generation.GetByModel(name); ok {
 			entry.UsageSchema, _ = plugin.Meta.UsageForModel(name)
 		} else if target, ok := ResolveTaskModelAlias(generation, name); ok {
@@ -413,6 +419,9 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 			// compile; only its schema-specific smoke tests can be skipped.
 			if _, err := billingexpr.CompileFromCache(expression); err != nil {
 				return fmt.Errorf("model %s: %w", name, err)
+			}
+			if _, _, unified := billing_setting.GetVideoSales(name); unified {
+				continue
 			}
 			var err error
 			if plugins := generation.PluginsByModel(name); len(plugins) > 0 {

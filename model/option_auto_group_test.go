@@ -20,7 +20,7 @@ func TestValidateOptionValueRejectsInvalidMaxTokenAutoGroups(t *testing.T) {
 
 // A unified model leaves video_sales only after no channel lists its public
 // name; otherwise that name would route as an alias priced by upstream models.
-func TestValidateVideoSalesOptionGuardsRemovalAndPluginNames(t *testing.T) {
+func TestValidateVideoSalesOptionGuardsRemovalAndAllowsPluginNames(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&Option{}))
 	const previous = `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}},"retired-video":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`
 	require.NoError(t, DB.Save(&Option{Key: billing_setting.VideoSalesOption, Value: previous}).Error)
@@ -50,8 +50,7 @@ export function parseTaskResult() { return {}; }
 	assert.Contains(t, err.Error(), "still listed by a channel")
 
 	err = validateOptionValue(billing_setting.VideoSalesOption, `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}},"DECLARED-VIDEO":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "plugin model name")
+	require.NoError(t, err, "a real upstream model name may also be the public unified model")
 
 	assert.Error(t, validateOptionValue(billing_setting.VideoSalesOption, `{"video-unified":"not an object"}`))
 }

@@ -118,6 +118,12 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 			renderTaskPluginQuery(c, pinned, requestContext, []string{taskID}, pinned.Route.Render, false)
 			return
 		}
+		bodyValue, _ := bodyObject["value"].(map[string]any)
+		claimedModel, _ := bodyValue["model"].(string)
+		if _, _, unified := billing_setting.GetVideoSales(claimedModel); unified {
+			abortTaskPluginRouteErrorDetail(c, http.StatusBadRequest, "unified video models require POST /v1/videos")
+			return
+		}
 
 		if len(pinned.Route.Models) > 0 {
 			bodyValue, _ := bodyObject["value"].(map[string]any)
@@ -190,6 +196,10 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 					pinned.Plugin.Meta.Key,
 				)
 				abortTaskPluginRouteErrorDetail(c, http.StatusBadRequest, "decoded request is missing a model")
+				return
+			}
+			if _, _, unified := billing_setting.GetVideoSales(modelName); unified {
+				abortTaskPluginRouteErrorDetail(c, http.StatusBadRequest, "unified video models require POST /v1/videos")
 				return
 			}
 			owned := slices.Contains(pinned.Plugin.Meta.Models, modelName)
@@ -344,7 +354,42 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 		pinModel := claimedModel
 		mappedModel := ""
 		rewriteTo := ""
-		if declared, ok := generation.CanonicalModel(claimedModel); ok {
+		_, _, unified := billing_setting.GetVideoSales(claimedModel)
+		var candidates []pluginruntime.ProtocolBinding
+		if unified {
+			protocol, operation, known := pluginruntime.LookupHostProtocolOperation(c.Request.Method, c.Request.URL.Path)
+			if !known || protocol != "openai_video" || operation.Name != "create" {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "unified video models require POST /v1/videos")
+				return
+			}
+			lookupModels := []string{claimedModel}
+			if declared, ok := generation.CanonicalModel(claimedModel); ok {
+				lookupModels[0], pinModel = declared, declared
+			}
+			if target, ok := model.ResolveTaskModelAlias(generation, claimedModel); ok {
+				pinModel = target.Alias
+				lookupModels = append(lookupModels, target.DeclaredModels...)
+			}
+			seen := make(map[string]bool)
+			for _, name := range lookupModels {
+				for _, candidate := range generation.LookupEndpointCandidates(c.Request.Method, c.Request.URL.Path, name) {
+					if candidate.Plugin != nil && !seen[candidate.Plugin.Meta.Key] {
+						seen[candidate.Plugin.Meta.Key] = true
+						candidates = append(candidates, candidate)
+					}
+				}
+			}
+			slices.SortFunc(candidates, func(a, b pluginruntime.ProtocolBinding) int {
+				return strings.Compare(a.Plugin.Meta.Key, b.Plugin.Meta.Key)
+			})
+			if len(candidates) == 0 {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "no plugin can serve this unified video model")
+				return
+			}
+			if claimedModel != pinModel {
+				rewriteTo = pinModel
+			}
+		} else if declared, ok := generation.CanonicalModel(claimedModel); ok {
 			lookupModel = declared
 			pinModel = declared
 			if claimedModel != declared {
@@ -364,6 +409,9 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 			}
 		}
 		binding, found := generation.LookupEndpoint(c.Request.Method, c.Request.URL.Path, lookupModel)
+		if unified {
+			binding, found = candidates[0], true
+		}
 		if !found || binding.Plugin == nil {
 			c.Set(contextKeyTaskPluginEndpointModel, *modelRequest)
 			c.Next()
@@ -377,7 +425,9 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 		}
 		modelRequest.Model = pinModel
 		c.Set(contextKeyTaskPluginEndpointModel, *modelRequest)
-		candidates := generation.LookupEndpointCandidates(c.Request.Method, c.Request.URL.Path, lookupModel)
+		if !unified {
+			candidates = generation.LookupEndpointCandidates(c.Request.Method, c.Request.URL.Path, lookupModel)
+		}
 		if len(candidates) == 0 {
 			candidates = []pluginruntime.ProtocolBinding{binding}
 		}
@@ -611,6 +661,7 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 			candidates = []pluginruntime.ProtocolBinding{{Plugin: pinned.Plugin, Protocol: pinned.Protocol, Operation: pinned.Operation, Model: pinned.Model}}
 		}
 		accepted := make([]pluginruntime.ProtocolBinding, 0, len(candidates))
+		_, _, unified := billing_setting.GetVideoSales(pinned.Model)
 		var resolved map[string]any
 		var failures []string
 		rejectedPlugins := make(map[string][]string)
@@ -642,7 +693,7 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 			} else if model, _ := result["model"].(string); strings.TrimSpace(model) == "" {
 				reason = "invalid_model"
 				detail = "decoded request is missing a model"
-			} else if model != pinned.Model || (pinned.MappedModel == "" && !slices.Contains(candidate.Plugin.Meta.Models, model)) {
+			} else if model != pinned.Model || (!unified && pinned.MappedModel == "" && !slices.Contains(candidate.Plugin.Meta.Models, model)) {
 				reason = "resolved_model_not_owned"
 				detail = fmt.Sprintf("model %q is not served by this plugin", model)
 			}
@@ -1440,6 +1491,10 @@ func PrepareTaskPluginSubmit() gin.HandlerFunc {
 		modelName, _ := requestBody["model"].(string)
 		if strings.TrimSpace(modelName) == "" {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "model is required", "type": "invalid_request_error"}})
+			return
+		}
+		if _, _, unified := billing_setting.GetVideoSales(modelName); unified {
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "unified video models require POST /v1/videos")
 			return
 		}
 		exactOwned := slices.Contains(plugin.Meta.Models, modelName)

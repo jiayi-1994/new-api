@@ -297,3 +297,28 @@ func TestPricingSharedPluginVariantsUseEachSchemaAndExpression(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), "billing_plugin_variants")
 }
+
+func TestUnifiedVideoPricingDoesNotUseAPluginUsageSchema(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	require.NoError(t, DB.AutoMigrate(&Option{}))
+	saved := config.GlobalConfig.ExportAllConfigs()
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	_, err := jsplugin.DefaultRegistry.Register(pricingUsagePluginSource("1.0.0", `{requests:{type:"number",unit:"count"}}`), jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("pricing-usage-probe")) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		billing_setting.VideoSalesOption: `{"pricing-usage-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
+	}))
+	snapshot, err := GetModelPricingSnapshot([]string{"pricing-usage-model"})
+	require.NoError(t, err)
+	require.Len(t, snapshot.Entries, 1)
+	assert.Empty(t, snapshot.Entries[0].UsageSchema)
+	assert.Empty(t, snapshot.Entries[0].PluginVariants)
+	// Shadowed prices can be retained by the legacy editor without being
+	// forced through whichever upstream plugin happens to be registered first.
+	require.NoError(t, ValidateModelPricing("pricing-usage-model", PricingValues{"billing_setting.billing_expr": `tier("old", u("seconds") * 0.4)`}))
+	preview, err := PreviewModelPricingConversion("pricing-usage-model", PricingValues{"ModelPrice": float64(1)})
+	require.NoError(t, err)
+	assert.Contains(t, preview.UnsupportedReason, "unified video sales")
+	assert.Empty(t, preview.Expression)
+}

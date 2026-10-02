@@ -2,12 +2,15 @@ package model
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 )
 
 // TaskAliasTarget is one mapping-derived alias after cross-channel aggregation.
@@ -17,6 +20,8 @@ type TaskAliasTarget struct {
 	Alias     string
 	Declared  string
 	PluginKey string
+	// Unified video models retain every declared target for endpoint discovery.
+	DeclaredModels []string
 }
 
 type taskAliasView struct {
@@ -121,10 +126,20 @@ func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
 			if mapped == "" {
 				continue
 			}
-			if _, exposed := inModels[alias]; !exposed {
+			_, _, unified := billing_setting.GetVideoSales(alias)
+			exposedName := alias
+			_, exposed := inModels[alias]
+			if unified {
+				for name := range inModels {
+					if jsplugin.ASCIIFold(name) == jsplugin.ASCIIFold(alias) && (!exposed || name < exposedName) {
+						exposedName, exposed = name, true
+					}
+				}
+			}
+			if !exposed {
 				continue
 			}
-			if _, declared := generation.CanonicalModel(alias); declared {
+			if _, declared := generation.CanonicalModel(alias); declared && !unified {
 				continue
 			}
 			tail, cyclic := followChannelModelMapping(modelMap, alias)
@@ -136,9 +151,12 @@ func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
 			if !ok {
 				continue
 			}
-			plugin, ok := generation.GetByModel(declared)
-			if !ok {
+			plugins := generation.PluginsByModel(declared)
+			if len(plugins) == 0 {
 				continue
+			}
+			if !unified {
+				plugins = plugins[:1]
 			}
 			fold := jsplugin.ASCIIFold(alias)
 			draft := drafts[fold]
@@ -146,13 +164,15 @@ func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
 				draft = &taskAliasDraft{byPlugin: make(map[string]map[string]struct{})}
 				drafts[fold] = draft
 			}
-			draft.spellings = append(draft.spellings, alias)
-			declareds := draft.byPlugin[plugin.Meta.Key]
-			if declareds == nil {
-				declareds = make(map[string]struct{})
-				draft.byPlugin[plugin.Meta.Key] = declareds
+			draft.spellings = append(draft.spellings, exposedName)
+			for _, plugin := range plugins {
+				declareds := draft.byPlugin[plugin.Meta.Key]
+				if declareds == nil {
+					declareds = make(map[string]struct{})
+					draft.byPlugin[plugin.Meta.Key] = declareds
+				}
+				declareds[declared] = struct{}{}
 			}
-			declareds[declared] = struct{}{}
 		}
 	}
 
@@ -162,6 +182,15 @@ func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
 			if spelling < alias {
 				alias = spelling
 			}
+		}
+		_, _, unified := billing_setting.GetVideoSales(alias)
+		if unified {
+			declareds := make(map[string]struct{})
+			for _, targets := range draft.byPlugin {
+				maps.Copy(declareds, targets)
+			}
+			view.byFold[jsplugin.ASCIIFold(alias)] = TaskAliasTarget{Alias: alias, DeclaredModels: slices.Sorted(maps.Keys(declareds))}
+			continue
 		}
 		if len(draft.byPlugin) != 1 {
 			pluginKeys := make([]string, 0, len(draft.byPlugin))

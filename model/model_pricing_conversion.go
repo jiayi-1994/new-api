@@ -172,6 +172,9 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 		return &ModelPricingConversion{UnsupportedReason: "Gemini and OpenAI audio prices differ for this model. Use separate billing model names to convert them."}, nil
 	}
 
+	if _, _, unified := billing_setting.GetVideoSales(name); unified {
+		return &ModelPricingConversion{UnsupportedReason: "This model uses unified video sales configured separately."}, nil
+	}
 	generation := jsplugin.DefaultRegistry.Generation()
 	if _, task := generation.GetByModel(name); task {
 		return &ModelPricingConversion{UnsupportedReason: "Task pricing must be converted manually using the task usage schema."}, nil

@@ -237,12 +237,25 @@ func PinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, e
 	expectedOwned := false
 	selected := jsplugin.ProtocolBinding{}
 	setting := channel.GetSetting()
+	_, unified := GetVideoSalesFacts(c)
 	for _, candidate := range candidates {
 		if candidate.Plugin == nil {
 			continue
 		}
 		if candidate.Plugin.Meta.Key == expected {
 			expectedOwned = true
+		}
+		if unified {
+			upstream, err := MapUnifiedVideoModel(channel.GetModelMapping(), pinned.Model, candidate.Plugin)
+			if err != nil {
+				continue
+			}
+			if declared, known := pinned.Generation.CanonicalModel(upstream); known {
+				bindings := pinned.Generation.LookupEndpointCandidates(c.Request.Method, c.Request.URL.Path, declared)
+				if !slices.ContainsFunc(bindings, func(binding jsplugin.ProtocolBinding) bool { return binding.Plugin == candidate.Plugin }) {
+					continue
+				}
+			}
 		}
 		if channel.Type == constant.ChannelTypeTaskPlugin || channel.Type == constant.ChannelTypeNewAPI {
 			// A New API channel may bind several candidates. The first bound

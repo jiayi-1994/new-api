@@ -258,12 +258,8 @@ func validateVideoSalesOption(value string) error {
 	if err != nil {
 		return err
 	}
-	generation := jsplugin.DefaultRegistry.Generation()
 	kept := make(map[string]bool, len(sales))
 	for name := range sales {
-		if _, declared := generation.CanonicalModel(name); declared {
-			return fmt.Errorf("video_sales: %s is a plugin model name; choose a distinct public name", name)
-		}
 		kept[jsplugin.ASCIIFold(name)] = true
 	}
 
@@ -419,6 +415,9 @@ func updateOptionMap(key string, value string) (err error) {
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {
+		if key == billing_setting.VideoSalesOption {
+			taskAliasViewPtr.Store(nil)
+		}
 		return nil // 已由配置系统处理
 	}
 

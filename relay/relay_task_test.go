@@ -428,10 +428,19 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		name, tokenGroup, wantCode string
 		frozen                     bool
 		wantStatus                 int
+		guard                      string
 	}{
 		{name: "frozen sale", tokenGroup: "default", frozen: true},
 		{name: "auto group is refused", tokenGroup: "auto", frozen: true, wantCode: "video_sales_auto_group", wantStatus: http.StatusBadRequest},
 		{name: "table appearing after entry never falls back to plugin pricing", tokenGroup: "default", wantCode: "video_sales_unavailable", wantStatus: http.StatusServiceUnavailable},
+		{name: "scheduler off", frozen: true, guard: "off", wantCode: "video_sales_scheduler_unavailable", wantStatus: http.StatusServiceUnavailable},
+		{name: "scheduler shadow", frozen: true, guard: "shadow", wantCode: "video_sales_scheduler_unavailable", wantStatus: http.StatusServiceUnavailable},
+		{name: "scheduler not ready", frozen: true, guard: "not_ready", wantCode: "video_sales_scheduler_unavailable", wantStatus: http.StatusServiceUnavailable},
+		{name: "fixed channel", frozen: true, guard: "pin", wantCode: "video_sales_unsupported_request", wantStatus: http.StatusBadRequest},
+		{name: "locked channel", frozen: true, guard: "locked", wantCode: "video_sales_unsupported_request", wantStatus: http.StatusBadRequest},
+		{name: "origin task", frozen: true, guard: "origin", wantCode: "video_sales_unsupported_request", wantStatus: http.StatusBadRequest},
+		{name: "native entry", frozen: true, guard: "native", wantCode: "video_sales_unsupported_request", wantStatus: http.StatusBadRequest},
+		{name: "other protocol", frozen: true, guard: "protocol", wantCode: "video_sales_unsupported_request", wantStatus: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, info := newTaskSubmitContext(t, "video-unified", `{"video-unified":"declared-model"}`)
@@ -439,6 +448,28 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			info.UserGroup, info.UsingGroup, info.TokenGroup = "default", "default", tc.tokenGroup
 			info.OriginModelName = "video-unified"
 			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+			endpoint := pluginruntime.PinnedEndpoint{Generation: registry.Generation(), Plugin: plugin, Protocol: "openai_video", Operation: pluginruntime.HostProtocolOperation{Name: "create"}, Model: "video-unified"}
+			decision := service.VideoSchedDecision{Takeover: true}
+			switch tc.guard {
+			case "off":
+				decision = service.VideoSchedDecision{Reason: service.VideoSchedReasonModeOff}
+			case "shadow":
+				decision = service.VideoSchedDecision{Shadow: true}
+			case "not_ready":
+				decision.Reason = service.VideoSchedReasonNotReady
+			case "pin":
+				service.GetChannelConstraints(c).AddPin(dto.ChannelPin{ChannelId: 1, Source: dto.PinSourceToken, Rank: dto.PinRankToken, RetryMode: dto.PinRetrySingleAttempt})
+			case "locked":
+				info.LockedChannel = &model.Channel{Id: 1}
+			case "origin":
+				info.OriginTaskID = "original"
+			case "native":
+				endpoint.Protocol = ""
+			case "protocol":
+				endpoint.Protocol = "openai_responses"
+			}
+			c.Set(pluginruntime.ContextKeyPinnedEndpoint, endpoint)
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
 			if tc.frozen {
 				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
 			}
@@ -450,6 +481,7 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 				assert.Equal(t, tc.wantStatus, taskErr.StatusCode)
 				assert.True(t, taskErr.NoRetry)
 				assert.Nil(t, info.TieredBillingSnapshot)
+				assert.Nil(t, info.Billing, "local guards must not reserve any quota")
 				return
 			}
 			snap := info.TieredBillingSnapshot

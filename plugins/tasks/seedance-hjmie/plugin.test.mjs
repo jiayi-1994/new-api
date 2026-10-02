@@ -97,6 +97,21 @@ test("describeSpec and submission apply the same mapped-model validation", () =>
   }
 });
 
+test("a public alias decodes before channel selection and submits the selected real model", () => {
+  const value = { model: "video-unified", prompt: "a cat", seconds: 8, size: "1280x720" };
+  for (const upstreamModel of [undefined, "videos-standard"]) {
+    const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel, body: { kind: "json", value } });
+    assert.equal(intent.model, value.model);
+    const ctx = { model: value.model, upstreamModel: "videos-standard", requestBody: intent.requestBody };
+    assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
+    const submitted = plugin.buildSubmitRequest({ ...ctx, baseUrl: "https://api.hjmie.cc.cd", apiKey: "fixture-only-key" });
+    assert.equal(submitted.body.model, "videos-standard");
+    assert.equal(submitted.body.duration, 8);
+    assert.equal(submitted.body.resolution, "720p");
+  }
+  assert.throws(() => plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel: "unknown", body: { kind: "json", value } }), /unsupported upstream video model/);
+});
+
 const REQUEST = { model: "videos-fast", prompt: "a cat", duration: 8, resolution: "720p" };
 const BASE_URL = "https://poxiaoapi001.com";
 
