@@ -80,7 +80,14 @@ type BillingSnapshot struct {
 	ExprVersion               int            `json:"expr_version"`
 	TaskUsageBilling          bool           `json:"task_usage_billing,omitempty"`
 	UsageFacts                map[string]any `json:"usage_facts,omitempty"`
+	// SalesSource marks a price frozen from the client request rather than
+	// from plugin usage; completion facts never overlay it.
+	SalesSource string `json:"sales_source,omitempty"`
 }
+
+// SalesSourceVideoRequest prices a unified video model by the requested
+// output seconds and resolution, independent of the executing plugin.
+const SalesSourceVideoRequest = "video_request"
 
 // TieredResult holds everything needed after running tiered settlement.
 type TieredResult struct {

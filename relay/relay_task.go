@@ -256,31 +256,54 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if pinnedPlugin.Plugin != nil {
 		pluginKey = pinnedPlugin.Plugin.Meta.Key
 	}
-	exprStr, exists := billing_setting.ResolveTaskBillingExpr(pluginKey, modelName, info.UpstreamModelName)
+	// A unified video model is priced from the sale frozen at the request
+	// entry, never from the executing plugin's expression or usage.
+	var exprStr, salesSource string
+	var exists bool
+	var facts map[string]any
+	if sales, unified := service.GetVideoSalesFacts(c); unified {
+		if info.TokenGroup == "auto" {
+			taskErr := service.TaskErrorWrapperLocal(errors.New("unified video models cannot use the auto group"), "video_sales_auto_group", http.StatusBadRequest)
+			taskErr.NoRetry = true
+			return nil, taskErr
+		}
+		exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s)`, sales.Resolution, strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64))
+		exists, salesSource = true, billingexpr.SalesSourceVideoRequest
+		facts = map[string]any{"seconds": float64(sales.Seconds), "resolution": sales.Resolution}
+	} else if _, _, configured := billing_setting.GetVideoSales(modelName); configured {
+		// The price table appeared after this request's entry; it must not
+		// fall back to plugin pricing.
+		taskErr := service.TaskErrorWrapperLocal(fmt.Errorf("model %s is temporarily unavailable", modelName), "video_sales_unavailable", http.StatusServiceUnavailable)
+		taskErr.NoRetry = true
+		return nil, taskErr
+	} else {
+		exprStr, exists = billing_setting.ResolveTaskBillingExpr(pluginKey, modelName, info.UpstreamModelName)
+	}
 	useTiered := exists || billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr
 	if useTiered {
-		provider, supported := adaptor.(channel.TaskUsageFactsProvider)
 		if billingexpr.UsesFixedPricing(exprStr) {
 			return nil, service.TaskErrorWrapper(fmt.Errorf("fixed pricing is not supported for task usage expressions"), "model_price_error", http.StatusBadRequest)
 		}
-		if !exists || !supported {
-			return nil, service.TaskErrorWrapper(fmt.Errorf("task model %s has no usage expression or meter", modelName), "model_price_error", http.StatusBadRequest)
-		}
-		sharedModel := pinnedPlugin.Generation.SharedModel(modelName) || pinnedPlugin.Generation.SharedModel(info.UpstreamModelName)
-		if sharedModel && pinnedPlugin.Plugin != nil {
-			schema, _ := pinnedPlugin.Plugin.Meta.UsageForModels(info.UpstreamModelName, modelName)
-			if !billing_setting.TaskExprCompatible(exprStr, schema) {
-				return nil, service.TaskErrorWrapper(fmt.Errorf("task model %s pricing is not configured for plugin %s", modelName, pluginKey), "model_price_error", http.StatusBadRequest)
+		if salesSource == "" {
+			provider, supported := adaptor.(channel.TaskUsageFactsProvider)
+			if !exists || !supported {
+				return nil, service.TaskErrorWrapper(fmt.Errorf("task model %s has no usage expression or meter", modelName), "model_price_error", http.StatusBadRequest)
 			}
-		}
-		var facts map[string]any
-		if validatedProvider, ok := adaptor.(channel.TaskValidatedUsageFactsProvider); ok {
-			facts, err = validatedProvider.ExtractUsageFactsValidated(c, info)
-			if err != nil {
-				return nil, service.TaskErrorWrapperLocal(err, "plugin_usage_invalid", http.StatusBadRequest)
+			sharedModel := pinnedPlugin.Generation.SharedModel(modelName) || pinnedPlugin.Generation.SharedModel(info.UpstreamModelName)
+			if sharedModel && pinnedPlugin.Plugin != nil {
+				schema, _ := pinnedPlugin.Plugin.Meta.UsageForModels(info.UpstreamModelName, modelName)
+				if !billing_setting.TaskExprCompatible(exprStr, schema) {
+					return nil, service.TaskErrorWrapper(fmt.Errorf("task model %s pricing is not configured for plugin %s", modelName, pluginKey), "model_price_error", http.StatusBadRequest)
+				}
 			}
-		} else {
-			facts = provider.ExtractUsageFacts(c, info)
+			if validatedProvider, ok := adaptor.(channel.TaskValidatedUsageFactsProvider); ok {
+				facts, err = validatedProvider.ExtractUsageFactsValidated(c, info)
+				if err != nil {
+					return nil, service.TaskErrorWrapperLocal(err, "plugin_usage_invalid", http.StatusBadRequest)
+				}
+			} else {
+				facts = provider.ExtractUsageFacts(c, info)
+			}
 		}
 		cost, trace, runErr := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts})
 		if runErr != nil || cost < 0 {
@@ -293,7 +316,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		quota, clamp := common.QuotaRoundChecked(cost * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		noteTaskQuotaClamp(info, clamp)
 		priceData = types.PriceData{Quota: quota, QuotaToPreConsume: quota, GroupRatioInfo: groupRatioInfo}
-		info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: billing_setting.BillingModeTieredExpr, ModelName: modelName, ExprString: exprStr, ExprHash: billingexpr.ExprHashString(exprStr), GroupRatio: groupRatioInfo.GroupRatio, EstimatedQuotaBeforeGroup: cost * common.QuotaPerUnit, EstimatedQuotaAfterGroup: quota, EstimatedTier: trace.MatchedTier, QuotaPerUnit: common.QuotaPerUnit, ExprVersion: billingexpr.ExprVersion(exprStr), TaskUsageBilling: true, UsageFacts: facts}
+		info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: billing_setting.BillingModeTieredExpr, ModelName: modelName, ExprString: exprStr, ExprHash: billingexpr.ExprHashString(exprStr), GroupRatio: groupRatioInfo.GroupRatio, EstimatedQuotaBeforeGroup: cost * common.QuotaPerUnit, EstimatedQuotaAfterGroup: quota, EstimatedTier: trace.MatchedTier, QuotaPerUnit: common.QuotaPerUnit, ExprVersion: billingexpr.ExprVersion(exprStr), TaskUsageBilling: true, UsageFacts: facts, SalesSource: salesSource}
 	} else {
 		priceData, err = helper.ModelPriceHelperPerCall(c, info)
 		if err != nil {

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"maps"
 	"strconv"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
@@ -240,7 +243,57 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if key == billing_setting.VideoSalesOption {
+		return validateVideoSalesOption(value)
+	}
 	return operation_setting.ValidateVideoSchedulingOption(key, value)
+}
+
+// validateVideoSalesOption keeps unified video prices well formed and never
+// lets a model leave the table while a channel still lists its public name:
+// that name would then route as a plain alias priced by upstream models.
+// Stopping sales uses the entry's disabled flag instead.
+func validateVideoSalesOption(value string) error {
+	sales, err := billing_setting.ParseVideoSales(value)
+	if err != nil {
+		return err
+	}
+	generation := jsplugin.DefaultRegistry.Generation()
+	kept := make(map[string]bool, len(sales))
+	for name := range sales {
+		if _, declared := generation.CanonicalModel(name); declared {
+			return fmt.Errorf("video_sales: %s is a plugin model name; choose a distinct public name", name)
+		}
+		kept[jsplugin.ASCIIFold(name)] = true
+	}
+
+	var stored Option
+	if err := DB.Where(&Option{Key: billing_setting.VideoSalesOption}).Limit(1).Find(&stored).Error; err != nil {
+		return err
+	}
+	var previous map[string]json.RawMessage
+	_ = common.UnmarshalJsonStr(stored.Value, &previous)
+	removed := make(map[string]string)
+	for name := range previous {
+		if fold := jsplugin.ASCIIFold(name); !kept[fold] {
+			removed[fold] = name
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	var channelModels []string
+	if err := DB.Model(&Channel{}).Pluck("models", &channelModels).Error; err != nil {
+		return err
+	}
+	for _, models := range channelModels {
+		for model := range strings.SplitSeq(models, ",") {
+			if name, listed := removed[jsplugin.ASCIIFold(strings.TrimSpace(model))]; listed {
+				return fmt.Errorf("video_sales: %s is still listed by a channel; remove it from channels first or set disabled", name)
+			}
+		}
+	}
+	return nil
 }
 
 func UpdateOption(key string, value string) error {

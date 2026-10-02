@@ -2,13 +2,18 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
@@ -21,7 +26,125 @@ import (
 // and rules submission billing uses (relay.RelayTaskSubmit), but read-only: it
 // never touches PriceData, quota, pre-consume or settlement.
 
-const contextKeyVideoSellCache = "video_sched_sell_cache"
+const (
+	contextKeyVideoSellCache  = "video_sched_sell_cache"
+	contextKeyVideoSalesFacts = "video_sales_facts"
+)
+
+// VideoSalesFacts is a unified model's sale, frozen once at the request
+// entry. Every candidate quote and the submission charge read this value, so
+// the profit floor and the bill always use the same price.
+type VideoSalesFacts struct {
+	Model        string // configured video_sales name
+	Seconds      int
+	Resolution   string // canonical tier
+	USDPerSecond float64
+}
+
+func (f VideoSalesFacts) USD() float64 {
+	return float64(f.Seconds) * f.USDPerSecond
+}
+
+func SetVideoSalesFacts(c *gin.Context, facts VideoSalesFacts) {
+	c.Set(contextKeyVideoSalesFacts, facts)
+}
+
+func GetVideoSalesFacts(c *gin.Context) (VideoSalesFacts, bool) {
+	facts, ok := c.Value(contextKeyVideoSalesFacts).(VideoSalesFacts)
+	return facts, ok
+}
+
+// ParseVideoSalesFacts reads the requested output seconds and resolution from
+// the host-parsed request body. Aliases must agree, seconds must be an exact
+// integer, and the spec must be in the public price table; anything else is
+// refused before a price is ever computed.
+func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, body any) (VideoSalesFacts, error) {
+	envelope, _ := body.(map[string]any)
+	fields := map[string]any{}
+	switch envelope["kind"] {
+	case string(jsplugin.BodyJSON):
+		value, ok := envelope["value"].(map[string]any)
+		if !ok {
+			return VideoSalesFacts{}, errors.New("request body must be a JSON object")
+		}
+		fields = value
+	case string(jsplugin.BodyMultipart), string(jsplugin.BodyForm):
+		parts, _ := envelope["fields"].(map[string][]string)
+		for name, values := range parts {
+			// A repeated field stays a list, which no sales field accepts.
+			fields[name] = values
+			if len(values) == 1 {
+				fields[name] = values[0]
+			}
+		}
+	default:
+		return VideoSalesFacts{}, errors.New("request must be a JSON or form body")
+	}
+
+	seconds := 0
+	for _, name := range []string{"seconds", "duration"} {
+		raw, present := fields[name]
+		if !present {
+			continue
+		}
+		value := -1
+		switch v := raw.(type) {
+		case float64:
+			if v == math.Trunc(v) && v >= 1 && v <= relaycommon.MaxTaskDurationSeconds {
+				value = int(v)
+			}
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil && parsed >= 1 && parsed <= relaycommon.MaxTaskDurationSeconds {
+				value = parsed
+			}
+		}
+		if value < 0 {
+			return VideoSalesFacts{}, fmt.Errorf("%s must be a whole number of seconds between 1 and %d", name, relaycommon.MaxTaskDurationSeconds)
+		}
+		if seconds != 0 && seconds != value {
+			return VideoSalesFacts{}, errors.New("seconds and duration conflict")
+		}
+		seconds = value
+	}
+	if seconds == 0 {
+		return VideoSalesFacts{}, errors.New("seconds is required")
+	}
+
+	tier := ""
+	if raw, present := fields["resolution"]; present {
+		name, _ := raw.(string)
+		canonical, ok := billing_setting.CanonicalVideoTier(name)
+		if !ok {
+			return VideoSalesFacts{}, fmt.Errorf("resolution %q is not a supported tier", name)
+		}
+		tier = canonical
+	}
+	if raw, present := fields["size"]; present {
+		size, _ := raw.(string)
+		width, height, found := strings.Cut(strings.ToLower(strings.TrimSpace(size)), "x")
+		w, widthErr := strconv.Atoi(width)
+		h, heightErr := strconv.Atoi(height)
+		if !found || widthErr != nil || heightErr != nil || w <= 0 || h <= 0 {
+			return VideoSalesFacts{}, errors.New("size must be WIDTHxHEIGHT")
+		}
+		sizeTier := billing_setting.VideoTierForHeight(min(w, h))
+		if tier != "" && tier != sizeTier {
+			return VideoSalesFacts{}, errors.New("size and resolution conflict")
+		}
+		tier = sizeTier
+	}
+	if tier == "" {
+		return VideoSalesFacts{}, errors.New("resolution or size is required")
+	}
+	price, sold := sales.Resolutions[tier]
+	if !sold {
+		return VideoSalesFacts{}, fmt.Errorf("%s is not sold for model %s", tier, model)
+	}
+	if !slices.Contains(price.Seconds, seconds) {
+		return VideoSalesFacts{}, fmt.Errorf("%d seconds is not sold at %s for model %s", seconds, tier, model)
+	}
+	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond}, nil
+}
 
 // EstimateVideoSell estimates the USD sale of one candidate: plugin executes
 // the request for clientModel, mapped by the channel to mappedModel (pass
@@ -35,6 +158,14 @@ const contextKeyVideoSellCache = "video_sched_sell_cache"
 // cached per request by (plugin, mapped model); the effective group ratio is applied on
 // every call because auto groups change it between attempts.
 func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlugin, clientModel, mappedModel string, body any, action string) videosched.SellPrice {
+	if sales, unified := GetVideoSalesFacts(c); unified {
+		// A unified sale is the same for every candidate.
+		usd := sales.USD() * VideoEffectiveGroupRatio(c, group)
+		if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
+			return videosched.SellPrice{Kind: videosched.SellUnknown}
+		}
+		return videoSellFromUSD(usd, false)
+	}
 	cache, _ := c.Value(contextKeyVideoSellCache).(map[string]videosched.SellPrice)
 	if cache == nil {
 		cache = make(map[string]videosched.SellPrice)

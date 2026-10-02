@@ -745,3 +745,19 @@ func (s *priceTestReservation) Refund(*gin.Context)      {}
 func (s *priceTestReservation) NeedsRefund() bool        { return false }
 func (s *priceTestReservation) GetPreConsumedQuota() int { return s.held }
 func (s *priceTestReservation) Reserve(quota int) error  { s.held = max(s.held, quota); return nil }
+
+// /v1/models lists a unified video model by its sales table alone, and hides
+// it while sales are disabled even if a leftover price exists.
+func TestHasModelBillingConfigFollowsVideoSales(t *testing.T) {
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"paused-unified":0.5}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}},"paused-unified":{"disabled":true,"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`}))
+
+	assert.True(t, HasModelBillingConfig("Video-Unified"))
+	assert.False(t, HasModelBillingConfig("paused-unified"))
+}

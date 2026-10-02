@@ -28,17 +28,21 @@ const (
 
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
-// billing_setting.plugin_billing_expr
+// billing_setting.plugin_billing_expr, billing_setting.video_sales
 type BillingSetting struct {
 	BillingMode       map[string]string `json:"billing_mode"`
 	BillingExpr       map[string]string `json:"billing_expr"`
 	PluginBillingExpr map[string]string `json:"plugin_billing_expr"`
+	// VideoSales is saved through the option API as one document. It is not
+	// a model-pricing option: draft saves of other prices never rewrite it.
+	VideoSales map[string]VideoSalesModel `json:"video_sales"`
 }
 
 var billingSetting = BillingSetting{
 	BillingMode:       make(map[string]string),
 	BillingExpr:       make(map[string]string),
 	PluginBillingExpr: make(map[string]string),
+	VideoSales:        make(map[string]VideoSalesModel),
 }
 
 func init() {

@@ -23,6 +23,8 @@ import (
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -901,6 +903,72 @@ func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing
 
 	assert.True(t, reachedDistribution)
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
+}
+
+// A unified video model's sale is parsed once from the client body, JSON or
+// multipart, and frozen on the context before scheduling; an unsold or
+// ambiguous spec and a disabled model stop before distribution.
+func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
+	const key = "endpoint-video-sales-test"
+	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+		key, "1.0.0", `["video-sales-model"]`, "/v1/videos",
+		`return {model: ctx.model, requestBody: {}};`,
+	), jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+	})
+
+	jsonRequest := func(body string) *http.Request {
+		request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		return request
+	}
+	var form bytes.Buffer
+	writer := multipart.NewWriter(&form)
+	for _, field := range [][2]string{{"model", "video-sales-model"}, {"prompt", "cat"}, {"seconds", "5"}, {"resolution", "1080p"}} {
+		require.NoError(t, writer.WriteField(field[0], field[1]))
+	}
+	require.NoError(t, writer.Close())
+	multipartRequest := httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewReader(form.Bytes()))
+	multipartRequest.Header.Set("Content-Type", writer.FormDataContentType())
+
+	const sales = `{"video-sales-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]},"1080p":{"usd_per_second":0.04,"seconds":[5]}}}}`
+	for _, tc := range []struct {
+		name, sales string
+		request     *http.Request
+		wantStatus  int
+		want        *service.VideoSalesFacts
+	}{
+		{name: "json", sales: sales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720"}`),
+			wantStatus: http.StatusNoContent, want: &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "multipart", sales: sales, request: multipartRequest,
+			wantStatus: http.StatusNoContent, want: &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 5, Resolution: "1080p", USDPerSecond: 0.04}},
+		{name: "conflicting seconds", sales: sales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"duration":5,"size":"1280x720"}`), wantStatus: http.StatusBadRequest},
+		{name: "unsold duration", sales: sales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":10,"size":"1280x720"}`), wantStatus: http.StatusBadRequest},
+		{name: "disabled model", sales: `{"video-sales-model":{"disabled":true,"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
+			request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720"}`), wantStatus: http.StatusServiceUnavailable},
+		{name: "not unified", sales: `{}`, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat"}`), wantStatus: http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: tc.sales}))
+			var frozen *service.VideoSalesFacts
+			router := gin.New()
+			router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				if facts, ok := service.GetVideoSalesFacts(c); ok {
+					frozen = &facts
+				}
+				c.Status(http.StatusNoContent)
+			})
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, tc.request)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.Equal(t, tc.want, frozen)
+		})
+	}
 }
 
 // The OpenAI Images edits endpoint accepts multipart uploads. Every file of a

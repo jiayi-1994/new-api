@@ -109,3 +109,48 @@ func TestSmokeTestExprRejectsTaskUsageWithoutSchema(t *testing.T) {
 
 	require.NoError(t, SmokeTestExpr(`tier("base", p * 2 + c * 8)`))
 }
+
+func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
+	for _, tc := range []struct{ name, value, wantErr string }{
+		{name: "valid", value: `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5,15]},"4k":{"usd_per_second":0.1,"seconds":[5]}}}}`},
+		{name: "case duplicate", value: `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[5]}}},"Video-Unified":{"resolutions":{"720p":{"usd_per_second":0.01,"seconds":[5]}}}}`, wantErr: "differ only in letter case"},
+		{name: "2160p is written 4k", value: `{"m":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: `as "4k"`},
+		{name: "upper case tier", value: `{"m":{"resolutions":{"720P":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: `as "720p"`},
+		{name: "unknown tier", value: `{"m":{"resolutions":{"hd":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "<height>p or 4k"},
+		{name: "zero price", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0,"seconds":[5]}}}}`, wantErr: "positive number"},
+		{name: "no seconds", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[]}}}}`, wantErr: "sellable duration"},
+		{name: "seconds above cap", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[3601]}}}}`, wantErr: "seconds must be within"},
+		{name: "no resolutions", value: `{"m":{"resolutions":{}}}`, wantErr: "at least one resolution"},
+		{name: "untrimmed name", value: `{" m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "trimmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseVideoSales(tc.value)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+
+	for input, want := range map[string]string{"720P": "720p", " 1080p ": "1080p", "2160p": "4k", "4K": "4k"} {
+		got, ok := CanonicalVideoTier(input)
+		assert.True(t, ok, input)
+		assert.Equal(t, want, got, input)
+	}
+	for _, input := range []string{"", "p", "0720p", "-720p", "720", "hd"} {
+		_, ok := CanonicalVideoTier(input)
+		assert.False(t, ok, input)
+	}
+
+	saved := billingSetting.VideoSales
+	t.Cleanup(func() { billingSetting.VideoSales = saved })
+	billingSetting.VideoSales = map[string]VideoSalesModel{"Video-Unified": {Disabled: true}}
+	name, sales, ok := GetVideoSales("video-unified")
+	require.True(t, ok, "a channel spelling differing in case still finds the entry")
+	assert.Equal(t, "Video-Unified", name)
+	assert.True(t, sales.Disabled)
+	_, _, ok = GetVideoSales("other")
+	assert.False(t, ok)
+}

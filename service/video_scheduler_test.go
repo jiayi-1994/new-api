@@ -1297,6 +1297,18 @@ func TestEstimateVideoSellMirrorsSubmissionPricing(t *testing.T) {
 			EstimateVideoSell(c, "gift", seedance, "videos-fast", "videos-fast", seedanceBody, ""))
 	})
 
+	t.Run("a unified sale ignores plugin pricing and is equal for every candidate", func(t *testing.T) {
+		c := newVideoSchedTestContext(t)
+		pinned(c)
+		SetVideoSalesFacts(c, VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+		seedanceSell := EstimateVideoSell(c, "vip", seedance, "videos-fast", "videos-fast", seedanceBody, "")
+		megabyaiSell := EstimateVideoSell(c, "vip", megabyai, "videos-mini", "videos-mini", megabyaiBody, "")
+		assert.Equal(t, videosched.SellKnown, seedanceSell.Kind)
+		assert.False(t, seedanceSell.Estimated)
+		assert.InDelta(t, 0.6, seedanceSell.USD, 1e-9, "15 s x $0.02 x vip ratio 2, not the plugin override")
+		assert.Equal(t, seedanceSell, megabyaiSell)
+	})
+
 	for _, tc := range []struct {
 		name  string
 		setup func(*gin.Context)
@@ -2134,6 +2146,57 @@ func TestVideoCostKeyNormalizationKeepsChannelSchedulable(t *testing.T) {
 			choice := DecideVideoSchedule(input)
 			t.Logf("cost_key=%s quote=%+v flow=%s reason=%s health=%+v", key, videosched.Quote(input.Candidates[0].Cost, input.Candidates[0].Spec), choice.Flow, choice.Reason, input.Candidates[0].Reliability)
 			require.NotNil(t, choice.Best, "a recognized cost key must have a matching initialized health state")
+		})
+	}
+}
+
+func TestParseVideoSalesFactsAcceptsOnlyTheSoldSpec(t *testing.T) {
+	sales := billing_setting.VideoSalesModel{Resolutions: map[string]billing_setting.VideoSalesTier{
+		"720p": {USDPerSecond: 0.02, Seconds: []int{5, 15}},
+		"4k":   {USDPerSecond: 0.1, Seconds: []int{5}},
+	}}
+	jsonBody := func(fields map[string]any) any {
+		return map[string]any{"kind": "json", "value": fields}
+	}
+	formBody := func(fields map[string][]string) any {
+		return map[string]any{"kind": "multipart", "fields": fields}
+	}
+	for _, tc := range []struct {
+		name, wantErr string
+		body          any
+		want          VideoSalesFacts
+	}{
+		{name: "json size", body: jsonBody(map[string]any{"seconds": float64(15), "size": "1280x720"}), want: VideoSalesFacts{Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "portrait size and agreeing aliases", body: jsonBody(map[string]any{"duration": "15", "seconds": float64(15), "size": "720x1280", "resolution": "720P"}), want: VideoSalesFacts{Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "3840x2160 is 4k", body: jsonBody(map[string]any{"seconds": float64(5), "size": "3840x2160"}), want: VideoSalesFacts{Seconds: 5, Resolution: "4k", USDPerSecond: 0.1}},
+		{name: "2160p is 4k", body: formBody(map[string][]string{"seconds": {"5"}, "resolution": {"2160p"}}), want: VideoSalesFacts{Seconds: 5, Resolution: "4k", USDPerSecond: 0.1}},
+		{name: "multipart", body: formBody(map[string][]string{"seconds": {"5"}, "resolution": {"720p"}, "prompt": {"a", "b"}}), want: VideoSalesFacts{Seconds: 5, Resolution: "720p", USDPerSecond: 0.02}},
+		{name: "seconds conflict", body: jsonBody(map[string]any{"seconds": float64(15), "duration": float64(5), "size": "1280x720"}), wantErr: "conflict"},
+		{name: "resolution conflict", body: jsonBody(map[string]any{"seconds": float64(5), "size": "1280x720", "resolution": "4k"}), wantErr: "conflict"},
+		{name: "fractional seconds", body: jsonBody(map[string]any{"seconds": 15.5, "size": "1280x720"}), wantErr: "whole number"},
+		{name: "decimal string", body: jsonBody(map[string]any{"seconds": "15.0", "size": "1280x720"}), wantErr: "whole number"},
+		{name: "zero", body: jsonBody(map[string]any{"seconds": float64(0), "size": "1280x720"}), wantErr: "whole number"},
+		{name: "negative", body: jsonBody(map[string]any{"seconds": float64(-5), "size": "1280x720"}), wantErr: "whole number"},
+		{name: "huge", body: jsonBody(map[string]any{"seconds": 1.8446744073686646e19, "size": "1280x720"}), wantErr: "whole number"},
+		{name: "boolean", body: jsonBody(map[string]any{"seconds": true, "size": "1280x720"}), wantErr: "whole number"},
+		{name: "repeated multipart seconds", body: formBody(map[string][]string{"seconds": {"5", "15"}, "resolution": {"720p"}}), wantErr: "whole number"},
+		{name: "missing seconds", body: jsonBody(map[string]any{"size": "1280x720"}), wantErr: "seconds is required"},
+		{name: "missing resolution", body: jsonBody(map[string]any{"seconds": float64(5)}), wantErr: "resolution or size is required"},
+		{name: "bad size", body: jsonBody(map[string]any{"seconds": float64(5), "size": "1280*720"}), wantErr: "WIDTHxHEIGHT"},
+		{name: "unsold tier", body: jsonBody(map[string]any{"seconds": float64(5), "size": "1920x1080"}), wantErr: "1080p is not sold"},
+		{name: "unsold seconds", body: jsonBody(map[string]any{"seconds": float64(10), "size": "1280x720"}), wantErr: "10 seconds is not sold"},
+		{name: "json array", body: map[string]any{"kind": "json", "value": []any{}}, wantErr: "JSON object"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts, err := ParseVideoSalesFacts("video-unified", sales, tc.body)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			tc.want.Model = "video-unified"
+			assert.Equal(t, tc.want, facts)
 		})
 	}
 }

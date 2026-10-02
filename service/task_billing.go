@@ -438,7 +438,11 @@ func EvaluateTaskCompletionUsage(snap *billingexpr.BillingSnapshot, facts map[st
 	}
 	usage := make(map[string]any, len(snap.UsageFacts)+len(facts))
 	maps.Copy(usage, snap.UsageFacts)
-	maps.Copy(usage, facts)
+	// A request-priced sale keeps its frozen facts: whatever usage the
+	// executing plugin reports never changes what the client pays.
+	if snap.SalesSource == "" {
+		maps.Copy(usage, facts)
+	}
 	result, err := billingexpr.ComputeTieredQuotaWithRequest(snap, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: usage})
 	if err == nil && (result.ActualQuotaBeforeGroup < 0 || math.IsNaN(result.ActualQuotaBeforeGroup)) {
 		err = fmt.Errorf("task completion expression produced an invalid cost")

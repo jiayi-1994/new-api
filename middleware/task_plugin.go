@@ -25,6 +25,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -719,6 +720,20 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 			)
 			abortWithOpenAiMessage(c, intentErr.StatusCode, intentErr.Message, types.ErrorCode(intentErr.Code))
 			return
+		}
+		// A unified video model's sale is frozen here, once, from the client's
+		// own body; scheduling quotes and the submission charge both read it.
+		if salesModel, sales, unified := billing_setting.GetVideoSales(pinned.Model); unified {
+			if sales.Disabled {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("model %s is temporarily unavailable", pinned.Model))
+				return
+			}
+			facts, salesErr := service.ParseVideoSalesFacts(salesModel, sales, requestContext.Body)
+			if salesErr != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, salesErr.Error())
+				return
+			}
+			service.SetVideoSalesFacts(c, facts)
 		}
 		service.DecideVideoSched(c)
 		logger.LogDebug(

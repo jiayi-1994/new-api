@@ -408,6 +408,69 @@ func TestSharedTaskBillingExpressionSelectionAndFrozenSettlement(t *testing.T) {
 	}
 }
 
+// A unified video sale is priced from the facts frozen at the request entry.
+// The executing plugin's expression override and usage never apply, and the
+// completion settlement keeps the reserved amount whatever the plugin reports.
+func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
+	saveBillingConfig(t)
+	registry := pluginruntime.NewRegistry()
+	source := strings.Replace(billingFallbackPlugin, `fetchMode:"per_task"`, `fetchMode:"per_task",usageSchema:{requests:{type:"number",unit:"count"}}`, 1)
+	_, err := registry.Register(source+`export function extractUsage(){return {requests:1};}`, pluginruntime.Options{})
+	require.NoError(t, err)
+	plugin, ok := registry.Generation().Get("bill-fallback")
+	require.True(t, ok)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		billing_setting.VideoSalesOption:        `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
+		billing_setting.PluginBillingExprOption: `{"bill-fallback::video-unified":"tier(\"plugin\", u(\"requests\") * 9)"}`,
+	}))
+
+	for _, tc := range []struct {
+		name, tokenGroup, wantCode string
+		frozen                     bool
+		wantStatus                 int
+	}{
+		{name: "frozen sale", tokenGroup: "default", frozen: true},
+		{name: "auto group is refused", tokenGroup: "auto", frozen: true, wantCode: "video_sales_auto_group", wantStatus: http.StatusBadRequest},
+		{name: "table appearing after entry never falls back to plugin pricing", tokenGroup: "default", wantCode: "video_sales_unavailable", wantStatus: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := newTaskSubmitContext(t, "video-unified", `{"video-unified":"declared-model"}`)
+			c.Set("group", "default")
+			info.UserGroup, info.UsingGroup, info.TokenGroup = "default", "default", tc.tokenGroup
+			info.OriginModelName = "video-unified"
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+			if tc.frozen {
+				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+			}
+
+			_, taskErr := RelayTaskSubmit(c, info)
+			require.NotNil(t, taskErr) // This fixture stops at reservation, before upstream submission.
+			if tc.wantCode != "" {
+				assert.Equal(t, tc.wantCode, taskErr.Code)
+				assert.Equal(t, tc.wantStatus, taskErr.StatusCode)
+				assert.True(t, taskErr.NoRetry)
+				assert.Nil(t, info.TieredBillingSnapshot)
+				return
+			}
+			snap := info.TieredBillingSnapshot
+			require.NotNil(t, snap, "submission error: %+v", taskErr)
+			assert.Equal(t, billingexpr.SalesSourceVideoRequest, snap.SalesSource)
+			assert.Equal(t, `tier("720p", u("seconds") * 0.02)`, snap.ExprString)
+			assert.Equal(t, map[string]any{"seconds": float64(15), "resolution": "720p"}, snap.UsageFacts)
+			assert.True(t, snap.TaskUsageBilling)
+			assert.Equal(t, float64(1), snap.GroupRatio)
+			assert.Equal(t, common.QuotaRound(0.3*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
+			assert.Equal(t, snap.EstimatedQuotaAfterGroup, info.PriceData.Quota)
+
+			result, usage, err := service.EvaluateTaskCompletionUsage(snap, map[string]any{"requests": float64(1), "seconds": float64(5)})
+			require.NoError(t, err)
+			assert.Equal(t, snap.EstimatedQuotaAfterGroup, result.ActualQuotaAfterGroup)
+			assert.Equal(t, "720p", result.MatchedTier)
+			assert.Equal(t, snap.UsageFacts, usage)
+		})
+	}
+}
+
 // Issue #7478: task APIs answer 201 Created or 202 Accepted on submission.
 // Every 2xx must reach parseSubmitResponse; only other statuses are upstream
 // failures that keep the upstream status and body.
