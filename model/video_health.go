@@ -2,7 +2,10 @@ package model
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -56,6 +59,7 @@ type VideoHealthAttempt struct {
 	BatchStart         int64  `json:"batch_start" gorm:"index:idx_vh_cohort,priority:3"`
 	WindowSeconds      int    `json:"window_seconds"`
 	StateVersion       int64  `json:"state_version"`
+	ConfigIdentity     string `json:"-" gorm:"type:varchar(64)"`
 	ValidationRound    int64  `json:"validation_round" gorm:"index:idx_vh_round,priority:3"`
 	Flow               string `json:"flow" gorm:"type:varchar(16)"`                                          // normal | explore | probe | shadow | weighted
 	SubmitOutcome      string `json:"submit_outcome" gorm:"type:varchar(16)"`                                // dispatching | accepted | rejected | unknown
@@ -64,6 +68,9 @@ type VideoHealthAttempt struct {
 	TaskPK             *int64 `json:"task_pk" gorm:"index:idx_vh_pending,priority:2"`
 	FinishedAt         int64  `json:"finished_at"`
 	Missing            bool   `json:"missing"`
+	ReviewedAt         int64  `json:"reviewed_at"`
+	ReviewedBy         int    `json:"reviewed_by"`
+	ReviewNote         string `json:"review_note" gorm:"type:text"`
 	SlotKey            string `json:"-" gorm:"type:varchar(128)"`
 	SlotToken          string `json:"-" gorm:"type:varchar(64)"`
 	SlotExpires        int64  `json:"-" gorm:"index"`
@@ -96,6 +103,8 @@ type VideoHealthState struct {
 	Version           int64  `json:"version"`
 	Revision          int64  `json:"revision"`
 	ValidationRound   int64  `json:"validation_round"`
+	ConfigIdentity    string `json:"-" gorm:"type:varchar(64)"`
+	ConfigVersion     int64  `json:"-"`
 	ProbeFailures     int    `json:"probe_failures"`
 	WindowSeconds     int    `json:"window_seconds"`
 	State             string `json:"state" gorm:"type:varchar(16)"`
@@ -118,7 +127,7 @@ type VideoHealthState struct {
 }
 
 func (s VideoHealthState) Snapshot() (videosched.ReliabilitySnapshot, error) {
-	view := videosched.ReliabilitySnapshot{Version: videosched.ReliabilityVersion, Model: s.ModelName,
+	view := videosched.ReliabilitySnapshot{Version: videosched.ReliabilityVersion, Model: s.ModelName, ConfigIdentity: s.ConfigIdentity,
 		State: s.State, StateVersion: s.Version, StateRevision: s.Revision, ValidationRound: s.ValidationRound, ProbeFailures: s.ProbeFailures, Reason: s.Reason, Integrity: s.Integrity,
 		BlockedAt: s.BlockedAt, RecoveryStarted: s.RecoveryStarted, RecoveryExpires: s.RecoveryExpires,
 		ValidationStarted: s.ValidationStarted, ValidationExpires: s.ValidationExpires, LastValidationAt: s.LastValidationAt}
@@ -143,21 +152,61 @@ func (s VideoHealthState) Snapshot() (videosched.ReliabilitySnapshot, error) {
 	return view, view.Validate()
 }
 
-func EnsureVideoHealthState(ctx context.Context, channelID int, modelName string) error {
+// VideoHealthIdentity binds evidence to the upstream configuration. Operational
+// counters, prices, priorities and capacities do not change this identity.
+// Only a digest is persisted; credentials and headers never enter the journal.
+func (channel *Channel) VideoHealthIdentity() string {
+	settings := channel.GetOtherSettings()
+	settings.VideoScheduling = nil
+	settings.UpstreamModelUpdateLastCheckTime = 0
+	settings.UpstreamModelUpdateLastDetectedModels = nil
+	settings.UpstreamModelUpdateLastRemovedModels = nil
+	encoded, err := common.Marshal([]any{channel.Type, channel.Key, channel.BaseURL, channel.OpenAIOrganization,
+		channel.Other, channel.Models, channel.ModelMapping, channel.Setting, channel.ParamOverride, channel.HeaderOverride, settings})
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func EnsureVideoHealthState(ctx context.Context, channelID int, modelName string, identity ...string) error {
 	if DB == nil {
 		return errors.New("video health database unavailable")
 	}
 	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(identity) > 0 && identity[0] != "" {
+			var channel Channel
+			if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
+				return err
+			}
+			if channel.VideoHealthIdentity() != identity[0] {
+				return ErrVideoHealthStateChanged
+			}
+		}
 		registration := VideoHealthRegistration{ChannelID: channelID, ModelName: modelName, CreatedAt: time.Now().Unix()}
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&registration)
 		if result.Error != nil {
 			return result.Error
 		}
+		configIdentity := ""
+		if len(identity) > 0 {
+			configIdentity = identity[0]
+		}
 		if result.RowsAffected == 0 {
 			var state VideoHealthState
-			return tx.Where("channel_id = ? AND model_name = ?", channelID, modelName).First(&state).Error
+			if err := lockForUpdate(tx).Where("channel_id = ? AND model_name = ?", channelID, modelName).First(&state).Error; err != nil {
+				return err
+			}
+			if configIdentity == "" || state.ConfigIdentity == configIdentity {
+				return nil
+			}
+			version := state.Version
+			state = VideoHealthState{ID: state.ID, ChannelID: channelID, ModelName: modelName,
+				ConfigIdentity: configIdentity, ConfigVersion: version + 1, Version: version + 1, Revision: state.Revision, ValidationRound: state.ValidationRound + 1,
+				State: videosched.HealthUnverified, Reason: "upstream_configuration_changed", Integrity: "complete", ValidationSource: "cold_start"}
+			return SaveVideoHealthState(tx, &state, version)
 		}
-		state := VideoHealthState{ChannelID: channelID, ModelName: modelName, Version: 1, Revision: 1, ValidationRound: 1, State: videosched.HealthUnverified, Reason: "new_channel", Integrity: "complete", ValidationSource: "cold_start"}
+		state := VideoHealthState{ChannelID: channelID, ModelName: modelName, ConfigIdentity: configIdentity, Version: 1, Revision: 1, ValidationRound: 1, State: videosched.HealthUnverified, Reason: "new_channel", Integrity: "complete", ValidationSource: "cold_start"}
 		return tx.Create(&state).Error
 	})
 }
@@ -172,6 +221,15 @@ func BeginVideoHealthAttempt(ctx context.Context, attempt *VideoHealthAttempt, s
 		return errors.New("video health database unavailable")
 	}
 	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if attempt.ConfigIdentity != "" {
+			var channel Channel
+			if err := lockForUpdate(tx).First(&channel, attempt.ChannelID).Error; err != nil {
+				return err
+			}
+			if channel.VideoHealthIdentity() != attempt.ConfigIdentity {
+				return ErrVideoHealthStateChanged
+			}
+		}
 		if strict && attempt.Flow != "normal" {
 			if attempt.ValidationLimit < 1 || attempt.ValidationLimit > 16 || attempt.SlotKey == "" || attempt.SlotToken == "" || attempt.SlotExpires <= attempt.StartedAt {
 				return ErrVideoHealthStateChanged
@@ -195,6 +253,9 @@ func BeginVideoHealthAttempt(ctx context.Context, attempt *VideoHealthAttempt, s
 		var state VideoHealthState
 		if err := lockForUpdate(tx).Where("channel_id = ? AND model_name = ?", attempt.ChannelID, attempt.ModelName).First(&state).Error; err != nil {
 			return err
+		}
+		if attempt.ConfigIdentity != state.ConfigIdentity {
+			return ErrVideoHealthStateChanged
 		}
 		if strict {
 			if state.Version != attempt.StateVersion || state.Integrity == "unavailable" || state.WindowSeconds != 0 && state.WindowSeconds != attempt.WindowSeconds {
@@ -277,6 +338,55 @@ func ObserveVideoHealthAttempt(ctx context.Context, requestID string, attemptSeq
 	})
 }
 
+// ReviewVideoHealthUnknown closes an abandoned unknown for future health
+// verification only. The original outcome remains unknown in the journal and
+// user statistics; no task, billing, refund or retry is performed. Fresh recovery
+// evidence is required, so review can never manufacture a healthy certificate.
+func ReviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, note string, now int64) (*VideoHealthAttempt, error) {
+	note = strings.TrimSpace(note)
+	if attemptID <= 0 || actor <= 0 || note == "" || len(note) > 1000 {
+		return nil, errors.New("review requires an operator and an evidence note of at most 1000 bytes")
+	}
+	var attempt VideoHealthAttempt
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).First(&attempt, attemptID).Error; err != nil {
+			return err
+		}
+		if attempt.ReviewedAt > 0 {
+			return nil // idempotent: preserve the first operator and their evidence
+		}
+		if attempt.FinalOutcome != "unknown" || attempt.TaskPK != nil || attempt.SubmitLeaseExpires > now || attempt.SlotExpires > now || attempt.StartedAt >= now-120 {
+			return errors.New("only an abandoned unknown submission without a task can be reviewed")
+		}
+		var tasks int64
+		if err := tx.Model(&Task{}).Where("video_health_attempt_id = ?", attempt.ID).Count(&tasks).Error; err != nil {
+			return err
+		}
+		if tasks > 0 {
+			return errors.New("submission has a task; wait for automatic reconciliation")
+		}
+		attempt.ReviewedAt, attempt.ReviewedBy, attempt.ReviewNote = now, actor, note
+		if err := tx.Model(&attempt).Updates(map[string]any{"reviewed_at": now, "reviewed_by": actor, "review_note": note}).Error; err != nil {
+			return err
+		}
+		var state VideoHealthState
+		if err := lockForUpdate(tx).Where("channel_id = ? AND model_name = ?", attempt.ChannelID, attempt.ModelName).First(&state).Error; err != nil {
+			return err
+		}
+		if attempt.ConfigIdentity != state.ConfigIdentity || attempt.StateVersion < state.ConfigVersion {
+			return nil
+		}
+		version := state.Version
+		state.State, state.Reason, state.BlockedAt = videosched.HealthBlocked, "unknown_submission_reviewed", now
+		state.Version++
+		state.ValidationRound++
+		state.RecoveryStarted, state.RecoveryExpires, state.ValidationStarted, state.ValidationExpires, state.CohortEnd = 0, 0, 0, 0, 0
+		state.CurrentJSON, state.RecoveryJSON = "", ""
+		return SaveVideoHealthState(tx, &state, version)
+	})
+	return &attempt, err
+}
+
 // RenewVideoHealthSubmission keeps a live request distinct from a process that
 // disappeared before durable task handoff. The token fences old request owners.
 func RenewVideoHealthSubmission(ctx context.Context, attemptID int64, owner string, expires int64) error {
@@ -347,7 +457,7 @@ func observeVideoHealthAttempt(tx *gorm.DB, requestID string, attemptSeq int, ta
 			return err
 		}
 		version, dirty := state.Version, false
-		if attempt.Flow == "recover" && attempt.ValidationRound == state.ValidationRound {
+		if attempt.ConfigIdentity == state.ConfigIdentity && attempt.StateVersion >= state.ConfigVersion && attempt.Flow == "recover" && attempt.ValidationRound == state.ValidationRound {
 			if fault {
 				state.ProbeFailures = min(32, state.ProbeFailures+1)
 				dirty = true
@@ -358,7 +468,7 @@ func observeVideoHealthAttempt(tx *gorm.DB, requestID string, attemptSeq int, ta
 		}
 		// New faults revoke a normal certificate immediately. Probe failures
 		// belong to their recovery round and are assessed against both gates.
-		if fault && (state.State == videosched.HealthNormal || state.State == videosched.HealthUnverified) {
+		if fault && attempt.ConfigIdentity == state.ConfigIdentity && attempt.StateVersion >= state.ConfigVersion && (state.State == videosched.HealthNormal || state.State == videosched.HealthUnverified) {
 			state.State, state.Reason, state.BlockedAt = videosched.HealthBlocked, "new upstream failure", now
 			if finalOutcome == "unknown" {
 				state.Reason = "submit outcome unknown"
@@ -617,7 +727,7 @@ func RefreshVideoHealthState(ctx context.Context, channelID int, modelName strin
 			return err
 		}
 		var incomplete int64
-		if err = tx.Model(&VideoHealthAttempt{}).Where("channel_id = ? AND model_name = ? AND (final_outcome = ? OR missing = ?)", channelID, modelName, "unknown", true).Count(&incomplete).Error; err != nil {
+		if err = tx.Model(&VideoHealthAttempt{}).Where("channel_id = ? AND model_name = ? AND COALESCE(config_identity, '') = ? AND state_version >= ? AND COALESCE(reviewed_at, 0) = 0 AND (final_outcome = ? OR missing = ?)", channelID, modelName, state.ConfigIdentity, state.ConfigVersion, "unknown", true).Count(&incomplete).Error; err != nil {
 			return err
 		}
 		state.Integrity = "complete"

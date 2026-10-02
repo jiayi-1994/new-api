@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,7 +40,19 @@ type videoHealthAdmission struct {
 	ChannelID int
 	Version   int64
 	Flow      string
+	Model     string
+	Identity  string
 }
+
+// BindVideoHealthChannel freezes the same configuration used to build the
+// outgoing request, including shadow/weighted traffic and retry selections.
+func BindVideoHealthChannel(c *gin.Context, channel *model.Channel, modelName string) {
+	d := VideoSchedDecisionFrom(c)
+	if d.Takeover || d.Shadow {
+		c.Set("video_health_channel", videoHealthAdmission{ChannelID: channel.Id, Model: videoHealthModelName(channel, modelName), Identity: channel.VideoHealthIdentity()})
+	}
+}
+
 type videoValidationLease struct {
 	ChannelID  int
 	Key, Token string
@@ -145,6 +158,16 @@ func publishPersistedVideoReliability(ctx context.Context, channelID int, modelN
 	}
 }
 
+func RefreshReviewedVideoHealth(ctx context.Context, attempt *model.VideoHealthAttempt) {
+	view, err := model.RefreshVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName, videoReliabilityPolicy(operation_setting.GetVideoSchedulingSetting()), time.Now().Unix())
+	if err == nil {
+		err = publishVideoReliability(attempt.ChannelID, view)
+	}
+	if err != nil {
+		videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
+	}
+}
+
 // BeginVideoHealthTransmission is called only after local URL/header/client
 // setup, immediately before the actual HTTP transport. Storage failures stop
 // locally; a confirmed state conflict permits bounded admission reselection.
@@ -157,18 +180,25 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	stopVideoHealthSubmissionOwner(c)
 	s := frozenVideoSetting(c)
 	strict := decision.Takeover && s.SelectionPolicy == videosched.PolicyStabilityCostV2
+	channel, bound := common.GetContextKeyType[videoHealthAdmission](c, "video_health_channel")
+	if !bound || channel.ChannelID != info.GetChannelID() || channel.Identity == "" {
+		if strict {
+			return ErrVideoHealthAdmission
+		}
+		return nil
+	}
 	flow, version := "weighted", int64(0)
 	if decision.Shadow {
 		flow = "shadow"
 	}
 	if strict {
 		admission, ok := common.GetContextKeyType[videoHealthAdmission](c, videoHealthAdmissionKey)
-		if !ok || admission.ChannelID != info.GetChannelID() {
+		if !ok || admission.ChannelID != info.GetChannelID() || admission.Identity != channel.Identity || admission.Model != channel.Model {
 			return ErrVideoHealthAdmission
 		}
 		flow, version = admission.Flow, admission.Version
 	}
-	attempt := &model.VideoHealthAttempt{RequestID: c.GetString(common.RequestIdKey), AttemptSeq: RequestPolicy(c).Attempts, ChannelID: info.GetChannelID(), ModelName: info.OriginModelName, ActualGroup: RequestPolicy(c).SelectedGroup, StartedAt: time.Now().Unix(), WindowSeconds: s.WindowSeconds, StateVersion: version, Flow: flow}
+	attempt := &model.VideoHealthAttempt{RequestID: c.GetString(common.RequestIdKey), AttemptSeq: RequestPolicy(c).Attempts, ChannelID: info.GetChannelID(), ModelName: channel.Model, ConfigIdentity: channel.Identity, ActualGroup: RequestPolicy(c).SelectedGroup, StartedAt: time.Now().Unix(), WindowSeconds: s.WindowSeconds, StateVersion: version, Flow: flow}
 	attempt.RequestStartedAt = RequestPolicy(c).StartedAt.Unix()
 	attempt.SubmitOwner, attempt.SubmitLeaseExpires = common.GetRandomString(24), time.Now().Add(videoSubmissionLeaseTTL).Unix()
 	attempt.Mode, attempt.SelectionPolicy = s.Mode, s.SelectionPolicy
@@ -206,7 +236,7 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 		}
 	}
 	if !strict {
-		if err := model.EnsureVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName); err != nil {
+		if err := model.EnsureVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName, attempt.ConfigIdentity); err != nil {
 			videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
 			return nil
 		}
@@ -425,13 +455,18 @@ func RefreshVideoReliability(ctx context.Context) {
 		videoReliabilityWriteFailed(0, "", err)
 		return
 	}
-	configs, err := model.GetVideoScheduledChannels()
-	if err != nil {
+	var channels []model.Channel
+	if err := model.DB.WithContext(ctx).Where("settings LIKE ?", `%"video_scheduling"%`).Find(&channels).Error; err != nil {
 		videoReliabilityWriteFailed(0, "", err)
 		return
 	}
 	p := videoReliabilityPolicy(operation_setting.GetVideoSchedulingSetting())
-	for channelID, config := range configs {
+	for _, channel := range channels {
+		config, ok := VideoSchedulingConfigOf(&channel)
+		if !ok {
+			continue
+		}
+		channelID := channel.Id
 		// Restore all unexpired owners for this channel before publishing any
 		// readable state after a cache flush or process restart.
 		leases, err := model.ListVideoValidationOwners(ctx, channelID, time.Now().Unix())
@@ -455,8 +490,11 @@ func RefreshVideoReliability(ctx context.Context) {
 		if !restored {
 			continue
 		}
-		for modelName := range config.Models {
-			if err := model.EnsureVideoHealthState(ctx, channelID, modelName); err != nil {
+		for modelName := range strings.SplitSeq(channel.Models, ",") {
+			if _, priced := videoModelCost(config.Models, modelName); modelName == "" || !priced {
+				continue
+			}
+			if err := model.EnsureVideoHealthState(ctx, channelID, modelName, channel.VideoHealthIdentity()); err != nil {
 				videoReliabilityWriteFailed(channelID, modelName, err)
 				continue
 			}

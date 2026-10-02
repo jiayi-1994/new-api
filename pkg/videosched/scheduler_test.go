@@ -766,6 +766,15 @@ func TestTieEpsilonWeightedDraw(t *testing.T) {
 	assert.Equal(t, 1, best.ID, "epsilon 0 takes the first")
 
 	p.TieEpsilon = 0.01
+	t.Run("overflow", func(t *testing.T) {
+		for _, weights := range [][2]int{{math.MaxInt, 1}, {math.MaxInt, math.MaxInt}} {
+			candidates := []Candidate{mk(1, 0, 1), mk(2, weights[0], 1), mk(3, weights[1], 1)}
+			best, _, err := Select(candidates, p, rand.New(rand.NewPCG(1, 2)))
+			require.NoError(t, err)
+			require.NotNil(t, best)
+			assert.NotEqual(t, 1, best.ID, "zero weight stays excluded when the sum overflows")
+		}
+	})
 	best, _, err = Select(pool, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, best.ID, "a nil rnd takes the first")

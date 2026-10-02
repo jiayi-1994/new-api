@@ -127,7 +127,7 @@ func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.
 				common.SetMainDatabaseType(previousKind)
 				require.NoError(t, sqlDB.Close())
 			})
-			require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}))
+			require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Channel{}))
 			plugin, err := pluginruntime.NewRegistry().Register(strings.Replace(mockPlugin, parse, tc.parse, 1), pluginruntime.Options{})
 			require.NoError(t, err)
 			adaptor := New(plugin)
@@ -138,7 +138,10 @@ func TestTaskAdaptorAcceptedResponseRejectedLocallyHasUnknownOutcome(t *testing.
 			c.Set(common.RequestIdKey, tc.name)
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Shadow: true})
 			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &operation_setting.VideoSchedulingSetting{Mode: "shadow", WindowSeconds: 1800})
-			service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: 9182}, "default")
+			channel := &model.Channel{Id: 9182, Models: "video", Key: "fixture"}
+			require.NoError(t, db.Create(channel).Error)
+			service.BindVideoHealthChannel(c, channel, "video")
+			service.RequestPolicy(c).BeginAttempt(channel, "default")
 			require.NoError(t, service.BeginVideoHealthTransmission(c, info))
 			t.Cleanup(func() { service.FinishVideoReliabilityRequest(c, false) })
 			if tc.cancel {

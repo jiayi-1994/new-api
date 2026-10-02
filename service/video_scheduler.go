@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"slices"
@@ -414,7 +415,7 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 		// checked against the live cache before it is admitted. The probe slot
 		// is claimed only afterwards: claiming starts the probe cooldown.
 		selected, available := recheckVideoChannel(group, modelName, filters, choice.Best.ID)
-		if !available {
+		if !available || input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 && selected.VideoHealthIdentity() != choice.Best.Reliability.ConfigIdentity {
 			record.Admission = VideoSchedAdmissionChannelUnavailable
 			appendVideoScheduleRecord(c, record, choice.Board)
 			continue
@@ -562,6 +563,9 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		ID: channel.Id, Name: channel.Name, Priority: channel.GetPriority(), Weight: channel.GetWeight(),
 		Submit: videosched.HealthStat{Rate: 1}, Gen: videosched.HealthStat{Rate: 1},
 	}
+	if channel.Weight != nil {
+		candidate.Weight = int(min(*channel.Weight, uint(math.MaxInt)))
+	}
 	switch {
 	case channel.Status != common.ChannelStatusEnabled:
 		candidate.Excluded = "disabled"
@@ -594,7 +598,10 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.Submit, candidate.Gen, candidate.InFlight, probe = health.Submit, health.Gen, health.InFlight, health.Probe
 	}
 	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
-		candidate.Reliability = health.Reliability
+		candidate.Reliability = GetVideoReliability(channel.Id, videoHealthModelName(channel, clientModel))
+		if candidate.Reliability != nil && candidate.Reliability.ConfigIdentity != channel.VideoHealthIdentity() {
+			candidate.Reliability = nil
+		}
 	}
 	// An unregistered group name is no group.
 	if quota := setting.CapacityGroups[cfg.CapacityGroup]; cfg.CapacityGroup != "" && quota > 0 {
@@ -656,13 +663,28 @@ func videoCandidateRequest(c *gin.Context, channel *model.Channel) (*jsplugin.Lo
 // videoModelCost finds a model's cost entry. Keys are spelled as in the
 // channel's models, so after the exact name it accepts the routing-normalized
 // and ASCII-folded spellings that channel matching accepts.
+func videoHealthModelName(channel *model.Channel, modelName string) string {
+	models := strings.Split(channel.Models, ",")
+	if slices.Contains(models, modelName) {
+		return modelName
+	}
+	slices.Sort(models)
+	normalized := jsplugin.ASCIIFold(ratio_setting.RoutingMatchModelName(modelName))
+	for _, name := range models {
+		if jsplugin.ASCIIFold(ratio_setting.RoutingMatchModelName(name)) == normalized {
+			return name
+		}
+	}
+	return modelName
+}
+
 func videoModelCost(models map[string]dto.VideoModelCost, modelName string) (dto.VideoModelCost, bool) {
 	if cost, ok := models[modelName]; ok {
 		return cost, true
 	}
-	normalized, folded := ratio_setting.RoutingMatchModelName(modelName), jsplugin.ASCIIFold(modelName)
+	normalized := jsplugin.ASCIIFold(ratio_setting.RoutingMatchModelName(modelName))
 	for _, key := range slices.Sorted(maps.Keys(models)) {
-		if ratio_setting.RoutingMatchModelName(key) == normalized || jsplugin.ASCIIFold(key) == folded {
+		if jsplugin.ASCIIFold(ratio_setting.RoutingMatchModelName(key)) == normalized {
 			return models[key], true
 		}
 	}

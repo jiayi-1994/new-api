@@ -88,6 +88,12 @@ func TestVideoHealthDatabaseUpgrade(t *testing.T) {
 	}
 	assert.True(t, db.Migrator().HasIndex(&VideoHealthState{}, "idx_vh_state"))
 	assert.True(t, db.Migrator().HasIndex(&VideoHealthRegistration{}, "idx_vh_registration"))
+	for _, column := range []string{"config_identity", "config_version"} {
+		assert.True(t, db.Migrator().HasColumn(&VideoHealthState{}, column))
+	}
+	for _, column := range []string{"config_identity", "reviewed_at", "reviewed_by", "review_note"} {
+		assert.True(t, db.Migrator().HasColumn(&VideoHealthAttempt{}, column))
+	}
 	assert.True(t, db.Migrator().HasIndex(&Task{}, "idx_tasks_video_health_attempt_id"))
 	assert.True(t, db.Migrator().HasIndex(&VideoScheduleDecision{}, "idx_vs_decision_sequence"))
 	if phase == "verify-1" {
@@ -227,7 +233,7 @@ func TestVideoHealthDatabase(t *testing.T) {
 			DB = db
 			common.SetMainDatabaseType(common.DatabaseType(dialect))
 			t.Cleanup(func() { DB = previous; common.SetMainDatabaseType(previousKind) })
-			models := []any{&VideoHealthRegistration{}, &VideoHealthState{}, &VideoHealthAttempt{}, &VideoHealthRequest{}, &Task{}}
+			models := []any{&VideoHealthRegistration{}, &VideoHealthState{}, &VideoHealthAttempt{}, &VideoHealthRequest{}, &Task{}, &Channel{}}
 			require.NoError(t, db.Migrator().DropTable(models...))
 			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(models...)) })
 			for range 2 {
@@ -243,6 +249,86 @@ func TestVideoHealthDatabase(t *testing.T) {
 			ctx := context.Background()
 			p := videosched.Policy{MinSamples: 20, MinGenRate: .8, MinOverallRate: .6, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
 			const start int64 = 1800000000 // aligned to the ordinary 1800-second bucket
+			t.Run("upstream_configuration_fences_evidence_and_transport", func(t *testing.T) {
+				channel := Channel{Id: 901, Key: "fixture", Models: "video", BaseURL: common.GetPointer("https://old.example")}
+				require.NoError(t, db.Create(&channel).Error)
+				oldIdentity := channel.VideoHealthIdentity()
+				require.NoError(t, EnsureVideoHealthState(ctx, channel.Id, "video", oldIdentity))
+				certificate := videosched.ReliabilityEvidence{Version: 1, Source: "window", BatchStart: start - 3600, BatchEnd: start - 1800, WindowSeconds: 1800, AsOf: start - 60, ValidatedAt: start - 60, ExpiresAt: start + 86400, Submitted: 20, Accepted: 20, Succeeded: 20}
+				encoded, err := marshalVideoHealthEvidence(certificate)
+				require.NoError(t, err)
+				require.NoError(t, db.Model(&VideoHealthState{}).Where("channel_id = ?", channel.Id).Updates(map[string]any{"state": videosched.HealthNormal, "qualification_json": encoded}).Error)
+				old := VideoHealthAttempt{RequestID: "old-upstream", AttemptSeq: 1, ChannelID: channel.Id, ModelName: "video", ConfigIdentity: oldIdentity, WindowSeconds: 1800, StartedAt: start + 1, Flow: "shadow"}
+				require.NoError(t, BeginVideoHealthAttempt(ctx, &old, false))
+				channel.BaseURL = common.GetPointer("https://new.example")
+				require.NoError(t, db.Model(&channel).Update("base_url", channel.BaseURL).Error)
+				stale := old
+				stale.ID, stale.RequestID = 0, "stale-admission"
+				require.ErrorIs(t, BeginVideoHealthAttempt(ctx, &stale, false), ErrVideoHealthStateChanged, "even a stale cache cannot submit against changed configuration")
+				require.NoError(t, EnsureVideoHealthState(ctx, channel.Id, "video", channel.VideoHealthIdentity()))
+				require.ErrorIs(t, EnsureVideoHealthState(ctx, channel.Id, "video", oldIdentity), ErrVideoHealthStateChanged, "a delayed refresh cannot restore the old identity")
+				require.NoError(t, ObserveVideoHealthAttempt(ctx, old.RequestID, 1, nil, "unknown", "unknown", "transport", start+2))
+				view, err := RefreshVideoHealthState(ctx, channel.Id, "video", p, start+3)
+				require.NoError(t, err)
+				assert.Equal(t, videosched.HealthUnverified, view.State)
+				assert.Equal(t, "complete", view.Integrity)
+				assert.Nil(t, view.Qualification)
+				assert.Greater(t, view.StateVersion, old.StateVersion)
+				// Returning to an earlier configuration still starts a new epoch.
+				channel.BaseURL = common.GetPointer("https://old.example")
+				require.NoError(t, db.Model(&channel).Update("base_url", channel.BaseURL).Error)
+				require.NoError(t, EnsureVideoHealthState(ctx, channel.Id, "video", oldIdentity))
+				view, err = RefreshVideoHealthState(ctx, channel.Id, "video", p, start+4)
+				require.NoError(t, err)
+				assert.Equal(t, "complete", view.Integrity, "older unknown facts cannot poison a new configuration epoch")
+				facts, err := ListVideoHealthAttempts(ctx, old.RequestID)
+				require.NoError(t, err)
+				require.Len(t, facts, 1)
+				assert.Equal(t, "unknown", facts[0].FinalOutcome, "historical facts are retained")
+			})
+			t.Run("reviewed_unknown_requires_fresh_recovery_and_preserves_audit", func(t *testing.T) {
+				require.NoError(t, EnsureVideoHealthState(ctx, 902, "video"))
+				unknown := VideoHealthAttempt{RequestID: "review-unknown", AttemptSeq: 1, ChannelID: 902, ModelName: "video", StartedAt: start + 1, WindowSeconds: 1800, Flow: "shadow", SubmitLeaseExpires: start + 300}
+				require.NoError(t, BeginVideoHealthAttempt(ctx, &unknown, false))
+				require.NoError(t, ObserveVideoHealthAttempt(ctx, unknown.RequestID, 1, nil, "unknown", "unknown", "transport", start+2))
+				_, err := ReviewVideoHealthUnknown(ctx, unknown.ID, 1, "Checked provider records", start+200)
+				require.Error(t, err, "a live submission cannot be reviewed")
+				_, err = ReviewVideoHealthUnknown(ctx, unknown.ID, 1, " ", start+301)
+				require.Error(t, err, "evidence is required")
+				task := Task{TaskID: "review-linked-task", Status: TaskStatusSubmitted, VideoHealthAttemptID: &unknown.ID}
+				require.NoError(t, db.Create(&task).Error)
+				_, err = ReviewVideoHealthUnknown(ctx, unknown.ID, 1, "Checked provider records", start+301)
+				require.Error(t, err, "a task's indexed link protects it before the callback arrives")
+				require.NoError(t, db.Delete(&task).Error)
+				result, err := ReviewVideoHealthUnknown(ctx, unknown.ID, 1, "Checked provider records", start+301)
+				require.NoError(t, err)
+				assert.Equal(t, "unknown", result.FinalOutcome)
+				assert.Equal(t, 1, result.ReviewedBy)
+				again, err := ReviewVideoHealthUnknown(ctx, unknown.ID, 2, "different note", start+302)
+				require.NoError(t, err)
+				assert.Equal(t, result.ReviewedAt, again.ReviewedAt)
+				assert.Equal(t, result.ReviewNote, again.ReviewNote)
+				view, err := RefreshVideoHealthState(ctx, 902, "video", p, start+302)
+				require.NoError(t, err)
+				assert.Equal(t, videosched.HealthBlocked, view.State)
+				assert.Nil(t, view.Qualification)
+				version, err := StartVideoHealthRecovery(ctx, 902, "video", view.StateVersion, start+603, p.ValidationPeriodSeconds)
+				require.NoError(t, err)
+				for i := range 20 {
+					a := VideoHealthAttempt{RequestID: fmt.Sprintf("review-recovery-%d", i), AttemptSeq: 1, ChannelID: 902, ModelName: "video", StartedAt: start + 604 + int64(i), WindowSeconds: 1800, StateVersion: version, Flow: "recover"}
+					require.NoError(t, BeginVideoHealthAttempt(ctx, &a, false))
+					require.NoError(t, ObserveVideoHealthAttempt(ctx, a.RequestID, 1, nil, "accepted", "success", "success", a.StartedAt+1))
+				}
+				view, err = RefreshVideoHealthState(ctx, 902, "video", p, start+1801)
+				require.NoError(t, err)
+				assert.Equal(t, videosched.HealthNormal, view.State)
+				require.NoError(t, CleanupVideoHealthFacts(ctx, start+40*86400))
+				facts, err := ListVideoHealthAttempts(ctx, unknown.RequestID)
+				require.NoError(t, err)
+				require.Len(t, facts, 1)
+				assert.Equal(t, "unknown", facts[0].FinalOutcome)
+				assert.Equal(t, "Checked provider records", facts[0].ReviewNote)
+			})
 			t.Run("qualification_rechecked_after_policy_change", func(t *testing.T) {
 				for i, scenario := range []string{"sample_admission", "sample_refresh", "generation_gate", "overall_gate"} {
 					t.Run(scenario, func(t *testing.T) {

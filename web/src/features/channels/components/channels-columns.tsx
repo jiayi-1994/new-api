@@ -103,6 +103,7 @@ import {
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
 import { VideoReliabilityDetails } from './video-reliability-details'
+import { VideoUnknownReview } from './video-unknown-review'
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
   source?: string
@@ -247,6 +248,7 @@ export function VideoHealthCell(props: { channel: Channel }) {
             </section>
           ))}
         </div>
+        <VideoUnknownReview channelId={props.channel.id} />
       </Dialog>
     )
   }

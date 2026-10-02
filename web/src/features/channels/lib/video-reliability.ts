@@ -53,6 +53,10 @@ export function videoReliabilityLabel(
       return t('Observation window')
     case 'new_channel':
       return t('New channel')
+    case 'upstream_configuration_changed':
+      return t('Upstream configuration changed; validation required')
+    case 'unknown_submission_reviewed':
+      return t('Unknown submission reviewed; recovery required')
     case 'insufficient_samples':
     case 'health samples insufficient':
       return t('Insufficient samples')

@@ -43,6 +43,43 @@ import type {
   VideoSchedulable,
 } from './types'
 
+export type UnknownVideoAttempt = {
+  id: number
+  request_id: string
+  model: string
+  started_at: number
+  task_pk: number | null
+  reviewed_at: number
+  reviewed_by: number
+  review_note: string
+}
+
+export async function getUnknownVideoAttempts(
+  channelId: number,
+  signal?: AbortSignal
+): Promise<UnknownVideoAttempt[]> {
+  const response = await api.get<{
+    success: boolean
+    data: UnknownVideoAttempt[]
+  }>('/api/channel/video_schedule/health_attempts', {
+    params: { channel: channelId },
+    signal,
+    disableDuplicate: true,
+  })
+  return requireServerSuccess(response.data).data
+}
+
+export async function reviewUnknownVideoAttempt(
+  id: number,
+  note: string
+): Promise<void> {
+  const response = await api.post<{ success: boolean }>(
+    `/api/channel/video_schedule/health_attempts/${id}/review`,
+    { note }
+  )
+  requireServerSuccess(response.data)
+}
+
 const channelActionConfig = (
   config: ApiRequestConfig = {}
 ): ApiRequestConfig => ({

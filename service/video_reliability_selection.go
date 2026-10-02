@@ -221,6 +221,6 @@ func admitVideoReliability(c *gin.Context, choice VideoScheduleChoice, input Vid
 			return false, err
 		}
 	}
-	c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: channelID, Version: version, Flow: choice.Flow})
+	c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: channelID, Version: version, Flow: choice.Flow, Model: choice.Best.Reliability.Model, Identity: choice.Best.Reliability.ConfigIdentity})
 	return true, nil
 }

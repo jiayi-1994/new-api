@@ -495,9 +495,36 @@ func Select(cands []Candidate, p Policy, rnd *rand.Rand) (*Candidate, []Score, e
 	}
 	floor := scores[0].Total - p.TieEpsilon
 	ties, totalWeight := 0, 0
+	overflow := false
 	for ties < len(scores) && scores[ties].Reason == "" && (p.SelectionPolicy == PolicyStabilityCostV2 || scores[ties].Total >= floor) {
-		totalWeight += max(0, scores[ties].Candidate.Weight)
+		weight := max(0, scores[ties].Candidate.Weight)
+		if weight > math.MaxInt-totalWeight {
+			overflow = true
+		} else {
+			totalWeight += weight
+		}
 		ties++
+	}
+	if overflow {
+		// Scale only the exceptional overflow path; ordinary seeded draws keep
+		// their existing results. Float64 can hold the sum of any int-sized pool.
+		total := 0.0
+		for _, score := range scores[:ties] {
+			total += float64(max(0, score.Candidate.Weight))
+		}
+		pick := rnd.Float64() * total
+		var last *Candidate
+		for _, score := range scores[:ties] {
+			if score.Candidate.Weight <= 0 {
+				continue
+			}
+			last = score.Candidate
+			pick -= float64(score.Candidate.Weight)
+			if pick < 0 {
+				return last, scores, nil
+			}
+		}
+		return last, scores, nil // rounding must never select a zero weight
 	}
 	if totalWeight == 0 {
 		return scores[rnd.IntN(ties)].Candidate, scores, nil

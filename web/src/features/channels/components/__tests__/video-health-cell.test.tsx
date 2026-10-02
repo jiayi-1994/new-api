@@ -16,16 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { cleanup, render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import type { VideoReliability } from '@/features/system-settings/types'
+import { api } from '@/lib/api'
 
 import { aggregateChannelsByTag } from '../../lib'
 import { channelSchema, type Channel } from '../../types'
 import { VideoHealthCell } from '../channels-columns'
 import { VideoReliabilityDetails } from '../video-reliability-details'
+import { VideoUnknownReviewSession } from '../video-unknown-review'
 
 const scheduled = channelSchema.parse({
   id: 9,
@@ -49,7 +52,81 @@ const scheduled = channelSchema.parse({
   },
 })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+test('review requires evidence, preserves the note on failure, and refreshes after success', async () => {
+  const user = userEvent.setup()
+  const attempt = {
+    id: 31,
+    request_id: 'unknown-request',
+    model: 'video',
+    started_at: 1,
+    task_pk: null,
+    reviewed_at: 0,
+    reviewed_by: 0,
+    review_note: '',
+  }
+  vi.spyOn(api, 'get')
+    .mockResolvedValueOnce({
+      data: { success: true, data: [attempt] },
+    })
+    .mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          {
+            ...attempt,
+            reviewed_at: 123,
+            reviewed_by: 1,
+            review_note: 'Provider records checked',
+          },
+        ],
+      },
+    })
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValueOnce({
+      data: { success: false, message: 'Task is still active' },
+    })
+    .mockResolvedValueOnce({
+      data: { success: true, data: { ...attempt, reviewed_at: 123 } },
+    })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <VideoUnknownReviewSession channelId={9} onClose={() => {}} />
+    </QueryClientProvider>
+  )
+  await user.click(
+    await screen.findByRole('button', { name: 'Review unknown submission' })
+  )
+  const save = screen.getByRole('button', { name: 'Record review' })
+  expect(save).toBeDisabled()
+  const note = screen.getByRole('textbox', { name: 'Review evidence' })
+  await user.type(note, 'Provider records checked')
+  await user.click(save)
+  expect(await screen.findByText('Task is still active')).toBeVisible()
+  expect(note).toHaveValue('Provider records checked')
+  await user.click(save)
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('textbox', { name: 'Review evidence' })
+    ).not.toBeInTheDocument()
+  )
+  expect(post).toHaveBeenLastCalledWith(
+    '/api/channel/video_schedule/health_attempts/31/review',
+    { note: 'Provider records checked' }
+  )
+  expect(await screen.findByText(/Reviewed by 1/)).toBeVisible()
+  expect(
+    screen.queryByRole('button', { name: 'Review unknown submission' })
+  ).not.toBeInTheDocument()
+})
 
 const health: VideoReliability = {
   version: 1,
@@ -144,6 +221,45 @@ test('a channel row shows its own video health', () => {
   render(<VideoHealthCell channel={scheduled} />)
 
   expect(screen.getByText(/in flight 1\/3/)).toBeVisible()
+})
+
+test('Escape cancels the review confirmation while keeping the submission list open', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: [
+        {
+          id: 31,
+          request_id: 'unknown-request',
+          model: 'video',
+          started_at: 1,
+          task_pk: null,
+          reviewed_at: 0,
+        },
+      ],
+    },
+  })
+  const close = vi.fn()
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <VideoUnknownReviewSession channelId={9} onClose={close} />
+    </QueryClientProvider>
+  )
+  await user.click(
+    await screen.findByRole('button', { name: 'Review unknown submission' })
+  )
+  await user.keyboard('{Escape}')
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+  expect(close).not.toHaveBeenCalled()
+  expect(
+    screen.getByRole('dialog', { name: 'Review unknown submissions' })
+  ).toBeVisible()
 })
 
 test('a tag aggregate row shows no video health even though it copies a child channel', () => {

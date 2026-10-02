@@ -146,7 +146,9 @@ func TestReliableVideoAdmissionReselectsStaleState(t *testing.T) {
 	require.NoError(t, err)
 	for _, id := range []int{3311, 3312} {
 		createVideoSchedChannel(t, db, id, "default", "spec-probe", 1, `{"video_scheduling":{"quality":0.8,"models":{"videos-fast":{"mode":"per_video","prices":{"*":1}}}}}`, "")
-		require.NoError(t, model.EnsureVideoHealthState(t.Context(), id, "videos-fast"))
+		channel, err := model.GetChannelById(id, true)
+		require.NoError(t, err)
+		require.NoError(t, model.EnsureVideoHealthState(t.Context(), id, "videos-fast", channel.VideoHealthIdentity()))
 		publishPersistedVideoReliability(t.Context(), id, "videos-fast")
 	}
 	model.InitChannelCache()
@@ -178,6 +180,7 @@ func TestReliableVideoAdmissionReselectsStaleState(t *testing.T) {
 	require.NoError(t, db.Model(&model.VideoHealthAttempt{}).Count(&attempts).Error)
 	assert.Zero(t, attempts, "selection and failed admission never count as submissions")
 	RequestPolicy(c).BeginAttempt(selected, "default")
+	BindVideoHealthChannel(c, selected, "videos-fast")
 	require.NoError(t, BeginVideoHealthTransmission(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: selected.Id}, OriginModelName: "videos-fast"}))
 	t.Cleanup(func() { stopVideoHealthSubmissionOwner(c) })
 	facts, err := model.ListVideoHealthAttempts(t.Context(), "v2-admission-reselection")
@@ -1785,6 +1788,46 @@ func TestVideoDecisionFingerprintPinsEveryInput(t *testing.T) {
 					assert.Equal(t, hash, changedSegments[name], name)
 				}
 			}
+		})
+	}
+}
+func TestVideoCostKeyNormalizationKeepsChannelSchedulable(t *testing.T) {
+	for _, key := range []string{"videos-fast", "VIDEOS-FAST"} {
+		t.Run(key, func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			useVideoHealthBackend(t, "memory")
+			videoReliabilityCache.Clear()
+			t.Cleanup(func() { videoReliabilityCache.Clear() })
+			require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Task{}))
+			s := operation_setting.GetVideoSchedulingSetting()
+			s.Mode, s.SelectionPolicy, s.MinGenRate = "on", videosched.PolicyStabilityCostV2, .8
+			s.ExploreShare, s.ProbeRatio = 0, 0
+			savedPrices := ratio_setting.ModelPrice2JSONString()
+			t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices)) })
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"videos-fast":2}`))
+			plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
+			require.NoError(t, err)
+			createVideoSchedChannel(t, db, 9001, "default", "spec-probe", 1, fmt.Sprintf(`{"video_scheduling":{"quality":0.8,"models":{%q:{"mode":"per_video","prices":{"*":1}}}}}`, key), "")
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 9001).Update("models", "videos-fast,videos-fast@temperature:0.2").Error)
+			RefreshVideoReliability(t.Context())
+			var channel model.Channel
+			require.NoError(t, db.First(&channel, 9001).Error)
+			require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ? AND model_name = ?", 9001, "videos-fast@temperature:0.2").Update("state", videosched.HealthBlocked).Error)
+			publishPersistedVideoReliability(t.Context(), 9001, "videos-fast@temperature:0.2")
+			view, err := GetVideoHealthView(&channel, true)
+			require.NoError(t, err)
+			require.Len(t, view.Models, 2, "every priced channel model must remain visible even when cost keys are shared")
+			require.NotNil(t, view.Models["videos-fast@temperature:0.2"].Reliability)
+			assert.Equal(t, videosched.HealthBlocked, view.Models["videos-fast@temperature:0.2"].Reliability.State)
+			c := newVideoSchedTestContext(t)
+			c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+			c.Set("task_request", map[string]any{"prompt": "fixture"})
+			input := AssembleVideoDecision(c, s, "default", "videos-fast", []*model.Channel{&channel}, 7)
+			require.Len(t, input.Candidates, 1)
+			assert.Empty(t, input.Candidates[0].Excluded, "cost lookup accepts the normalized key")
+			choice := DecideVideoSchedule(input)
+			t.Logf("cost_key=%s quote=%+v flow=%s reason=%s health=%+v", key, videosched.Quote(input.Candidates[0].Cost, input.Candidates[0].Spec), choice.Flow, choice.Reason, input.Candidates[0].Reliability)
+			require.NotNil(t, choice.Best, "a recognized cost key must have a matching initialized health state")
 		})
 	}
 }

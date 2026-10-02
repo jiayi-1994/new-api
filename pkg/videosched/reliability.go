@@ -100,6 +100,7 @@ func (e ReliabilityEvidence) QualificationReason(minSamples int, minGen, minOver
 type ReliabilitySnapshot struct {
 	Version           int                  `json:"version"`
 	Model             string               `json:"model"`
+	ConfigIdentity    string               `json:"config_identity,omitempty"`
 	State             string               `json:"state"`
 	StateVersion      int64                `json:"state_version"`
 	StateRevision     int64                `json:"state_revision"`

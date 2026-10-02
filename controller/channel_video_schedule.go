@@ -44,6 +44,39 @@ func GetChannelVideoHealth(c *gin.Context) {
 	common.ApiSuccess(c, view)
 }
 
+// This journal is independent of optional scheduling audits and their retention.
+func ListUnknownVideoHealthAttempts(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Query("channel"))
+	if err != nil || channelID <= 0 {
+		common.ApiErrorMsg(c, "invalid channel")
+		return
+	}
+	var attempts []model.VideoHealthAttempt
+	if err := model.DB.WithContext(c.Request.Context()).Where("channel_id = ? AND final_outcome = ?", channelID, "unknown").Order("COALESCE(reviewed_at, 0) ASC, id DESC").Limit(100).Find(&attempts).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, attempts)
+}
+
+func ReviewUnknownVideoHealthAttempt(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	var request struct {
+		Note string `json:"note"`
+	}
+	if err != nil || id <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 4096), &request) != nil {
+		common.ApiErrorMsg(c, "invalid health review")
+		return
+	}
+	attempt, err := model.ReviewVideoHealthUnknown(c.Request.Context(), id, c.GetInt("id"), request.Note, time.Now().Unix())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	service.RefreshReviewedVideoHealth(c.Request.Context(), attempt)
+	common.ApiSuccess(c, attempt)
+}
+
 // channelListItems attaches video_health to the channels that carry a
 // video_scheduling config. The list query already loaded their settings, so
 // this reads only Redis or memory per row.

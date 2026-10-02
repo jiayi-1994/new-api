@@ -39,7 +39,9 @@ func TestTaskTransportVideoHealthAdmission(t *testing.T) {
 	oldDB, oldRedis := model.DB, common.RedisEnabled
 	model.DB, common.RedisEnabled = db, false
 	t.Cleanup(func() { model.DB, common.RedisEnabled = oldDB, oldRedis; require.NoError(t, sqlDB.Close()) })
-	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}))
+	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Channel{}))
+	channel := &model.Channel{Id: 7, Models: "video", Key: "fixture"}
+	require.NoError(t, db.Create(channel).Error)
 	for _, tc := range []struct {
 		name                string
 		decision            service.VideoSchedDecision
@@ -72,7 +74,8 @@ func TestTaskTransportVideoHealthAdmission(t *testing.T) {
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, tc.decision)
 			defer service.FinishVideoReliabilityRequest(c, false)
 			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &operation_setting.VideoSchedulingSetting{Mode: "shadow", SelectionPolicy: videosched.PolicyStabilityCostV2, WindowSeconds: 1800})
-			service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: 7}, "default")
+			service.BindVideoHealthChannel(c, channel, "video")
+			service.RequestPolicy(c).BeginAttempt(channel, "default")
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 7}, OriginModelName: "video"}
 			response, err := DoTaskApiRequest(&stubTaskAdaptor{baseURL: server.URL}, c, info, strings.NewReader(`{}`))
 			if tc.wantSent == 0 {

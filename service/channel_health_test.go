@@ -68,7 +68,7 @@ func BenchmarkVideoReliability(b *testing.B) {
 				videoReliabilityCache.Clear()
 				require.NoError(b, sqlDB.Close())
 			})
-			models := []any{&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}}
+			models := []any{&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Channel{}}
 			require.NoError(b, db.Migrator().DropTable(models...))
 			b.Cleanup(func() { require.NoError(b, db.Migrator().DropTable(models...)) })
 			require.NoError(b, db.AutoMigrate(models...))
@@ -76,7 +76,9 @@ func BenchmarkVideoReliability(b *testing.B) {
 			certificate := videosched.ReliabilityEvidence{Version: 1, Source: "window", WindowSeconds: 1800, BatchStart: now - 7200, BatchEnd: now - 5400, AsOf: now - 3600, ValidatedAt: now - 3600, ExpiresAt: now + 86400, Submitted: 100, Accepted: 100, Succeeded: 100}
 			data, err := common.Marshal(certificate)
 			require.NoError(b, err)
-			require.NoError(b, model.EnsureVideoHealthState(b.Context(), 1, "video"))
+			channel := &model.Channel{Id: 1, Models: "video", Key: "fixture"}
+			require.NoError(b, db.Create(channel).Error)
+			require.NoError(b, model.EnsureVideoHealthState(b.Context(), 1, "video", channel.VideoHealthIdentity()))
 			require.NoError(b, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", 1).Updates(map[string]any{"state": videosched.HealthNormal, "qualification_json": string(data)}).Error)
 			setting := &operation_setting.VideoSchedulingSetting{Mode: "on", SelectionPolicy: videosched.PolicyStabilityCostV2, WindowSeconds: 1800, MinSamples: 20, MinGenRate: .8, MinOverallRate: .6, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
 			b.Run("journal_submit_terminal", func(b *testing.B) {
@@ -92,8 +94,9 @@ func BenchmarkVideoReliability(b *testing.B) {
 					c.Set(common.RequestIdKey, fmt.Sprintf("bench-%d", sequence))
 					common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
 					common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, setting)
-					RequestPolicy(c).BeginAttempt(&model.Channel{Id: 1}, "default")
-					c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 1, Version: 1, Flow: "normal"})
+					BindVideoHealthChannel(c, channel, "video")
+					RequestPolicy(c).BeginAttempt(channel, "default")
+					c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 1, Version: 1, Flow: "normal", Model: "video", Identity: channel.VideoHealthIdentity()})
 					require.NoError(b, BeginVideoHealthTransmission(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 1}, OriginModelName: "video"}))
 					admissionLatencies = append(admissionLatencies, time.Since(started).Nanoseconds())
 					ObserveVideoReliabilitySubmit(c, nil, false)
@@ -153,7 +156,7 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	previous := model.DB
 	model.DB = db
 	t.Cleanup(func() { model.DB = previous; videoReliabilityCache.Clear(); videoReliabilityReconcileCursor.Store(0) })
-	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Task{}))
+	require.NoError(t, db.AutoMigrate(&model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}, &model.Task{}, &model.Channel{}))
 	s := operation_setting.GetVideoSchedulingSetting()
 	s.Mode = "on"
 	s.SelectionPolicy = videosched.PolicyStabilityCostV2
@@ -165,7 +168,9 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	s.AuditEnabled = false
 	ctx := context.Background()
 	now := time.Now().Unix()
-	require.NoError(t, model.EnsureVideoHealthState(ctx, 7, "video"))
+	ch := scheduledTestChannel(7, "")
+	require.NoError(t, db.Create(ch).Error)
+	require.NoError(t, model.EnsureVideoHealthState(ctx, 7, "video", ch.VideoHealthIdentity()))
 	_, err = model.RefreshVideoHealthState(ctx, 7, "video", videoReliabilityPolicy(s), now-1)
 	require.NoError(t, err)
 	c := healthTestContext()
@@ -173,9 +178,9 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	c.Set("resolved_task_model", "video")
 	common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
 	common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, s)
-	ch := scheduledTestChannel(7, "")
+	BindVideoHealthChannel(c, ch, "video")
 	RequestPolicy(c).BeginAttempt(ch, "default")
-	c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 7, Version: 1, Flow: "explore"})
+	c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: 7, Version: 1, Flow: "explore", Model: "video", Identity: ch.VideoHealthIdentity()})
 	claimed, err := acquireVideoValidationSlot(c, 7, 2, time.Hour)
 	require.NoError(t, err)
 	require.True(t, claimed)

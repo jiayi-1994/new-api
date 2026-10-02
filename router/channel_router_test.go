@@ -115,12 +115,16 @@ func TestVideoScheduleRoutesPermissions(t *testing.T) {
 	assert.Equal(t, http.StatusOK, simulate("sim-root-token"), "root reaches the handler, which rejects the empty body")
 	require.NoError(t, db.Create(&model.Token{Key: "audit-api-token", UserId: 2, Status: common.TokenStatusEnabled, ExpiredTime: -1}).Error)
 	require.NoError(t, db.Create(&model.VideoScheduleRun{RequestID: "private-audit", StartedAt: time.Now().UnixMilli(), CostUSD: new(float64)}).Error)
-	for _, path := range []string{"/audits", "/audits/private-audit", "/audit_stats", "/audit_export"} {
+	for _, path := range []string{"/audits", "/audits/private-audit", "/audit_stats", "/audit_export", "/health_attempts?channel=1", "/health_attempts/1/review"} {
 		for _, identity := range []struct {
 			token  string
 			status int
 		}{{"", http.StatusUnauthorized}, {"sim-user-token", http.StatusForbidden}, {"sk-audit-api-token", http.StatusUnauthorized}, {"sim-admin-token", http.StatusForbidden}, {"sim-root-token", http.StatusOK}} {
-			request := httptest.NewRequest(http.MethodGet, "/api/channel/video_schedule"+path, nil)
+			method := http.MethodGet
+			if strings.HasSuffix(path, "/review") {
+				method = http.MethodPost
+			}
+			request := httptest.NewRequest(method, "/api/channel/video_schedule"+path, strings.NewReader(`{}`))
 			if identity.token != "" {
 				request.Header.Set("Authorization", "Bearer "+identity.token)
 			}

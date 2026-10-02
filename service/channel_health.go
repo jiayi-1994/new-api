@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -367,8 +368,11 @@ func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView
 	}
 	if perModel || setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 		view.Models = make(map[string]VideoChannelHealth, len(cfg.Models))
-		for name := range cfg.Models {
-			if view.Models[name], err = GetVideoChannelHealth(channel.Id, name, setting.MinSamples); err != nil {
+		for modelName := range strings.SplitSeq(channel.Models, ",") {
+			if _, priced := videoModelCost(cfg.Models, modelName); modelName == "" || !priced {
+				continue
+			}
+			if view.Models[modelName], err = GetVideoChannelHealth(channel.Id, modelName, setting.MinSamples); err != nil {
 				return nil, err
 			}
 		}
