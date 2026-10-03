@@ -33,9 +33,12 @@ func videoSubmitOutcome(taskErr *taskdto.TaskError) VideoOutcome {
 		return VideoOutcomeIgnored
 	case taskErr.SubmitFailureClass == VideoFailureUser || taskErr.SubmitFailureClass == VideoFailureCancelled:
 		return VideoOutcomeIgnored
-	case taskErr.StatusCode/100 == 5, taskErr.StatusCode == http.StatusTooManyRequests,
+	case taskErr.StatusCode == http.StatusTooManyRequests:
+		// A full upstream is not a broken one: the channel cools down instead.
+		return VideoOutcomeIgnored
+	case taskErr.StatusCode/100 == 5,
 		taskErr.StatusCode == http.StatusUnauthorized, taskErr.StatusCode == http.StatusForbidden:
-		// Upstream faults, rate limits and rejected channel credentials.
+		// Upstream faults and rejected channel credentials.
 		return VideoOutcomeFail
 	default:
 		// 400, 408, 422 and other client-side statuses describe the request.

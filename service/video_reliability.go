@@ -328,7 +328,11 @@ func ObserveVideoReliabilitySubmit(c *gin.Context, taskErr *taskdto.TaskError, c
 			final, attribution = "cancelled", "cancelled"
 		case taskErr.SubmitFailureClass == VideoFailureUser || taskErr.SubmitFailureClass == VideoFailureCancelled:
 			final, attribution = taskErr.SubmitFailureClass, taskErr.SubmitFailureClass
-		case taskErr.StatusCode/100 == 5 || taskErr.StatusCode == 429 || taskErr.StatusCode == 401 || taskErr.StatusCode == 403:
+		case taskErr.StatusCode == 429:
+			// A full upstream cools down instead of being blocked, and stays out
+			// of both reliability denominators.
+			final, attribution = "cancelled", "rate_limited"
+		case taskErr.StatusCode/100 == 5 || taskErr.StatusCode == 401 || taskErr.StatusCode == 403:
 			// Transport/service/auth failures remain upstream even when their
 			// messages mention moderation or input validation infrastructure.
 		default:

@@ -2024,7 +2024,8 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	})
 }
 
-// A request video scheduling took over leaves 429 and 5xx to the health gate;
+// A request video scheduling took over leaves 429 to its cooldown and 5xx to
+// the health gate;
 // the disable decision and the policy audit event read the same answer.
 func TestShouldDisableChannelForRequestYieldsTransientFailuresToScheduling(t *testing.T) {
 	previousEnabled, previousRanges := common.AutomaticDisableChannelEnabled, operation_setting.AutomaticDisableStatusCodeRanges

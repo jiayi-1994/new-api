@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,6 +121,72 @@ func videoGroupInFlightKey(group string) string {
 	return videoSchedKeyPrefix + "inflight:g:" + group
 }
 
+const (
+	videoCapacityReservationKey = "video_capacity_reservation"
+	// videoRateLimitCooldown keeps a channel out of selection after its upstream
+	// answered a submit with 429. ponytail: fixed; honor Retry-After if
+	// upstreams start sending one.
+	videoRateLimitCooldown = time.Minute
+	videoSchedRateLimited  = "rate_limited_cooldown"
+)
+
+func videoCooldownKey(channelID int) string {
+	return fmt.Sprintf("%scooldown:%d", videoSchedKeyPrefix, channelID)
+}
+
+// videoCapacityReservation counts a request in the channel's in-flight gauges
+// from admission on. Counting only once the task was persisted let a burst
+// read the same free capacity and overshoot it by the whole burst.
+type videoCapacityReservation struct {
+	ChannelID int
+	Keys      []string
+}
+
+// reserveVideoCapacity replaces the request's previous reservation, if any.
+// An unlimited channel reserves nothing, so a store outage cannot refuse it;
+// its task is counted once persisted.
+func reserveVideoCapacity(c *gin.Context, channel *model.Channel, groupQuotas map[string]int) (bool, error) {
+	releaseVideoCapacityReservation(c)
+	cfg, ok := VideoSchedulingConfigOf(channel)
+	if !ok || cfg.Capacity <= 0 && groupQuotas[cfg.CapacityGroup] <= 0 {
+		return true, nil
+	}
+	keys, limits := []string{videoInFlightKey(channel.Id)}, []int64{int64(cfg.Capacity)}
+	if cfg.CapacityGroup != "" {
+		keys, limits = append(keys, videoGroupInFlightKey(cfg.CapacityGroup)), append(limits, int64(groupQuotas[cfg.CapacityGroup]))
+	}
+	reserved, err := videoHealthStore().reserve(keys, limits)
+	if reserved {
+		c.Set(videoCapacityReservationKey, &videoCapacityReservation{ChannelID: channel.Id, Keys: keys})
+	}
+	return reserved, err
+}
+
+func takeVideoCapacityReservation(c *gin.Context) *videoCapacityReservation {
+	if c == nil {
+		return nil
+	}
+	value, _ := c.Get(videoCapacityReservationKey)
+	c.Set(videoCapacityReservationKey, nil)
+	reservation, _ := value.(*videoCapacityReservation)
+	return reservation
+}
+
+func (r *videoCapacityReservation) release() {
+	if r == nil {
+		return
+	}
+	for _, key := range r.Keys {
+		if _, err := videoHealthStore().add(key, -1); err != nil {
+			common.SysError(fmt.Sprintf("video scheduling capacity release failed: key=%s error=%v", key, err))
+		}
+	}
+}
+
+func releaseVideoCapacityReservation(c *gin.Context) {
+	takeVideoCapacityReservation(c).release()
+}
+
 func videoProbeStateKeys(channelID int) (last, fails string) {
 	prefix := fmt.Sprintf("%sprobe_state:%d:", videoSchedKeyPrefix, channelID)
 	return prefix + "last", prefix + "fails"
@@ -147,6 +215,12 @@ func ObserveVideoSubmit(c *gin.Context, channel *model.Channel, modelName string
 	captureVideoAuditSubmit(c, channel.Id, taskErr)
 	outcome := videoSubmitOutcome(taskErr)
 	if taskErr != nil {
+		releaseVideoCapacityReservation(c)
+		if taskErr.StatusCode == http.StatusTooManyRequests && !taskErr.LocalError {
+			if _, err := videoHealthStore().acquire(videoCooldownKey(channel.Id), "429", videoRateLimitCooldown); err != nil {
+				common.SysError(fmt.Sprintf("video scheduling cooldown write failed: channel=%d error=%v", channel.Id, err))
+			}
+		}
 		if lease, ok := takeVideoProbeLease(c, channel); ok {
 			releaseVideoProbeSlot(lease.Key, lease.Token)
 			recordVideoProbeOutcome(lease.ChannelID, outcome)
@@ -188,6 +262,7 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 // until one of the terminal paths releases it.
 func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 	linkVideoReliabilityTask(c, task)
+	reservation := takeVideoCapacityReservation(c)
 	summary := task.PrivateData.SchedulingSummary
 	audit := videoScheduleAuditState(c)
 	if audit != nil {
@@ -198,6 +273,7 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 		c.Set(string(constant.ContextKeyVideoSchedProbeLease), nil)
 	}
 	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		reservation.release()
 		if summary == nil && audit == nil && task.PrivateData.VideoHealth == nil {
 			return
 		}
@@ -217,10 +293,16 @@ func VideoTaskPersisted(c *gin.Context, task *model.Task) {
 		return
 	}
 	if summary == nil {
+		reservation.release()
 		return
 	}
+	keys := videoInFlightKeys(task.ChannelId, summary)
+	if reservation != nil && reservation.ChannelID == task.ChannelId && slices.Equal(reservation.Keys, keys) {
+		return // the reservation already counts this task until its terminal release
+	}
+	reservation.release()
 	store := videoHealthStore()
-	for _, key := range videoInFlightKeys(task.ChannelId, summary) {
+	for _, key := range keys {
 		if _, err := store.add(key, 1); err != nil {
 			common.SysError(fmt.Sprintf("video scheduling in-flight increment failed: key=%s error=%v", key, err))
 		}
@@ -457,10 +539,13 @@ func AcquireVideoProbeSlot(c *gin.Context, channelID, n int, ttl time.Duration) 
 
 // ReleaseUnpersistedVideoProbeLease releases a lease the request never handed
 // to a persisted task. It must run on every request exit.
+// ReleaseUnpersistedVideoProbeLease also gives back the capacity reservation
+// no task took over.
 func ReleaseUnpersistedVideoProbeLease(c *gin.Context) {
 	if lease, ok := takeVideoProbeLease(c, nil); ok {
 		releaseVideoProbeSlot(lease.Key, lease.Token)
 	}
+	releaseVideoCapacityReservation(c)
 }
 
 func peekVideoProbeLease(c *gin.Context) (*videoProbeLease, bool) {
@@ -643,6 +728,9 @@ type videoHealthBackend interface {
 	release(key, token string) error
 	// held counts the keys that currently exist.
 	held(keys []string) (int, error)
+	// reserve increments every gauge by one only if each stays within its
+	// limit (0 = unlimited), all or nothing in one atomic step.
+	reserve(keys []string, limits []int64) (bool, error)
 }
 
 func videoHealthStore() videoHealthBackend {
@@ -684,6 +772,18 @@ local value = tonumber(redis.call('GET', KEYS[1]) or '0') + tonumber(ARGV[1])
 if value < 0 then value = 0 end
 redis.call('SET', KEYS[1], value)
 return value`
+
+const videoReserveScript = `
+for i, key in ipairs(KEYS) do
+  local limit = tonumber(ARGV[i])
+  if limit > 0 and tonumber(redis.call('GET', key) or '0') >= limit then
+    return 0
+  end
+end
+for _, key in ipairs(KEYS) do
+  redis.call('INCR', key)
+end
+return 1`
 
 const videoReleaseScript = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -745,6 +845,15 @@ func (redisVideoHealth) acquire(key, token string, ttl time.Duration) (bool, err
 
 func (redisVideoHealth) release(key, token string) error {
 	return common.RDB.Eval(context.Background(), videoReleaseScript, []string{key}, token).Err()
+}
+
+func (redisVideoHealth) reserve(keys []string, limits []int64) (bool, error) {
+	args := make([]any, len(limits))
+	for i, limit := range limits {
+		args[i] = limit
+	}
+	n, err := common.RDB.Eval(context.Background(), videoReserveScript, keys, args...).Int()
+	return n == 1, err
 }
 
 // memoryVideoHealth is the single-instance store used without Redis.
@@ -832,6 +941,20 @@ func (m *memoryVideoHealthStore) release(key, token string) error {
 		delete(m.slots, key)
 	}
 	return nil
+}
+
+func (m *memoryVideoHealthStore) reserve(keys []string, limits []int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, key := range keys {
+		if limits[i] > 0 && m.gauges[key] >= limits[i] {
+			return false, nil
+		}
+	}
+	for _, key := range keys {
+		m.gauges[key]++
+	}
+	return true, nil
 }
 
 func (m *memoryVideoHealthStore) held(keys []string) (int, error) {

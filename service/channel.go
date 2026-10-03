@@ -62,8 +62,8 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 }
 
 // ShouldDisableChannelForRequest is ShouldDisableChannel for a relayed
-// request. A request video scheduling took over leaves 429 and 5xx to the
-// scheduler's health gate: they disable the channel only as channel errors or
+// request. A request video scheduling took over leaves 429 to the scheduler's
+// cooldown and 5xx to its health gate: they disable the channel only as channel errors or
 // disable-keyword matches (credential and quota class), never by status code.
 func ShouldDisableChannelForRequest(c *gin.Context, err *types.NewAPIError) bool {
 	transient := err != nil && (err.StatusCode == http.StatusTooManyRequests || err.StatusCode/100 == 5)

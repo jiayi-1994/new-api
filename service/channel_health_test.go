@@ -656,6 +656,95 @@ func TestVideoTargetChannelsShareCapacityButKeepIndependentHealth(t *testing.T) 
 				assert.Equal(t, videosched.HealthStat{Rate: float64(1 - i), Samples: 1}, health.Gen,
 					"shared upstream credentials and capacity do not merge each target channel's health")
 			}
+
+			// A 429 cools only its own channel down, and never counts as a
+			// failed submission.
+			c := videoSchedProtocolRequest(t, map[string]any{"prompt": "cooldown", "duration": 15, "resolution": "720p"}, VideoSchedDecision{Takeover: true})
+			SetVideoSalesFacts(c, VideoSalesFacts{Model: "videos-fast", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+			ObserveVideoSubmit(healthTestContext(), channels[0], "videos-fast", &taskdto.TaskError{StatusCode: http.StatusTooManyRequests})
+			for i, channel := range channels {
+				candidate, _ := assembleVideoCandidate(c, "default", "videos-fast", channel, false, setting)
+				assert.Equal(t, []string{videoSchedRateLimited, ""}[i], candidate.Excluded)
+				health, err := GetVideoChannelHealth(channel.Id, "videos-fast", 1)
+				require.NoError(t, err)
+				assert.Equal(t, 1, health.Submit.Samples)
+			}
+		})
+	}
+}
+
+// Capacity is claimed atomically at admission: a burst that read the same free
+// count and counted itself only once persisted overshot capacity 2 by 27.
+func TestVideoCapacityReservationIsAtomicAndOwnedByTheTask(t *testing.T) {
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			useVideoHealthBackend(t, backend)
+			channel := &model.Channel{Id: 31, OtherSettings: `{"video_scheduling":{"capacity":2,"capacity_group":"acct","models":{"m":{"mode":"per_video","prices":{"*":1}}}}}`}
+			quotas := map[string]int{"acct": 5}
+			inFlight := func() (int, int) {
+				health, err := GetVideoChannelHealth(31, "m", 0)
+				require.NoError(t, err)
+				group, err := GetVideoGroupInFlight("acct")
+				require.NoError(t, err)
+				return health.InFlight, group
+			}
+			contexts := make([]*gin.Context, 32)
+			var holders []*gin.Context
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for i := range contexts {
+				contexts[i] = healthTestContext()
+				wg.Go(func() {
+					reserved, err := reserveVideoCapacity(contexts[i], channel, quotas)
+					assert.NoError(t, err)
+					if reserved {
+						mu.Lock()
+						holders = append(holders, contexts[i])
+						mu.Unlock()
+					}
+				})
+			}
+			wg.Wait()
+			require.Len(t, holders, 2)
+			channelCount, groupCount := inFlight()
+			assert.Equal(t, 2, channelCount)
+			assert.Equal(t, 2, groupCount)
+
+			// A rejected submit gives its reservation back at once.
+			ObserveVideoSubmit(holders[0], channel, "m", &taskdto.TaskError{StatusCode: http.StatusBadGateway})
+			// A persisted task takes the reservation over without counting twice,
+			// so the request's end releases nothing and the terminal releases it.
+			task := &model.Task{ChannelId: 31, Status: model.TaskStatusSubmitted}
+			task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(holders[1], channel, "m")
+			VideoTaskPersisted(holders[1], task)
+			ReleaseUnpersistedVideoProbeLease(holders[1])
+			channelCount, groupCount = inFlight()
+			assert.Equal(t, 1, channelCount)
+			assert.Equal(t, 1, groupCount)
+			// An abandoned request returns its reservation at request end.
+			abandoned := healthTestContext()
+			reserved, err := reserveVideoCapacity(abandoned, channel, quotas)
+			require.NoError(t, err)
+			require.True(t, reserved)
+			ReleaseUnpersistedVideoProbeLease(abandoned)
+			task.Status = model.TaskStatusSuccess
+			ObserveVideoTerminal(task, false)
+			channelCount, groupCount = inFlight()
+			assert.Zero(t, channelCount)
+			assert.Zero(t, groupCount)
+
+			// An unlimited channel reserves nothing; its task counts once persisted.
+			unlimited := &model.Channel{Id: 32, OtherSettings: `{"video_scheduling":{"models":{"m":{"mode":"per_video","prices":{"*":1}}}}}`}
+			c := healthTestContext()
+			reserved, err = reserveVideoCapacity(c, unlimited, quotas)
+			require.NoError(t, err)
+			require.True(t, reserved)
+			task = &model.Task{ChannelId: 32, Status: model.TaskStatusSubmitted}
+			task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(c, unlimited, "m")
+			VideoTaskPersisted(c, task)
+			health, err := GetVideoChannelHealth(32, "m", 0)
+			require.NoError(t, err)
+			assert.Equal(t, 1, health.InFlight)
 		})
 	}
 }
@@ -771,7 +860,7 @@ func TestVideoSubmitAndTerminalAttribution(t *testing.T) {
 		"accepted":          {nil, VideoOutcomeSuccess},
 		"upstream 502":      {&taskdto.TaskError{StatusCode: http.StatusBadGateway}, VideoOutcomeFail},
 		"network as 500":    {&taskdto.TaskError{StatusCode: http.StatusInternalServerError, Error: errors.New("dial tcp")}, VideoOutcomeFail},
-		"rate limited":      {&taskdto.TaskError{StatusCode: http.StatusTooManyRequests}, VideoOutcomeFail},
+		"rate limited":      {&taskdto.TaskError{StatusCode: http.StatusTooManyRequests}, VideoOutcomeIgnored}, // cools down instead
 		"bad credentials":   {&taskdto.TaskError{StatusCode: http.StatusUnauthorized}, VideoOutcomeFail},
 		"client 400":        {&taskdto.TaskError{StatusCode: http.StatusBadRequest}, VideoOutcomeIgnored},
 		"client 408":        {&taskdto.TaskError{StatusCode: http.StatusRequestTimeout}, VideoOutcomeIgnored},

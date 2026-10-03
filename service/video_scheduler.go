@@ -204,6 +204,11 @@ const (
 	// disabled or left the request's group/model while it was scored; a new
 	// selection follows it.
 	VideoSchedAdmissionChannelUnavailable = "channel_unavailable"
+	// VideoSchedAdmissionCapacityFull marks a choice whose capacity concurrent
+	// requests reserved first; VideoSchedAdmissionCapacityError one whose
+	// reservation the store failed to write. A new selection follows either.
+	VideoSchedAdmissionCapacityFull  = "capacity_full"
+	VideoSchedAdmissionCapacityError = "capacity_error"
 )
 
 func init() {
@@ -388,6 +393,8 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 	probeOff := false
 	admissionFailed := map[int]bool{}
 	for range videoSchedProbeRounds {
+		// A stale reservation from a failed round would inflate this snapshot.
+		releaseVideoCapacityReservation(c)
 		channels, err := model.SatisfiedChannelSnapshot(group, modelName, filters)
 		if err != nil {
 			recordVideoAuditAssemblyError(c)
@@ -405,6 +412,21 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 			}
 		}
 		choice := DecideVideoSchedule(input)
+		if choice.Best == nil {
+			// Every channel left is cooling down after a 429: trying one beats
+			// refusing the request, as its upstream may have freed a slot.
+			cooling := false
+			for i := range input.Candidates {
+				if input.Candidates[i].Excluded == videoSchedRateLimited {
+					input.Candidates[i].Excluded, cooling = "", true
+				}
+			}
+			if cooling {
+				if choice = DecideVideoSchedule(input); choice.Best != nil {
+					choice.Reason = "cooldown_fallback"
+				}
+			}
+		}
 		record := VideoScheduleRecord{Mode: operation_setting.VideoSchedulingModeOn, Group: group, Probe: choice.Probe, Explore: choice.Explore, Flow: choice.Flow, SelectionReason: choice.Reason, Input: &input}
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 		if choice.Best == nil {
@@ -418,6 +440,19 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 		selected, available := recheckVideoChannel(group, modelName, filters, choice.Best.ID)
 		if !available || input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 && selected.VideoHealthIdentity() != choice.Best.Reliability.ConfigIdentity {
 			record.Admission = VideoSchedAdmissionChannelUnavailable
+			appendVideoScheduleRecord(c, record, choice.Board)
+			continue
+		}
+		// Capacity is claimed before any health admission side effect. A held
+		// reservation is replaced by the next round's or released at request end.
+		reserved, reserveErr := reserveVideoCapacity(c, selected, frozenVideoSetting(c).CapacityGroups)
+		if reserveErr != nil || !reserved {
+			record.Admission = VideoSchedAdmissionCapacityFull
+			if reserveErr != nil {
+				logger.LogWarn(c, "video scheduling capacity reservation failed: channel=%d error=%v", choice.Best.ID, reserveErr)
+				record.Admission = VideoSchedAdmissionCapacityError
+			}
+			admissionFailed[choice.Best.ID] = true
 			appendVideoScheduleRecord(c, record, choice.Board)
 			continue
 		}
@@ -654,6 +689,11 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.Spec.Missing = append(slices.Clone(candidate.Spec.Missing), "input_video_seconds")
 	}
 	candidate.Sell = EstimateVideoSell(c, group, plugin, clientModel, mappedModel, body, action)
+	// Excluded last, so a fully assembled candidate can be retried when every
+	// channel is cooling down.
+	if n, err := videoHealthStore().held([]string{videoCooldownKey(channel.Id)}); err == nil && n > 0 && candidate.Excluded == "" {
+		candidate.Excluded = videoSchedRateLimited
+	}
 	return
 }
 
