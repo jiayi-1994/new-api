@@ -2034,24 +2034,35 @@ func recordVideoSchedAlerts(t *testing.T) chan [3]string {
 	return sent
 }
 
-func TestVideoSchedNoChannelAlertIsThrottledPerGroupModel(t *testing.T) {
+func TestVideoSchedNoChannelAlertsOncePerRequestSelection(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	useVideoHealthBackend(t, "memory")
 	sent := recordVideoSchedAlerts(t)
+	setting := operation_setting.GetVideoSchedulingSetting()
+	setting.MinSamples, setting.MinSubmitRate, setting.UnknownSellPolicy = 1, 0.8, "relative"
 	plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
 	require.NoError(t, err)
-	// Neither channel has a cost table, so the scheduler admits none of them.
+	// default holds only a channel without a cost table; vip holds a schedulable one.
 	createVideoSchedChannel(t, db, 3301, "default", "spec-probe", 5, "", "")
-	createVideoSchedChannel(t, db, 3302, "default", "spec-probe", 5, "", "")
+	createVideoSchedChannel(t, db, 3302, "vip", "spec-probe", 5, `{"video_scheduling":{"models":{"videos-fast":{"mode":"per_video","prices":{"*":1}}}}}`, "")
 	model.InitChannelCache()
-	selectNone := func(group string) {
+	selection := func(tokenGroup string, triedInVip ...int) (*gin.Context, *RetryParam) {
 		c := newVideoSchedTestContext(t)
 		c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
 		c.Set("task_request", map[string]any{"prompt": "cat"})
 		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
-		channel, err := selectVideoChannel(c, group, "videos-fast", nil)
-		require.ErrorIs(t, err, model.ErrTierSelectorNoCandidate)
-		assert.Nil(t, channel)
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, []string{"default", "vip"})
+		for _, id := range triedInVip {
+			RequestPolicy(c).BeginAttempt(&model.Channel{Id: id}, "vip")
+		}
+		retry := 0
+		return c, &RetryParam{Ctx: c, TokenGroup: tokenGroup, ModelName: "videos-fast", Retry: &retry}
+	}
+	selectNone := func(param *RetryParam) {
+		channel, _, err := CacheGetRandomSatisfiedChannel(param)
+		require.NoError(t, err)
+		require.Nil(t, channel)
 	}
 	receive := func() [3]string {
 		select {
@@ -2062,23 +2073,53 @@ func TestVideoSchedNoChannelAlertIsThrottledPerGroupModel(t *testing.T) {
 			return [3]string{}
 		}
 	}
-
-	selectNone("default")
-	got := receive()
-	assert.Equal(t, "video_sched_no_channel_default_videos-fast", got[0])
-	assert.Contains(t, got[1], "videos-fast")
-	assert.Contains(t, got[2], "候选渠道 2 个：not schedulable: no cost table×2")
-
-	selectNone("default")
-	selectNone("empty")
-	got = receive()
-	assert.Equal(t, "video_sched_no_channel_empty_videos-fast", got[0], "the repeat in default is throttled")
-	assert.Contains(t, got[2], "该分组下无启用的渠道")
-	select {
-	case got := <-sent:
-		assert.Failf(t, "a throttled alert was sent", "%v", got)
-	case <-time.After(200 * time.Millisecond):
+	quiet := func(msg string) {
+		select {
+		case got := <-sent:
+			assert.Failf(t, msg, "%v", got)
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
+
+	// An empty first auto group is no outage when a later group serves.
+	c, param := selection("auto")
+	channel, group, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 3302, channel.Id)
+	assert.Equal(t, "vip", group)
+	// Its retry resumes in vip, where 3302 was attempted, and lists only what it visited.
+	RequestPolicy(c).BeginAttempt(channel, "vip")
+	param.IncreaseRetry()
+	selectNone(param)
+	got := receive()
+	assert.Equal(t, "video_sched_no_channel_auto_videos-fast", got[0])
+	assert.Contains(t, got[1], "videos-fast")
+	assert.Contains(t, got[2], "分组「vip」：候选渠道 1 个：tried×1")
+	assert.NotContains(t, got[2], "分组「default」", "the served selection's empty group stays out of its retry")
+
+	// Every auto group failing sends one alert listing each group.
+	memoryVideoHealth.mu.Lock()
+	delete(memoryVideoHealth.slots, videoSchedKeyPrefix+"alert:none:auto:videos-fast")
+	memoryVideoHealth.mu.Unlock()
+	_, param = selection("auto", 3302)
+	selectNone(param)
+	got = receive()
+	assert.Equal(t, "video_sched_no_channel_auto_videos-fast", got[0])
+	assert.Contains(t, got[2], "分组「default」：候选渠道 1 个：not schedulable: no cost table×1")
+	assert.Contains(t, got[2], "分组「vip」：候选渠道 1 个：tried×1")
+
+	_, param = selection("auto", 3302)
+	selectNone(param)
+	quiet("the same outage is throttled")
+
+	// A plain group has its own throttle key.
+	_, param = selection("empty")
+	selectNone(param)
+	got = receive()
+	assert.Equal(t, "video_sched_no_channel_empty_videos-fast", got[0])
+	assert.Contains(t, got[2], "分组「empty」：该分组下无启用的渠道")
+	quiet("one alert per selection")
 }
 
 func TestVideoSchedBlockedAlertDigestsOnlyNewBlocksInModeOn(t *testing.T) {
@@ -2091,7 +2132,8 @@ func TestVideoSchedBlockedAlertDigestsOnlyNewBlocksInModeOn(t *testing.T) {
 		{ChannelID: 3401, ModelName: "videos-fast", State: videosched.HealthBlocked, Reason: "new upstream failure", BlockedAt: now - 60},
 		{ChannelID: 3402, ModelName: "videos-fast", State: videosched.HealthBlocked, Reason: "old outage", BlockedAt: now - 3600},
 		{ChannelID: 3403, ModelName: "videos-fast", State: videosched.HealthNormal, BlockedAt: now - 60},
-		{ChannelID: 3404, ModelName: "videos-mini", State: videosched.HealthBlocked, Reason: "unknown_submission_reviewed", BlockedAt: now - 120},
+		// Older than one gate window, still inside the lookback.
+		{ChannelID: 3404, ModelName: "videos-mini", State: videosched.HealthBlocked, Reason: "unknown_submission_reviewed", BlockedAt: now - 450},
 	}).Error)
 	setting := operation_setting.GetVideoSchedulingSetting()
 
@@ -2104,15 +2146,28 @@ func TestVideoSchedBlockedAlertDigestsOnlyNewBlocksInModeOn(t *testing.T) {
 	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now))
 	require.Len(t, sent, 1)
 	got := <-sent
-	assert.Equal(t, "video_sched_blocked", got[0])
+	assert.Equal(t, fmt.Sprintf("video_sched_blocked_%d", now), got[0])
 	assert.Contains(t, got[1], "2 个")
 	assert.Contains(t, got[2], "渠道「fresh-block」（#3401） 模型「videos-fast」，原因：new upstream failure")
 	assert.Contains(t, got[2], "渠道「#3404」（#3404） 模型「videos-mini」，原因：unknown_submission_reviewed")
 	assert.NotContains(t, got[2], "#3402")
 	assert.NotContains(t, got[2], "#3403")
 
+	// A new block inside the gate window waits for the next digest.
+	require.NoError(t, db.Create(&model.VideoHealthState{ChannelID: 3405, ModelName: "videos-fast", State: videosched.HealthBlocked, Reason: "new upstream failure", BlockedAt: now + 30}).Error)
 	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now+60))
-	assert.Empty(t, sent, "a block already reported is not reported again")
+	assert.Empty(t, sent, "the digest gate holds a second digest")
+
+	memoryVideoHealth.mu.Lock()
+	delete(memoryVideoHealth.slots, videoSchedKeyPrefix+"alert:blocked:digest")
+	memoryVideoHealth.mu.Unlock()
+	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now+120))
+	require.Len(t, sent, 1)
+	got = <-sent
+	assert.Contains(t, got[1], "1 个")
+	assert.Contains(t, got[2], "#3405")
+	assert.NotContains(t, got[2], "#3401", "a block already reported is not reported again")
+	assert.NotContains(t, got[2], "#3404")
 }
 
 // A request video scheduling took over leaves 429 to its cooldown and 5xx to

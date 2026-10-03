@@ -121,6 +121,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	// A request video scheduling took over leaves a group only once the
 	// scheduler finds nothing eligible in it, never by priority retry count.
 	takeover := VideoSchedDecisionFrom(param.Ctx).Takeover
+	if takeover {
+		// Each call is one selection; only its own empty groups may alert.
+		param.Ctx.Set(videoSchedNoChannelKey, nil)
+	}
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -212,6 +216,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
+	}
+	if channel == nil && takeover {
+		notifyVideoSchedNoChannel(param.Ctx, param.TokenGroup, param.ModelName)
 	}
 	return channel, selectGroup, nil
 }
