@@ -36,6 +36,10 @@ func (videoScheduleAuditHandler) Interval() time.Duration { return time.Minute }
 func (videoScheduleAuditHandler) NewPayload() any         { return nil }
 func (videoScheduleAuditHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	now := time.Now()
+	// Alerting rides this minute task; its failure never fails audit maintenance.
+	if alertErr := service.NotifyNewlyBlockedVideoChannels(ctx, now.Unix()); alertErr != nil {
+		common.SysLog(fmt.Sprintf("video scheduling blocked-channel alert failed: %v", alertErr))
+	}
 	repaired, err := model.ReconcileVideoScheduleAudits(ctx, now)
 	var deleted int64
 	if err == nil {

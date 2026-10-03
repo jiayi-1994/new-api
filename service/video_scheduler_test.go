@@ -2024,6 +2024,97 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	})
 }
 
+// recordVideoSchedAlerts captures the video scheduling alerts sent to root.
+func recordVideoSchedAlerts(t *testing.T) chan [3]string {
+	t.Helper()
+	sent := make(chan [3]string, 8)
+	previous := notifyVideoSchedAlert
+	t.Cleanup(func() { notifyVideoSchedAlert = previous })
+	notifyVideoSchedAlert = func(notifyType, subject, content string) { sent <- [3]string{notifyType, subject, content} }
+	return sent
+}
+
+func TestVideoSchedNoChannelAlertIsThrottledPerGroupModel(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	useVideoHealthBackend(t, "memory")
+	sent := recordVideoSchedAlerts(t)
+	plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
+	require.NoError(t, err)
+	// Neither channel has a cost table, so the scheduler admits none of them.
+	createVideoSchedChannel(t, db, 3301, "default", "spec-probe", 5, "", "")
+	createVideoSchedChannel(t, db, 3302, "default", "spec-probe", 5, "", "")
+	model.InitChannelCache()
+	selectNone := func(group string) {
+		c := newVideoSchedTestContext(t)
+		c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+		c.Set("task_request", map[string]any{"prompt": "cat"})
+		common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+		channel, err := selectVideoChannel(c, group, "videos-fast", nil)
+		require.ErrorIs(t, err, model.ErrTierSelectorNoCandidate)
+		assert.Nil(t, channel)
+	}
+	receive := func() [3]string {
+		select {
+		case got := <-sent:
+			return got
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "no alert was sent")
+			return [3]string{}
+		}
+	}
+
+	selectNone("default")
+	got := receive()
+	assert.Equal(t, "video_sched_no_channel_default_videos-fast", got[0])
+	assert.Contains(t, got[1], "videos-fast")
+	assert.Contains(t, got[2], "候选渠道 2 个：not schedulable: no cost table×2")
+
+	selectNone("default")
+	selectNone("empty")
+	got = receive()
+	assert.Equal(t, "video_sched_no_channel_empty_videos-fast", got[0], "the repeat in default is throttled")
+	assert.Contains(t, got[2], "该分组下无启用的渠道")
+	select {
+	case got := <-sent:
+		assert.Failf(t, "a throttled alert was sent", "%v", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestVideoSchedBlockedAlertDigestsOnlyNewBlocksInModeOn(t *testing.T) {
+	useVideoHealthBackend(t, "memory")
+	db := useVideoReliabilityDatabase(t, "sqlite")
+	sent := recordVideoSchedAlerts(t)
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&model.Channel{Id: 3401, Name: "fresh-block", Key: "k"}).Error)
+	require.NoError(t, db.Create([]model.VideoHealthState{
+		{ChannelID: 3401, ModelName: "videos-fast", State: videosched.HealthBlocked, Reason: "new upstream failure", BlockedAt: now - 60},
+		{ChannelID: 3402, ModelName: "videos-fast", State: videosched.HealthBlocked, Reason: "old outage", BlockedAt: now - 3600},
+		{ChannelID: 3403, ModelName: "videos-fast", State: videosched.HealthNormal, BlockedAt: now - 60},
+		{ChannelID: 3404, ModelName: "videos-mini", State: videosched.HealthBlocked, Reason: "unknown_submission_reviewed", BlockedAt: now - 120},
+	}).Error)
+	setting := operation_setting.GetVideoSchedulingSetting()
+
+	// Shadow states gate no traffic; shadow takes no dedupe key either.
+	setting.Mode = operation_setting.VideoSchedulingModeShadow
+	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now))
+	require.Empty(t, sent)
+
+	setting.Mode = operation_setting.VideoSchedulingModeOn
+	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now))
+	require.Len(t, sent, 1)
+	got := <-sent
+	assert.Equal(t, "video_sched_blocked", got[0])
+	assert.Contains(t, got[1], "2 个")
+	assert.Contains(t, got[2], "渠道「fresh-block」（#3401） 模型「videos-fast」，原因：new upstream failure")
+	assert.Contains(t, got[2], "渠道「#3404」（#3404） 模型「videos-mini」，原因：unknown_submission_reviewed")
+	assert.NotContains(t, got[2], "#3402")
+	assert.NotContains(t, got[2], "#3403")
+
+	require.NoError(t, NotifyNewlyBlockedVideoChannels(context.Background(), now+60))
+	assert.Empty(t, sent, "a block already reported is not reported again")
+}
+
 // A request video scheduling took over leaves 429 to its cooldown and 5xx to
 // the health gate;
 // the disable decision and the policy audit event read the same answer.

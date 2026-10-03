@@ -431,6 +431,7 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 		if choice.Best == nil {
 			appendVideoScheduleRecord(c, record, choice.Board)
+			notifyVideoSchedNoChannel(c, group, modelName, len(input.Candidates), choice)
 			return nil, model.ErrTierSelectorNoCandidate
 		}
 		record.Recommended = choice.Best.ID
