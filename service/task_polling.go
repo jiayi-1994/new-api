@@ -51,6 +51,20 @@ const (
 	pollClassTransport    = "transport_error"
 )
 
+const (
+	// taskPollMarkSeconds throttles persisting PolledAt when a poll changed
+	// nothing else about the task.
+	taskPollMarkSeconds = 60
+	// taskPollStaleSeconds is how long without a poll turns a timeout into the
+	// poller's fault. ponytail: fixed window; a channel round slower than this
+	// (about 600 tasks with the 1s polling sleep) reads as host lag, scale it
+	// with the round time if such backlogs become normal.
+	taskPollStaleSeconds = 600
+	// taskAttributionHostLag marks a timeout of a task the poller did not reach
+	// in time. It says nothing about the upstream.
+	taskAttributionHostLag = "host_lag"
+)
+
 type BatchTaskResult struct {
 	TaskInfo   relaycommon.TaskInfo
 	Action     string
@@ -98,8 +112,11 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.FailReason = reason
 		}
 
-		if task.VideoHealthAttemptID != nil {
-			task.VideoHealthAttribution = "host"
+		// Blame the upstream only when the poller kept asking and the task never
+		// finished. A task the poller did not reach in time may well be done.
+		task.VideoHealthAttribution = "host"
+		if now-task.PrivateData.PolledAt > taskPollStaleSeconds {
+			task.VideoHealthAttribution = taskAttributionHostLag
 		}
 		won, err := task.UpdateWithStatus(oldStatus)
 		if err != nil {
@@ -507,6 +524,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		key = privateData.Key
 	}
 	snap := task.Snapshot()
+	polledAt := task.PrivateData.PolledAt
+	task.PrivateData.PolledAt = time.Now().Unix()
 	resp, err := adaptor.FetchTask(baseURL, key, task, proxy)
 	if err != nil {
 		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassTransport, 0, err.Error())
@@ -619,7 +638,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 			shouldFinalizeBilling = false
 		}
-	} else if !snap.Equal(task.Snapshot()) {
+	} else if !snap.Equal(task.Snapshot()) || task.PrivateData.PolledAt-polledAt >= taskPollMarkSeconds {
 		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
 		}

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -1116,4 +1118,62 @@ func TestPollFailureEscalationCountsAgainstUpstreamOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, health.Gen.Samples, "the plugin blamed the user")
 	assert.Zero(t, health.InFlight)
+}
+
+// A timeout says something about the upstream only when the poller kept
+// asking. The lab's 600s overload timed out finished but unpolled tasks and
+// blocked every channel.
+func TestSweepTimeoutBlamesUpstreamOnlyAfterPolling(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			useVideoHealthBackend(t, "memory")
+			db := useVideoReliabilityDatabase(t, dialect)
+			previousTimeout := constant.TaskTimeoutMinutes
+			constant.TaskTimeoutMinutes = 1
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
+			now := time.Now().Unix()
+			tasks := map[int]*model.Task{}
+			for _, channelID := range []int{7, 8} {
+				channel := scheduledTestChannel(channelID, "")
+				channel.Models, channel.OtherSettings = "video", `{"video_scheduling":{"models":{"video":{"mode":"per_video","prices":{"*":1}}}}}`
+				require.NoError(t, db.Create(channel).Error)
+				identity := channel.VideoHealthIdentity()
+				require.NoError(t, model.EnsureVideoHealthState(t.Context(), channelID, "video", identity))
+				attempt := model.VideoHealthAttempt{RequestID: fmt.Sprintf("timeout-%d", channelID), AttemptSeq: 1, ChannelID: channelID, ModelName: "video", ConfigIdentity: identity, StartedAt: now - 120, WindowSeconds: 1800, StateVersion: 1, Flow: "normal", SubmitOutcome: "accepted"}
+				require.NoError(t, db.Create(&attempt).Error)
+				task := &model.Task{TaskID: attempt.RequestID, ChannelId: channelID, Status: model.TaskStatusInProgress, Progress: taskcommon.ProgressInProgress,
+					SubmitTime: now - 120, StartTime: now - 110, Data: []byte(`{}`), VideoHealthAttemptID: &attempt.ID}
+				task.PrivateData.UpstreamTaskID = attempt.RequestID
+				task.PrivateData.VideoHealth = &model.TaskVideoHealthReference{AttemptID: attempt.ID, RequestID: attempt.RequestID, AttemptSeq: 1, ChannelID: channelID, Model: "video"}
+				require.NoError(t, db.Create(task).Error)
+				tasks[channelID] = task
+			}
+			// Only channel 8's upstream is asked. Its answer changes nothing else
+			// about the task, yet the poll must still leave a durable trace.
+			polled := tasks[8]
+			ch := &model.Channel{Id: 8, Type: constant.ChannelTypeKling, Key: "sk-test"}
+			require.NoError(t, updateVideoSingleTask(context.Background(), &scriptedPollingAdaptor{}, ch, polled.GetUpstreamTaskID(),
+				map[string]*model.Task{polled.GetUpstreamTaskID(): polled}))
+
+			sweepTimedOutTasks(context.Background())
+
+			for channelID, want := range map[int]struct{ attribution, final, state string }{
+				7: {taskAttributionHostLag, "cancelled", videosched.HealthUnverified},
+				8: {"host", "upstream", videosched.HealthBlocked},
+			} {
+				var task model.Task
+				require.NoError(t, db.First(&task, tasks[channelID].ID).Error)
+				assert.EqualValues(t, model.TaskStatusFailure, task.Status, "channel %d", channelID)
+				assert.Equal(t, want.attribution, task.VideoHealthAttribution, "channel %d", channelID)
+				attempts, err := model.ListVideoHealthAttempts(t.Context(), task.TaskID)
+				require.NoError(t, err)
+				require.Len(t, attempts, 1)
+				assert.Equal(t, want.final, attempts[0].FinalOutcome, "channel %d", channelID)
+				assert.Equal(t, "host", attempts[0].Attribution, "channel %d", channelID)
+				var state model.VideoHealthState
+				require.NoError(t, db.Where("channel_id = ?", channelID).First(&state).Error)
+				assert.Equal(t, want.state, state.State, "channel %d", channelID)
+			}
+		})
+	}
 }

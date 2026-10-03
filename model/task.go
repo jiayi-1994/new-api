@@ -143,6 +143,9 @@ type TaskPrivateData struct {
 	PluginState json.RawMessage `json:"plugin_state,omitempty"`
 	// PollFailures counts consecutive unrecognized or transient poll outcomes.
 	PollFailures int `json:"poll_failures,omitempty"`
+	// PolledAt is when the poller last asked the upstream about this task. The
+	// timeout sweep uses it to tell a stalled upstream from a lagging poller.
+	PolledAt int64 `json:"polled_at,omitempty"`
 	// ResultDiscarded marks an immediate terminal result whose submit route
 	// declared retainResult: false. The upstream snapshot was never written
 	// and every retrieval surface treats the task as not found. The zero
@@ -297,7 +300,7 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" &&
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
-		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
+		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 && p.PolledAt == 0 &&
 		!p.ResultDiscarded && p.StoredArtifact == nil && p.StoreAttempts == 0 &&
 		p.SchedulingSummary == nil && p.VideoHealth == nil {
 		return nil, nil

@@ -58,7 +58,8 @@ type VideoFailureClassifier interface {
 
 // videoTerminalOutcome attributes a terminal task. hostFailure is a failure
 // the host detected itself (timeout, poll failure escalation): its reason is
-// host text, so it always counts against the upstream without the plugin.
+// host text, so it counts against the upstream without the plugin, except a
+// timeout of a task the poller did not reach in time.
 func videoTerminalOutcome(task *model.Task, hostFailure bool) VideoOutcome {
 	outcome, _ := videoTerminalAttribution(task, hostFailure)
 	return outcome
@@ -70,6 +71,8 @@ func videoTerminalAttribution(task *model.Task, hostFailure bool) (VideoOutcome,
 	switch {
 	case task.Status == model.TaskStatusSuccess:
 		return VideoOutcomeSuccess, "success"
+	case hostFailure && task.VideoHealthAttribution == taskAttributionHostLag:
+		return VideoOutcomeIgnored, "host"
 	case hostFailure:
 		return VideoOutcomeFail, "host"
 	}

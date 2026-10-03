@@ -358,17 +358,27 @@ func ObserveVideoReliabilitySubmit(c *gin.Context, taskErr *taskdto.TaskError, c
 	}
 }
 
+// videoReliabilityFinal maps a terminal attribution onto the journal's final
+// outcomes. A host-ignored timeout is journaled as cancelled: the host gave up
+// on the task, which keeps it out of both reliability denominators.
+func videoReliabilityFinal(outcome VideoOutcome, attribution string) string {
+	switch {
+	case outcome == VideoOutcomeSuccess:
+		return "success"
+	case outcome != VideoOutcomeIgnored:
+		return "upstream"
+	case attribution == "host":
+		return "cancelled"
+	}
+	return attribution
+}
+
 func observeVideoReliabilityTerminal(task *model.Task, outcome VideoOutcome, attribution string) {
 	ref := task.PrivateData.VideoHealth
 	if ref == nil {
 		return
 	}
-	final := "upstream"
-	if outcome == VideoOutcomeSuccess {
-		final = "success"
-	} else if outcome == VideoOutcomeIgnored {
-		final = attribution
-	}
+	final := videoReliabilityFinal(outcome, attribution)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := model.ObserveVideoHealthAttempt(ctx, ref.RequestID, ref.AttemptSeq, &task.ID, "accepted", final, attribution, time.Now().Unix()); err != nil {
@@ -574,14 +584,9 @@ func reconcileVideoReliability(ctx context.Context) error {
 		if task := byAttempt[a.ID]; task != nil {
 			final, attribution := "", ""
 			if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
-				outcome, class := videoTerminalAttribution(task, task.VideoHealthAttribution == "host")
+				outcome, class := videoTerminalAttribution(task, task.VideoHealthAttribution == "host" || task.VideoHealthAttribution == taskAttributionHostLag)
 				attribution = class
-				final = "upstream"
-				if outcome == VideoOutcomeSuccess {
-					final = "success"
-				} else if outcome == VideoOutcomeIgnored {
-					final = class
-				}
+				final = videoReliabilityFinal(outcome, class)
 			}
 			if err := model.ObserveVideoHealthAttempt(ctx, a.RequestID, a.AttemptSeq, &task.ID, "accepted", final, attribution, now); err != nil {
 				return err
