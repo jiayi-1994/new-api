@@ -2,9 +2,9 @@
 
 命令从仓库根目录运行，使用 PowerShell。容器管理入口为 `scripts/testing/video-mock-lab.py`；本机 Compose、私有凭据及测试程序位于 `.scratch/`，不保证随仓库克隆分发。所有上游均为本地模拟器。
 
-**2026-10-03 清理状态：尚未完成，mock 删除数为 0。** `clean --apply` 在首次读取容器清单时遇到 Hyper-V socket 超时。随后已获用户许可重启 Rancher：`rdctl shutdown` 超时，`wsl --terminate rancher-desktop` 成功，重新启动后仍停在 `STARTING`；Rancher 数据发行版命令挂起，Ubuntu-22.04 的只读 `/bin/true` 也超时，表明故障涉及共享 WSL。进一步执行 `wsl --shutdown` 会停止 Ubuntu 等其他 WSL 进程，仍待用户确认，尚未执行。Windows 原生 `33880` / `33881` 端口仍正常。恢复控制连接后从下面的 `status` 重新开始。
+**2026-10-04 清理已完成：删除 46 个容器。** 旧实验室删除 41 个，统一实验室删除实际存在的 `mock01`–`mock05` 共 5 个；其余 15 个统一 mock 原本不存在。容器总数从 178 降至 132，所有非目标容器的 ID 和状态未变，59 个卷、41 条镜像标签、19 个网络均未变化。证据保存在本机 `.scratch/video-mock-maintenance/cleanup-verification-20261004.json`。
 
-清理前 HTTP 快照中 45/60 个视频 mock 可达（旧 40 个、统一前 5 个），其 `active_http` 合计为 0；这不等于全部任务已完成，也不代表重启后的服务状态。
+本次通过 Rancher 自有 WSL 中的同一 Docker 引擎执行清理，未执行全局 `wsl --shutdown`。Windows Docker 接口仍有 Hyper-V socket 超时，Rancher 界面仍报告 `STARTING`，不能把清理成功视为这些问题已修复。两实验室保留的 7 个网关、数据库和缓存容器在清理前就已停止，清理后仍保留该状态；复测前须恢复所需依赖。2026-10-03 的 HTTP 快照保存在 `.scratch/video-mock-maintenance/snapshot-20261003T144157Z/`，属于历史证据，不代表当前运行状态。
 
 ## 1. 查看、清理和恢复
 
@@ -19,6 +19,18 @@ python scripts/testing/video-mock-lab.py status
 ```
 
 `clean` / `start` 默认只预览，`--apply` 才执行；默认处理两套实验室。脚本按确切容器 ID 操作，逐个复核项目/服务标签，保留镜像、卷、网络，并检查非目标服务的 ID 和状态不变。Docker 不可达时停止执行，不改用其他 Docker context 继续删除。
+
+若仅 Windows Docker 连接转发故障，而 Rancher 自有发行版内的 Docker 正常，可显式使用下面的连接方式。先确认返回的是同一台 Rancher 引擎及上述实验室；这不会切换 Docker context，也不会重启其他 WSL 发行版。
+
+```powershell
+wsl --distribution rancher-desktop --exec docker info --format '{{.Name}} {{.ID}}'
+python scripts/testing/video-mock-lab.py status --rancher-wsl
+python scripts/testing/video-mock-lab.py clean --rancher-wsl
+python scripts/testing/video-mock-lab.py clean --rancher-wsl --apply
+python scripts/testing/video-mock-lab.py status --rancher-wsl
+```
+
+`--rancher-wsl` 仅支持 `status` / `clean`。`start` 使用 Windows Compose 路径，必须先恢复 Windows Docker 接口，再使用正常启动命令；脚本会拒绝 `start --rancher-wsl`。本次扩展已通过 8 组模拟检查，覆盖连接方式、预览、启动拒绝、标签复核、第二项目读取失败时零删除等行为，并通过真实清理前后清单核对。
 
 | 实验室 | Compose 项目 | 允许操作 | 必须保留 |
 | --- | --- | --- | --- |

@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DOCKER_COMMAND = ["docker"]
 LABS = {
     "legacy": {
         "project": "codex-vsched-analysis-20261002",
@@ -26,7 +27,7 @@ LABS = {
 
 def docker(args: list[str], timeout: int = 30) -> str:
     result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, encoding="utf-8",
+        [*DOCKER_COMMAND, *args], capture_output=True, text=True, encoding="utf-8",
         errors="replace", timeout=timeout, check=False,
     )
     if result.returncode:
@@ -63,7 +64,13 @@ def main() -> int:
     parser.add_argument("--lab", choices=("legacy", "unified", "both"), default="both")
     parser.add_argument("--services", nargs="+", help="Select named mock services within one lab")
     parser.add_argument("--apply", action="store_true", help="Execute start/clean; otherwise print the plan")
+    parser.add_argument("--rancher-wsl", action="store_true",
+                        help="Use Docker inside Rancher Desktop WSL for status/clean only")
     args = parser.parse_args()
+    if args.rancher_wsl and args.action == "start":
+        parser.error("--rancher-wsl supports status/clean only; start uses Windows Compose paths")
+    DOCKER_COMMAND[:] = (["wsl", "--distribution", "rancher-desktop", "--exec", "docker"]
+                         if args.rancher_wsl else ["docker"])
     if args.services and args.lab == "both":
         parser.error("--services requires --lab legacy or --lab unified")
     names = list(LABS) if args.lab == "both" else [args.lab]
