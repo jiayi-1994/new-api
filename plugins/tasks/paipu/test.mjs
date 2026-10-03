@@ -22,6 +22,22 @@ for (const body of [
 
 globalThis.utils = { unixNow: () => Math.floor(Date.now() / 1000) };
 const fixture = JSON.parse(await readFile(new URL("./fixture.json", import.meta.url), "utf8"));
+
+// A single-output request must keep every compatible scheduling candidate.
+{
+  const request = { model: "lec-gt-seedance-2-0-full", prompt: "a cat", seconds: 5, resolution: "720p" };
+  for (const kind of ["json", "multipart"]) {
+    const decode = (n) => {
+      const value = { ...request };
+      if (n !== undefined) value.n = n;
+      const body = kind === "json" ? { kind, value } : { kind, fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, [String(item)]])) };
+      return plugin.protocols.openai_video.decodeRequest({ model: request.model, body });
+    };
+    assert.deepEqual(decode(1), decode(undefined), kind);
+    for (const n of [0, 2, -1, 1.5, "invalid"]) assert.throws(() => decode(n), /n must be 1/, kind);
+  }
+}
+
 const catalog = JSON.parse(await readFile(new URL("./model-catalog.json", import.meta.url), "utf8"));
 const registered = catalog.models.filter(model => model.status === "registered");
 assert.equal(registered.length, 39);

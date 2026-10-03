@@ -80,6 +80,17 @@ export async function reviewUnknownVideoAttempt(
   requireServerSuccess(response.data)
 }
 
+export async function requestVideoHealthRecovery(
+  channelId: number,
+  values: { model: string; state_version: number; note: string }
+): Promise<void> {
+  const response = await api.post<{ success: boolean }>(
+    `/api/channel/${channelId}/video_health/recover`,
+    values
+  )
+  requireServerSuccess(response.data)
+}
+
 const channelActionConfig = (
   config: ApiRequestConfig = {}
 ): ApiRequestConfig => ({

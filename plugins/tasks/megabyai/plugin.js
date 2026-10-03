@@ -13,7 +13,7 @@ const MEDIA_FIELDS = [
   "images", "videos", "audios", "image", "input_reference",
 ];
 const FIELDS = [
-  "model", "prompt", "seconds", "duration", "size", "video_size",
+  "model", "prompt", "seconds", "duration", "size", "video_size", "n",
   "resolution", "video_resolution", "ratio", "aspect_ratio", "aspectRatio",
 ].concat(MEDIA_FIELDS);
 
@@ -21,7 +21,7 @@ export const meta = {
   apiVersion: 1,
   key: "megabyai",
   name: "Mega Video",
-  version: "2.1.3",
+  version: "2.1.4",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Mega API", zh: "通过 Mega API 生成视频" },
   icon: "text:M",
@@ -37,7 +37,7 @@ export const meta = {
     },
     surcharge_seconds: {
       type: "number", unit: "second",
-      description: { en: "Per-second surcharge", zh: "按秒加收单价" },
+      description: { en: "Video generation surcharge unit price", zh: "视频生成加收单价" },
     },
     resolution: {
       enum: RESOLUTIONS,
@@ -161,6 +161,7 @@ function bodyFields(body) {
 // Decode, forwarding and usage extraction share the exact same validated values.
 function videoParams(input) {
   if (!isObject(input)) throw new Error("video request must be an object");
+  if (has(input, "n") && input.n !== 1 && input.n !== "1") throw new Error("n must be 1");
   for (const name of Object.keys(input)) {
     if (!FIELDS.includes(name)) throw new Error("unsupported video parameter: " + name);
   }

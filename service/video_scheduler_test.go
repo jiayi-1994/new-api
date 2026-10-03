@@ -1692,10 +1692,8 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 	model.InitChannelCache()
 	recordVideoSamples(3201, "videos-fast", videoSubmitFail)
 	store := videoHealthStore()
-	_, err = store.add(videoInFlightKey(3202), 1)
-	require.NoError(t, err)
-	_, err = store.add(videoGroupInFlightKey("acct"), 2)
-	require.NoError(t, err)
+	require.NoError(t, store.finishCapacity([]string{videoInFlightKey(3202), videoGroupInFlightKey("acct")}, "busy-channel", true))
+	require.NoError(t, store.finishCapacity([]string{videoGroupInFlightKey("acct")}, "busy-group", true))
 
 	request := func(decision VideoSchedDecision, tried ...int) *gin.Context {
 		c := newVideoSchedTestContext(t)

@@ -303,6 +303,10 @@ func videoUsageContext(c *gin.Context, clientModel, mappedModel string, body any
 	if files == nil {
 		files = make([]map[string]any, 0)
 	}
+	salesSource := ""
+	if _, unified := GetVideoSalesFacts(c); unified {
+		salesSource = billingexpr.SalesSourceVideoRequest
+	}
 	return jsplugin.BuildUsageContext(jsplugin.UsageContext{
 		Route:         route,
 		Headers:       map[string]string{"Content-Type": c.GetHeader("Content-Type"), "Accept": c.GetHeader("Accept")},
@@ -311,6 +315,7 @@ func videoUsageContext(c *gin.Context, clientModel, mappedModel string, body any
 		Model:         clientModel,
 		UpstreamModel: mappedModel,
 		UsagePurpose:  purpose,
+		SalesSource:   salesSource,
 	})
 }
 

@@ -77,6 +77,19 @@ test("describeSpec counts each reference kind from the final body, independent o
 const REQUEST = { model: "videos-fast", prompt: "a cat", seconds: "8", size: "1280x720" };
 const BASE_URL = "https://newapi.megabyai.cc";
 
+test("one output is accepted in JSON and multipart without changing the submitted request", () => {
+  for (const kind of ["json", "multipart"]) {
+    const decode = (n) => {
+      const value = { ...REQUEST };
+      if (n !== undefined) value.n = n;
+      const body = kind === "json" ? { kind, value } : { kind, fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, [String(item)]])) };
+      return plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body });
+    };
+    assert.deepEqual(decode(1), decode(undefined), kind);
+    for (const n of [0, 2, -1, 1.5, "invalid"]) assert.throws(() => decode(n), /n must be 1/, kind);
+  }
+});
+
 test("A raw channel key and a resolved Bearer header both reach upstream as one Bearer header", () => {
   const intent = plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body: { kind: "json", value: REQUEST } });
   const ctx = { model: REQUEST.model, upstreamModel: REQUEST.model, baseUrl: BASE_URL, requestBody: intent.requestBody, taskId: "task-1" };

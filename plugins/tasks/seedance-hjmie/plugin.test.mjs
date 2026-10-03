@@ -22,6 +22,21 @@ for (const body of [
 }
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
+
+test("one output is accepted in JSON and multipart without changing the submitted request", () => {
+  const request = { model: "videos-fast", prompt: "a cat", seconds: 8, resolution: "720p" };
+  for (const kind of ["json", "multipart"]) {
+    const decode = (n) => {
+      const value = { ...request };
+      if (n !== undefined) value.n = n;
+      const body = kind === "json" ? { kind, value } : { kind, fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, [String(item)]])) };
+      return plugin.protocols.openai_video.decodeRequest({ model: request.model, body });
+    };
+    assert.deepEqual(decode(1), decode(undefined), kind);
+    for (const n of [0, 2, -1, 1.5, "invalid"]) assert.throws(() => decode(n), /n must be 1/, kind);
+  }
+});
+
 for (const entry of fixture.cases) {
   test(entry.name, () => {
     let hook = plugin[entry.hook];

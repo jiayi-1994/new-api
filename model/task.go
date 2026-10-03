@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"gorm.io/gorm/clause"
 )
 
 type TaskStatus string
@@ -185,6 +187,7 @@ type TaskVideoHealthReference struct {
 type TaskSchedulingSummary struct {
 	Model         string         `json:"model"`
 	CapacityGroup string         `json:"capacity_group,omitempty"`
+	CapacityToken string         `json:"capacity_token,omitempty"`
 	ProbeSlot     *TaskProbeSlot `json:"probe_slot,omitempty"`
 	Selected      int            `json:"selected,omitempty"`
 	SelectionSeq  int            `json:"selection_seq,omitempty"`
@@ -721,6 +724,56 @@ func CountActiveScheduledTasks() (map[int]int64, map[string]int64, error) {
 		}
 	}
 	return channels, groups, nil
+}
+
+// VideoCapacityOwner identifies one submitted job across admission, durable
+// task handoff and terminal cleanup. Unknown submissions hold capacity for a
+// separately frozen lifetime; zero ExpiresAt means an active task/submission.
+type VideoCapacityOwner struct {
+	Token     string
+	ChannelID int
+	Group     string
+	ExpiresAt int64
+}
+
+// ListVideoCapacityOwners returns the durable side of capacity reconciliation.
+// An attempt with a task is represented only by that task, including when its
+// post-insert handoff or terminal callback was lost.
+func ListVideoCapacityOwners(ctx context.Context, now int64) ([]VideoCapacityOwner, error) {
+	var attempts []VideoHealthAttempt
+	linkedTasks := DB.Model(&Task{}).Select("1").Where(clause.Eq{Column: "video_health_attempt_id", Value: clause.Column{Table: DB.NamingStrategy.TableName("VideoHealthAttempt"), Name: "id"}})
+	if err := DB.WithContext(ctx).Select("id", "capacity_token", "channel_id", "capacity_group", "capacity_expires", "final_outcome").
+		Where("capacity_token <> ?", "").
+		Where("final_outcome = ? OR (final_outcome = ? AND COALESCE(reviewed_at, 0) = 0 AND capacity_expires > ?)", "", "unknown", now).
+		Where("NOT EXISTS (?)", linkedTasks).
+		Find(&attempts).Error; err != nil {
+		return nil, err
+	}
+	var tasks []Task
+	if err := DB.WithContext(ctx).Select("id", "channel_id", "private_data").
+		Where("progress != ? AND status NOT IN ?", "100%", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	owners := make([]VideoCapacityOwner, 0, len(tasks))
+	for _, task := range tasks {
+		summary := task.PrivateData.SchedulingSummary
+		if summary == nil {
+			continue
+		}
+		token := summary.CapacityToken
+		if token == "" {
+			token = fmt.Sprintf("task:%d", task.ID)
+		}
+		owners = append(owners, VideoCapacityOwner{Token: token, ChannelID: task.ChannelId, Group: summary.CapacityGroup})
+	}
+	for _, attempt := range attempts {
+		expires := int64(0)
+		if attempt.FinalOutcome == "unknown" {
+			expires = attempt.CapacityExpires
+		}
+		owners = append(owners, VideoCapacityOwner{Token: attempt.CapacityToken, ChannelID: attempt.ChannelID, Group: attempt.CapacityGroup, ExpiresAt: expires})
+	}
+	return owners, nil
 }
 
 // TaskCountAllTasks returns total tasks that match the given query params (admin usage)

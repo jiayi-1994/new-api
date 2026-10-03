@@ -484,7 +484,6 @@ func useVideoHealthBackend(t *testing.T, backend string) {
 		common.RedisEnabled, common.RDB = previousRedis, previousRDB
 		*operation_setting.GetVideoSchedulingSetting() = previousSetting
 		memoryVideoHealth = previousMemory
-		videoCalibrationDrift.Clear()
 		videoHealthReady.Store(previousReady)
 	})
 	videoHealthReady.Store(false)
@@ -494,10 +493,10 @@ func useVideoHealthBackend(t *testing.T, backend string) {
 		server := miniredis.RunT(t)
 		common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
 		common.RedisEnabled = true
+		require.NoError(t, common.RDB.Set(t.Context(), videoSchedCalibratedKey, 1, 3*videoSchedCalibrationTick).Err())
 	}
 	operation_setting.GetVideoSchedulingSetting().Mode = operation_setting.VideoSchedulingModeShadow
 	operation_setting.GetVideoSchedulingSetting().WindowSeconds = 1800
-	videoCalibrationDrift.Clear()
 }
 
 func scheduledTestChannel(id int, group string) *model.Channel {
@@ -677,6 +676,63 @@ func TestVideoTargetChannelsShareCapacityButKeepIndependentHealth(t *testing.T) 
 // count and counted itself only once persisted overshot capacity 2 by 27.
 func TestVideoCapacityReservationIsAtomicAndOwnedByTheTask(t *testing.T) {
 	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend+"_lease_lifecycle", func(t *testing.T) {
+			useVideoHealthBackend(t, backend)
+			store := videoHealthStore()
+			keys := []string{videoInFlightKey(44), videoGroupInFlightKey("shared")}
+			now := time.Now().UnixMilli()
+			ok, err := store.reserve(keys, []int64{1, 1}, "slow-owner", now+1000)
+			require.NoError(t, err)
+			require.True(t, ok)
+			revisions, err := store.capacityRevisions()
+			require.NoError(t, err)
+			require.NoError(t, store.renewCapacity(t.Context(), keys, "slow-owner", now+10000))
+			for _, key := range keys {
+				reset, err := store.calibrateCapacity(key, nil, revisions[key], now+2000)
+				require.NoError(t, err)
+				assert.True(t, reset)
+			}
+			// Another target sharing the account cannot claim its last slot.
+			ok, err = store.reserve([]string{videoInFlightKey(45), keys[1]}, []int64{1, 1}, "other-target", now+10000)
+			require.NoError(t, err)
+			assert.False(t, ok)
+
+			// The count query may omit a task that is persisted just afterwards.
+			// Handoff changes the revision even though the gauge stays at one.
+			require.NoError(t, store.finishCapacity(keys, "slow-owner", true))
+			for _, key := range keys {
+				reset, err := store.calibrateCapacity(key, nil, revisions[key], now+2000)
+				require.NoError(t, err)
+				assert.False(t, reset, "a stale database snapshot cannot erase a handed-off task")
+			}
+			require.NoError(t, store.finishCapacity(keys, "slow-owner", false))
+
+			// A crashed request stops renewing. Reclamation must eventually
+			// reopen capacity, while its delayed release cannot free a new owner.
+			ok, err = store.reserve(keys, []int64{1, 1}, "crashed-owner", now-1)
+			require.NoError(t, err)
+			require.True(t, ok)
+			revisions, err = store.capacityRevisions()
+			require.NoError(t, err)
+			for _, key := range keys {
+				reset, err := store.calibrateCapacity(key, nil, revisions[key], now)
+				require.NoError(t, err)
+				require.True(t, reset)
+			}
+			ok, err = store.reserve(keys, []int64{1, 1}, "replacement", now+10000)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.ErrorContains(t, store.renewCapacity(t.Context(), keys, "crashed-owner", now+10000), "owner expired")
+			require.NoError(t, store.finishCapacity(keys, "crashed-owner", false))
+			values, err := store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{1, 1}, values)
+			require.NoError(t, store.finishCapacity(keys, "replacement", false))
+			require.NoError(t, store.finishCapacity(keys, "replacement", false))
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{0, 0}, values, "release is idempotent")
+		})
 		t.Run(backend, func(t *testing.T) {
 			useVideoHealthBackend(t, backend)
 			channel := &model.Channel{Id: 31, OtherSettings: `{"video_scheduling":{"capacity":2,"capacity_group":"acct","models":{"m":{"mode":"per_video","prices":{"*":1}}}}}`}
@@ -710,12 +766,41 @@ func TestVideoCapacityReservationIsAtomicAndOwnedByTheTask(t *testing.T) {
 			assert.Equal(t, 2, channelCount)
 			assert.Equal(t, 2, groupCount)
 
+			// Slow submit responses are not in the task table yet. Repeated
+			// calibration must keep their channel and shared-account capacity.
+			for range 2 {
+				revisions, err := videoHealthStore().capacityRevisions()
+				require.NoError(t, err)
+				calibrateVideoGauge(videoHealthStore(), videoInFlightKey(31), nil, revisions[videoInFlightKey(31)])
+				calibrateVideoGauge(videoHealthStore(), videoGroupInFlightKey("acct"), nil, revisions[videoGroupInFlightKey("acct")])
+			}
+			channelCount, groupCount = inFlight()
+			assert.Equal(t, 2, channelCount)
+			assert.Equal(t, 2, groupCount)
+			blocked := healthTestContext()
+			reserved, err := reserveVideoCapacity(blocked, channel, quotas)
+			require.NoError(t, err)
+			assert.False(t, reserved, "calibration must not reopen occupied capacity")
+			ReleaseUnpersistedVideoProbeLease(blocked)
+
+			// The legacy weighted policy reserves capacity before its probe slot.
+			acquired, err := AcquireVideoProbeSlot(holders[0], 31, 0, time.Minute)
+			require.NoError(t, err)
+			require.True(t, acquired)
+			channelCount, groupCount = inFlight()
+			assert.Equal(t, 2, channelCount)
+			assert.Equal(t, 2, groupCount)
+
 			// A rejected submit gives its reservation back at once.
 			ObserveVideoSubmit(holders[0], channel, "m", &taskdto.TaskError{StatusCode: http.StatusBadGateway})
 			// A persisted task takes the reservation over without counting twice,
 			// so the request's end releases nothing and the terminal releases it.
 			task := &model.Task{ChannelId: 31, Status: model.TaskStatusSubmitted}
+			common.SetContextKey(holders[1], constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+			operation_setting.GetVideoSchedulingSetting().Mode = operation_setting.VideoSchedulingModeOff
 			task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(holders[1], channel, "m")
+			assert.NotNil(t, task.PrivateData.SchedulingSummary, "a frozen takeover keeps task capacity ownership if scheduling is switched off mid-submit")
+			operation_setting.GetVideoSchedulingSetting().Mode = operation_setting.VideoSchedulingModeShadow
 			VideoTaskPersisted(holders[1], task)
 			ReleaseUnpersistedVideoProbeLease(holders[1])
 			channelCount, groupCount = inFlight()
@@ -723,7 +808,7 @@ func TestVideoCapacityReservationIsAtomicAndOwnedByTheTask(t *testing.T) {
 			assert.Equal(t, 1, groupCount)
 			// An abandoned request returns its reservation at request end.
 			abandoned := healthTestContext()
-			reserved, err := reserveVideoCapacity(abandoned, channel, quotas)
+			reserved, err = reserveVideoCapacity(abandoned, channel, quotas)
 			require.NoError(t, err)
 			require.True(t, reserved)
 			ReleaseUnpersistedVideoProbeLease(abandoned)
@@ -745,6 +830,132 @@ func TestVideoCapacityReservationIsAtomicAndOwnedByTheTask(t *testing.T) {
 			health, err := GetVideoChannelHealth(32, "m", 0)
 			require.NoError(t, err)
 			assert.Equal(t, 1, health.InFlight)
+		})
+	}
+}
+
+func TestVideoCapacityDurableOwnership(t *testing.T) {
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			useVideoHealthBackend(t, backend)
+			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			previousDB, previousTimeout := model.DB, constant.TaskTimeoutMinutes
+			model.DB, constant.TaskTimeoutMinutes = db, 0
+			t.Cleanup(func() {
+				model.DB, constant.TaskTimeoutMinutes = previousDB, previousTimeout
+				videoReliabilityCache.Clear()
+				require.NoError(t, sqlDB.Close())
+			})
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Task{}, &model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{}))
+			setting := operation_setting.GetVideoSchedulingSetting()
+			setting.Mode, setting.SelectionPolicy = "on", videosched.PolicyWeightedV1
+			channel := scheduledTestChannel(54, "shared")
+			require.NoError(t, db.Create(channel).Error)
+			keys := []string{videoInFlightKey(54), videoGroupInFlightKey("shared")}
+			store := videoHealthStore()
+			start := func(requestID string) *gin.Context {
+				c := healthTestContext()
+				c.Set(common.RequestIdKey, requestID)
+				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+				ok, err := reserveVideoCapacity(c, channel, map[string]int{"shared": 1})
+				require.NoError(t, err)
+				require.True(t, ok)
+				BindVideoHealthChannel(c, channel, "m")
+				RequestPolicy(c).BeginAttempt(channel, "default")
+				t.Cleanup(func() { stopVideoHealthSubmissionOwner(c); ReleaseUnpersistedVideoProbeLease(c) })
+				return c
+			}
+			reconcile := func(at int64) {
+				revisions, err := store.capacityRevisions()
+				require.NoError(t, err)
+				owners, err := model.ListVideoCapacityOwners(t.Context(), at)
+				require.NoError(t, err)
+				wanted := map[string]int64{}
+				for _, owner := range owners {
+					wanted[owner.Token] = -owner.ExpiresAt * 1000
+				}
+				for _, key := range keys {
+					ok, err := store.calibrateCapacity(key, wanted, revisions[key], at*1000)
+					require.NoError(t, err)
+					require.True(t, ok)
+				}
+			}
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 54}, OriginModelName: "m"}
+			c := start("capacity-pending")
+			require.NoError(t, BeginVideoHealthTransmission(c, info))
+			// Redis renewal may have failed for longer than the cache lease;
+			// a durable transmission still owns the shared account slot.
+			reconcile(time.Now().Add(2 * videoSubmissionLeaseTTL).Unix())
+			values, err := store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{1, 1}, values)
+			ObserveVideoSubmit(c, channel, "m", nil)
+			ReleaseUnpersistedVideoProbeLease(c)
+			ok, err := store.reserve([]string{videoInFlightKey(55), keys[1]}, []int64{1, 1}, "rival-after-local-failure", time.Now().Add(videoSubmissionLeaseTTL).UnixMilli())
+			require.NoError(t, err)
+			assert.False(t, ok, "accepted submission remains occupied if local persistence or settlement aborts")
+			ref := VideoHealthReference(c)
+			require.NotNil(t, ref)
+			originalSettings := channel.OtherSettings
+			channel.OtherSettings = `{}`
+			task := &model.Task{TaskID: "capacity-durable", ChannelId: 54, Status: model.TaskStatusSubmitted, VideoHealthAttemptID: &ref.AttemptID}
+			task.PrivateData.VideoHealth = ref
+			task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(c, channel, "m")
+			require.NotNil(t, task.PrivateData.SchedulingSummary)
+			assert.Equal(t, "shared", task.PrivateData.SchedulingSummary.CapacityGroup, "deleting the live config cannot move admitted ownership")
+			require.NoError(t, db.Create(task).Error)
+			reconcile(time.Now().Unix())
+			VideoTaskPersisted(c, task)
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{1, 1}, values, "database reconciliation followed by late handoff counts once")
+			task.Status = model.TaskStatusSuccess
+			require.NoError(t, db.Model(task).Update("status", task.Status).Error)
+			ObserveVideoTerminal(task, false)
+			require.NoError(t, store.finishCapacity(keys, task.PrivateData.SchedulingSummary.CapacityToken, true))
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{0, 0}, values, "a terminal callback fences a delayed handoff")
+			channel.OtherSettings = originalSettings
+
+			unknown := start("capacity-unknown")
+			require.NoError(t, BeginVideoHealthTransmission(unknown, info))
+			ObserveVideoSubmit(unknown, channel, "m", &taskdto.TaskError{StatusCode: 502, Error: relaycommon.ErrTaskSubmitOutcomeUnknown})
+			ReleaseUnpersistedVideoProbeLease(unknown)
+			attempts, err := model.ListVideoHealthAttempts(t.Context(), "capacity-unknown")
+			require.NoError(t, err)
+			require.Len(t, attempts, 1)
+			assert.Equal(t, int64(86400), attempts[0].CapacityHoldSeconds, "disabled task timeout still gives unknown submissions a bounded capacity hold")
+			assert.Greater(t, attempts[0].CapacityExpires, time.Now().Unix())
+			if backend == "redis" {
+				require.NoError(t, common.RDB.FlushDB(t.Context()).Err())
+				ok, err := store.reserve(keys, []int64{1, 1}, "after-flush", time.Now().Add(videoSubmissionLeaseTTL).UnixMilli())
+				assert.ErrorIs(t, err, ErrVideoHealthAdmission)
+				assert.False(t, ok, "lost Redis must be restored before weighted admission")
+				calibrateVideoInFlight()
+			}
+			reconcile(time.Now().Unix())
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{1, 1}, values, "request exit and cache loss preserve unknown upstream work")
+			reconcile(attempts[0].CapacityExpires + 1)
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{0, 0}, values, "unknown capacity reopens at its frozen deadline")
+
+			// Weighted scheduling also needs a durable transmission journal
+			// when capacity is bounded; database failure must stop before bytes.
+			failed := start("capacity-journal-failed")
+			require.NoError(t, db.Migrator().DropTable(&model.VideoHealthAttempt{}))
+			require.ErrorIs(t, BeginVideoHealthTransmission(failed, info), ErrVideoHealthAdmission)
+			ReleaseUnpersistedVideoProbeLease(failed)
+			values, err = store.get(keys)
+			require.NoError(t, err)
+			assert.Equal(t, []int64{0, 0}, values)
 		})
 	}
 }
@@ -884,6 +1095,9 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 		t.Run(backend, func(t *testing.T) {
 			useVideoHealthBackend(t, backend)
 			previousDB := model.DB
+			if backend == "redis" {
+				require.NoError(t, common.RDB.Del(t.Context(), videoSchedCalibratedKey).Err())
+			}
 			t.Cleanup(func() { model.DB = previousDB })
 			database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 			require.NoError(t, err)
@@ -891,7 +1105,7 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 			require.NoError(t, err)
 			sqlDB.SetMaxOpenConns(1)
 			t.Cleanup(func() { _ = sqlDB.Close() })
-			require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.Task{}))
+			require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.Task{}, &model.VideoHealthAttempt{}))
 			model.DB = database
 			for _, channel := range []*model.Channel{scheduledTestChannel(1, "acct"), scheduledTestChannel(2, "acct")} {
 				channel.Name, channel.Key = fmt.Sprintf("c%d", channel.Id), "k"
@@ -914,7 +1128,7 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 
 			// Before any successful calibration, a lock held elsewhere is not
 			// enough for readiness: the holder may still be counting or fail.
-			require.NoError(t, store.set(videoGroupInFlightKey("old"), 4))
+			require.NoError(t, store.finishCapacity([]string{videoGroupInFlightKey("old")}, "orphan-old-group", true))
 			ok, err := store.acquire(videoSchedCalibrationKey, "other-instance", time.Minute)
 			require.NoError(t, err)
 			require.True(t, ok)
@@ -930,15 +1144,13 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 				memoryVideoHealth.slots = map[string]memoryVideoSlot{}
 			}
 
-			// Channel 1: a quiet zombie count (capacity 1: redis 1, db 0) is
-			// within the drift threshold but resets after two identical rounds.
-			// Channel 2: far off from the database resets at once.
-			require.NoError(t, store.set(videoInFlightKey(1), 1))
-			require.NoError(t, store.set(videoInFlightKey(2), 9))
+			// Reconciliation removes orphan owners and restores each active
+			// task under the group saved when it was submitted.
+			require.NoError(t, store.finishCapacity([]string{videoInFlightKey(1)}, "orphan-channel", true))
 			calibrateVideoInFlight()
 			values, err := store.get([]string{videoInFlightKey(1), videoInFlightKey(2), videoGroupInFlightKey("acct"), videoGroupInFlightKey("old")})
 			require.NoError(t, err)
-			assert.Equal(t, []int64{1, 2, 0, 1}, values, "drifts within max(2, 10%) wait for a second round; groups follow saved ownership")
+			assert.Equal(t, []int64{0, 2, 1, 1}, values)
 			assert.True(t, VideoHealthReady())
 			if backend == "redis" {
 				marked, err := common.RDB.Exists(t.Context(), videoSchedCalibratedKey).Result()
@@ -955,10 +1167,71 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 			calibrateVideoInFlight()
 			values, err = store.get([]string{videoInFlightKey(1), videoGroupInFlightKey("acct")})
 			require.NoError(t, err)
-			assert.Equal(t, []int64{0, 1}, values, "the same drift twice resets the zombie count and the group")
+			assert.Equal(t, []int64{0, 1}, values, "reconciliation is idempotent")
+			clearLock := func() {
+				if backend == "redis" {
+					require.NoError(t, common.RDB.Del(t.Context(), videoSchedCalibrationKey).Err())
+				} else {
+					memoryVideoHealth.slots = map[string]memoryVideoSlot{}
+				}
+			}
+			// Ongoing admission can change revisions during every database
+			// scan. Existing trusted ownership must keep its readiness lease.
+			require.NoError(t, database.Callback().Query().After("gorm:query").Register("capacity_revision_conflict", func(tx *gorm.DB) {
+				if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "Task" {
+					require.NoError(t, store.finishCapacity([]string{videoInFlightKey(1)}, "concurrent-admission", true))
+				}
+			}))
+			for range 4 {
+				clearLock()
+				if backend == "redis" {
+					require.NoError(t, common.RDB.Expire(t.Context(), videoSchedCalibratedKey, time.Second).Err())
+				}
+				calibrateVideoInFlight()
+				assert.True(t, VideoHealthReady())
+				if backend == "redis" {
+					ttl, err := common.RDB.TTL(t.Context(), videoSchedCalibratedKey).Result()
+					require.NoError(t, err)
+					assert.Greater(t, ttl, 2*time.Minute, "legal concurrent changes do not expire readiness under sustained traffic")
+				}
+			}
+			clearLock()
+			videoHealthReady.Store(false)
+			if backend == "redis" {
+				require.NoError(t, common.RDB.Del(t.Context(), videoSchedCalibratedKey).Err())
+			}
+			calibrateVideoInFlight()
+			assert.False(t, VideoHealthReady(), "cold recovery requires every key to be restored")
+			require.NoError(t, database.Callback().Query().Remove("capacity_revision_conflict"))
+			clearLock()
+			if backend == "redis" {
+				// A partial restore failure cannot certify empty/missing keys.
+				require.NoError(t, common.RDB.Set(t.Context(), videoCapacityOwnersPrefix+videoInFlightKey(1), "wrong-type", 0).Err())
+				calibrateVideoInFlight()
+				marked, err := common.RDB.Exists(t.Context(), videoSchedCalibratedKey).Result()
+				require.NoError(t, err)
+				assert.Zero(t, marked)
+				require.NoError(t, common.RDB.Del(t.Context(), videoCapacityOwnersPrefix+videoInFlightKey(1)).Err())
+				clearLock()
+				// Even a complete set of per-key writes cannot publish if Redis
+				// was cleared during the scan and the calibration lock was lost.
+				require.NoError(t, database.Callback().Query().After("gorm:query").Register("capacity_cache_flush", func(tx *gorm.DB) {
+					if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "Task" {
+						require.NoError(t, common.RDB.FlushDB(t.Context()).Err())
+					}
+				}))
+				calibrateVideoInFlight()
+				marked, err = common.RDB.Exists(t.Context(), videoSchedCalibratedKey).Result()
+				require.NoError(t, err)
+				assert.Zero(t, marked)
+				require.NoError(t, database.Callback().Query().Remove("capacity_cache_flush"))
+			}
+			clearLock()
+			calibrateVideoInFlight()
+			assert.True(t, VideoHealthReady())
 
 			// A failed count keeps the gauges instead of zeroing them.
-			require.NoError(t, store.set(videoInFlightKey(2), 5))
+			require.NoError(t, store.finishCapacity([]string{videoInFlightKey(2)}, "preserved-on-query-error", true))
 			require.NoError(t, database.Migrator().DropTable(&model.Task{}))
 			if backend == "redis" {
 				require.NoError(t, common.RDB.Del(t.Context(), videoSchedCalibrationKey).Err())
@@ -968,7 +1241,7 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 			calibrateVideoInFlight()
 			values, err = store.get([]string{videoInFlightKey(2)})
 			require.NoError(t, err)
-			assert.Equal(t, []int64{5}, values)
+			assert.Equal(t, []int64{3}, values)
 		})
 	}
 }

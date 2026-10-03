@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -42,6 +43,35 @@ func GetChannelVideoHealth(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, view)
+}
+
+func RecoverChannelVideoHealth(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	var request struct {
+		Model        string `json:"model"`
+		StateVersion int64  `json:"state_version"`
+		Note         string `json:"note"`
+	}
+	if err != nil || channelID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10), &request) != nil {
+		common.ApiErrorMsg(c, "invalid video recovery request")
+		return
+	}
+	request.Note = strings.TrimSpace(request.Note)
+	if request.Model == "" || request.StateVersion <= 0 || request.Note == "" || utf8.RuneCountInString(request.Note) > 500 {
+		common.ApiErrorMsg(c, "a model, current state version and recovery reason of up to 500 characters are required")
+		return
+	}
+	state, err := service.RequestVideoHealthRecovery(c.Request.Context(), channelID, request.Model, request.StateVersion)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.video_recovery", map[string]any{
+		"id": channelID, "model": request.Model, "note": request.Note,
+		"previous_state": videosched.HealthBlocked, "previous_version": request.StateVersion,
+		"state": state.State, "reason": state.Reason, "state_version": state.Version,
+	})
+	common.ApiSuccess(c, state)
 }
 
 // This journal is independent of optional scheduling audits and their retention.

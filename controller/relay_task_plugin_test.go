@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -350,7 +351,9 @@ func TestExecuteTaskSubmissionFirstAttemptFeedsVideoScheduling(t *testing.T) {
 	var stored model.Task
 	require.NoError(t, database.Where("task_id = ?", "task_public").First(&stored).Error)
 	require.NotNil(t, stored.PrivateData.SchedulingSummary)
-	assert.Equal(t, model.TaskSchedulingSummary{Model: "plugin-model", CapacityGroup: "acct"}, *stored.PrivateData.SchedulingSummary)
+	assert.Equal(t, "plugin-model", stored.PrivateData.SchedulingSummary.Model)
+	assert.Equal(t, "acct", stored.PrivateData.SchedulingSummary.CapacityGroup)
+	assert.NotEmpty(t, stored.PrivateData.SchedulingSummary.CapacityToken, "the persisted task retains its capacity owner")
 	service.ObserveVideoTerminal(&stored, true)
 
 	// A submission failed by the client leaving is no sample against the upstream.
@@ -1137,28 +1140,31 @@ func TestExecuteTaskSubmissionVideoSchedulingAutoGroupBudget(t *testing.T) {
 
 func TestExecuteTaskSubmissionVideoHealthAdmissionReselection(t *testing.T) {
 	service.InitHttpClient()
-	database, _ := openTaskDialectDatabase(t, &model.Task{}, &model.User{}, &model.Channel{}, &model.Ability{}, &model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{})
-	oldDB, oldMemory, oldRedis, oldRetry := model.DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes
-	oldConsume, oldErrorLog := common.LogConsumeEnabled, constant.ErrorLogEnabled
+	database, dialect := openTaskDialectDatabase(t, &model.Task{}, &model.User{}, &model.Token{}, &model.Log{}, &model.Channel{}, &model.Ability{}, &model.VideoHealthRegistration{}, &model.VideoHealthState{}, &model.VideoHealthAttempt{}, &model.VideoHealthRequest{})
+	oldDB, oldLogDB, oldMemory, oldRedis, oldRetry := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes
+	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+	oldConsume, oldExport, oldBatch, oldErrorLog := common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled, constant.ErrorLogEnabled
 	oldSetting, oldPrices := *operation_setting.GetVideoSchedulingSetting(), ratio_setting.ModelPrice2JSONString()
 	oldGroupRatios := ratio_setting.GroupRatio2JSONString()
 	t.Cleanup(func() {
-		model.DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes = oldDB, oldMemory, oldRedis, oldRetry
-		common.LogConsumeEnabled, constant.ErrorLogEnabled = oldConsume, oldErrorLog
+		model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes = oldDB, oldLogDB, oldMemory, oldRedis, oldRetry
+		common.SetDatabaseTypes(oldMain, oldLog)
+		common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled, constant.ErrorLogEnabled = oldConsume, oldExport, oldBatch, oldErrorLog
 		*operation_setting.GetVideoSchedulingSetting() = oldSetting
 		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices))
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldGroupRatios))
 	})
-	model.DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes = database, true, false, 0
-	common.LogConsumeEnabled, constant.ErrorLogEnabled = false, false
+	model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes = database, database, true, false, 0
+	common.SetDatabaseTypes(dialect, dialect)
+	common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled, constant.ErrorLogEnabled = true, false, false, false
 	s := operation_setting.GetVideoSchedulingSetting()
 	s.Mode, s.SelectionPolicy, s.WindowSeconds = "on", videosched.PolicyStabilityCostV2, 1800
 	s.MinSamples, s.MinGenRate, s.MinOverallRate, s.MinMarginRate = 20, .8, .6, .1
 	s.QualificationTTLSeconds, s.ValidationPeriodSeconds = 86400, 604800
 	s.ExploreMaxInFlight, s.ExploreShare, s.ProbeRatio = 1, 0, 0
+	s.AuditEnabled = false
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"admission-model":2}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"conflict_then_success":1,"conflict_budget":1,"storage_error":1,"outcome_unknown":1}`))
-	require.NoError(t, database.Create(&model.User{Id: 1, Username: "admission-fixture", Quota: int(20 * common.QuotaPerUnit)}).Error)
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"normal_refresh_one_channel":1,"normal_refresh_two_channels":1,"conflict_then_success":1,"conflict_budget":1,"storage_error":1,"outcome_unknown":1,"sent_failure_then_success":1}`))
 	plugin, err := pluginruntime.DefaultRegistry.Register(`
 export const meta = {apiVersion:1,key:"admission-loop-test",name:"Admission loop",version:"1.0.0",author:{name:"Test"},models:["admission-model"],fetchMode:"per_task"};
 export function buildSubmitRequest(ctx) { return {url:ctx.baseUrl+"/submit",body:ctx.requestBody}; }
@@ -1172,21 +1178,47 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 
 	for caseIndex, tc := range []struct {
 		name      string
+		channels  int
+		normal    bool
 		conflicts int
 		wantCalls int
 		wantSent  int64
 		wantCode  string
 	}{
-		{"conflict_then_success", 1, 2, 1, ""},
-		{"conflict_budget", 4, 3, 0, "video_health_admission_conflict"},
-		{"storage_error", 0, 1, 0, "video_health_unavailable"},
-		{"outcome_unknown", 0, 1, 1, "do_request_failed"},
+		{"normal_refresh_one_channel", 1, true, 1, 2, 1, ""},
+		{"normal_refresh_two_channels", 2, true, 1, 2, 1, ""},
+		{"conflict_then_success", 1, false, 1, 2, 1, ""},
+		{"conflict_budget", 1, false, 4, 3, 0, "video_health_admission_conflict"},
+		{"storage_error", 1, false, 0, 1, 0, "video_health_unavailable"},
+		{"outcome_unknown", 1, false, 1, 2, 1, "do_request_failed"},
+		{"sent_failure_then_success", 2, true, 1, 3, 2, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			initialQuota, wantQuota := common.QuotaRound(20*common.QuotaPerUnit), common.QuotaRound(2*common.QuotaPerUnit)
+			user := model.User{Username: tc.name, AffCode: fmt.Sprintf("admit-%d", caseIndex), Quota: initialQuota}
+			require.NoError(t, database.Create(&user).Error)
+			token := model.Token{UserId: user.Id, Name: "admission fixture", Key: fmt.Sprintf("admission-fixture-%d", caseIndex), RemainQuota: initialQuota}
+			require.NoError(t, database.Create(&token).Error)
+			refunded := make(chan struct{}, 1)
+			callback := fmt.Sprintf("test:admission-refund-%d", caseIndex)
+			require.NoError(t, database.Callback().Update().After("gorm:commit_or_rollback_transaction").Register(callback, func(tx *gorm.DB) {
+				if tx.Error == nil && strings.Contains(tx.Statement.SQL.String(), "remain_quota +") {
+					refunded <- struct{}{}
+				}
+			}))
+			defer func() { require.NoError(t, database.Callback().Update().Remove(callback)) }()
+			common.RetryTimes = 0
+			if tc.name == "sent_failure_then_success" {
+				common.RetryTimes = 1
+			}
 			var sent atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
-				sent.Add(1)
+				transmissions := sent.Add(1)
+				if tc.name == "sent_failure_then_success" && transmissions == 1 {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 				if tc.name == "outcome_unknown" {
 					conn, _, hijackErr := w.(http.Hijacker).Hijack()
 					if hijackErr == nil {
@@ -1199,18 +1231,28 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 			}))
 			defer server.Close()
 			base := 31000 + caseIndex*10
-			for i := range 4 {
+			for i := range tc.channels {
 				priority, weight, autoBan := int64(4-i), uint(100), 0
 				binding := `{"task_plugin_key":"admission-loop-test"}`
 				channel := &model.Channel{Id: base + i, Type: constant.ChannelTypeTaskPlugin, Key: "test", BaseURL: &server.URL,
 					Status: common.ChannelStatusEnabled, Name: tc.name, Weight: &weight, Priority: &priority, AutoBan: &autoBan,
 					Models: "admission-model", Group: tc.name, Setting: &binding,
-					OtherSettings: `{"video_scheduling":{"quality":0.8,"models":{"admission-model":{"mode":"per_video","prices":{"*":1}}}}}`}
+					OtherSettings: `{"video_scheduling":{"quality":0.8,"capacity":1,"models":{"admission-model":{"mode":"per_video","prices":{"*":1}}}}}`}
 				require.NoError(t, database.Create(channel).Error)
 				require.NoError(t, channel.AddAbilities(database))
 			}
 			model.InitChannelCache()
 			service.RefreshVideoReliability(t.Context())
+			if tc.normal {
+				now := time.Now().Unix()
+				certificate, err := common.Marshal(videosched.ReliabilityEvidence{Version: 1, Source: "window", WindowSeconds: s.WindowSeconds,
+					BatchStart: now - 7200, BatchEnd: now - 5400, AsOf: now - 3600, ValidatedAt: now - 3600,
+					ExpiresAt: now + 86400, Submitted: 20, Accepted: 20, Succeeded: 20})
+				require.NoError(t, err)
+				require.NoError(t, database.Model(&model.VideoHealthState{}).Where("channel_id >= ? AND channel_id < ?", base, base+tc.channels).
+					Updates(map[string]any{"state": videosched.HealthNormal, "reason": "qualified", "qualification_json": string(certificate)}).Error)
+				service.RefreshVideoReliability(t.Context())
+			}
 			if tc.name == "storage_error" {
 				require.NoError(t, database.Callback().Create().Before("gorm:create").Register("test:health-journal-unavailable", func(tx *gorm.DB) {
 					if _, ok := tx.Statement.Dest.(*model.VideoHealthAttempt); ok {
@@ -1221,34 +1263,56 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 			}
 			c := taskSubmissionTestContext()
 			c.Set(common.RequestIdKey, tc.name)
+			c.Set("username", user.Username)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, tc.name)
 			c.Set("resolved_task_model", "admission-model")
 			c.Set("task_request", map[string]any{"prompt": "fixture"})
 			c.Set("expected_task_plugin_key", plugin.Meta.Key)
 			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: pluginruntime.DefaultRegistry.Generation(), Plugin: plugin})
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true})
 			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, s)
-			t.Cleanup(func() { service.FinishVideoReliabilityRequest(c, false) })
+			t.Cleanup(func() {
+				service.ReleaseUnpersistedVideoProbeLease(c)
+				service.FinishVideoReliabilityRequest(c, false)
+			})
 			first, _, selectErr := service.SelectChannelForRequest(c, "admission-model", &service.RetryParam{Ctx: c, TokenGroup: tc.name, ModelName: "admission-model", Retry: common.GetPointer(0)})
 			require.Nil(t, selectErr)
 			require.NotNil(t, first)
 			require.Nil(t, middleware.SetupContextForSelectedChannel(c, first, "admission-model"))
-			events := []string{}
-			billing := &taskSubmissionTestBilling{events: &events}
-			info := taskSubmissionRelayInfo(billing)
+			info := taskSubmissionRelayInfo(nil)
+			info.UserId, info.TokenId, info.TokenKey = user.Id, token.Id, token.Key
+			info.UserSetting.BillingPreference = "wallet_only"
 			info.ChannelMeta, info.LockedChannel = nil, nil
 			info.OriginModelName, info.TokenGroup, info.UsingGroup, info.UserGroup = "admission-model", tc.name, tc.name, "default"
 			info.PublicTaskID = "task_" + tc.name
-			info.UserQuota = int(20 * common.QuotaPerUnit)
+			info.UserQuota = initialQuota
 			calls := 0
 			outcome, taskErr := executeTaskSubmissionWith(c, info, func(c *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 				calls++
+				selected, err := model.CacheGetChannel(c.GetInt("channel_id"))
+				require.NoError(t, err)
+				health, err := service.GetVideoHealthView(selected, false)
+				require.NoError(t, err)
+				assert.Equal(t, 1, health.InFlight, "every reselection must acquire its own bounded capacity reservation")
+				if tc.normal {
+					assert.Zero(t, health.ValidationSlotsHeld)
+				} else {
+					assert.Equal(t, 1, health.ValidationSlotsHeld, "exploration must reacquire exactly one validation slot")
+				}
 				if calls <= tc.conflicts {
 					// Selection succeeded, but another node changed its state
 					// before the final durable fence and before HTTP transport.
-					require.NoError(t, database.Model(&model.VideoHealthState{}).Where("channel_id = ?", c.GetInt("channel_id")).Update("version", gorm.Expr("version + 1")).Error)
+					update := database.Model(&model.VideoHealthState{}).Where("channel_id = ?", selected.Id)
+					if tc.name == "normal_refresh_two_channels" {
+						update = database.Model(&model.VideoHealthState{}).Where("channel_id >= ? AND channel_id < ?", base, base+tc.channels)
+					}
+					require.NoError(t, update.Update("version", gorm.Expr("version + 1")).Error)
 				}
 				return relay.RelayTaskSubmit(c, info)
 			})
+			// Match Distribute's request cleanup before inspecting ownership.
+			service.ReleaseUnpersistedVideoProbeLease(c)
 			service.FinishVideoReliabilityRequest(c, false)
 			assert.Equal(t, tc.wantCalls, calls)
 			assert.Equal(t, tc.wantSent, sent.Load())
@@ -1259,42 +1323,93 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 				require.Nil(t, taskErr)
 				require.NotNil(t, outcome)
 				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), outcome.Task.Status)
-				require.Len(t, facts, 1)
+				require.Len(t, facts, int(tc.wantSent))
 				assert.Equal(t, 2, facts[0].AttemptSeq, "the rejected selection retains its sequence without a transport fact")
-				assert.Equal(t, "success", facts[0].FinalOutcome)
-				assert.Equal(t, []string{"reserve", "settle"}, events)
-				assert.Zero(t, billing.refunds)
+				assert.Equal(t, "success", facts[len(facts)-1].FinalOutcome)
+				if tc.name == "sent_failure_then_success" {
+					assert.Equal(t, "rejected", facts[0].SubmitOutcome)
+					assert.NotEqual(t, facts[0].ChannelID, facts[1].ChannelID, "a real upstream attempt remains excluded after an earlier local conflict")
+				}
 			} else {
 				require.NotNil(t, taskErr)
 				assert.Equal(t, tc.wantCode, taskErr.Code)
 				assert.Nil(t, outcome)
-				assert.Equal(t, []string{"refund"}, events)
+				select {
+				case <-refunded:
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "asynchronous admission failure refund did not finish")
+				}
 				if tc.name == "outcome_unknown" {
 					assert.ErrorIs(t, taskErr.Error, relaycommon.ErrTaskSubmitOutcomeUnknown)
 				}
 			}
+			var tasks []model.Task
+			var logs []model.Log
+			require.NoError(t, database.Where("user_id = ?", user.Id).Find(&tasks).Error)
+			require.NoError(t, database.Where("user_id = ?", user.Id).Find(&logs).Error)
+			charged := 0
+			if tc.wantCode == "" {
+				charged = wantQuota
+				require.Len(t, tasks, 1)
+				require.Len(t, logs, 1)
+				assert.Equal(t, wantQuota, tasks[0].Quota)
+				assert.Equal(t, wantQuota, logs[0].Quota)
+			} else {
+				assert.Empty(t, tasks)
+				assert.Empty(t, logs, "local conflicts and unknown receipt do not create consumption")
+			}
+			require.NoError(t, database.First(&user, user.Id).Error)
+			require.NoError(t, database.First(&token, token.Id).Error)
+			assert.Equal(t, initialQuota-charged, user.Quota)
+			assert.Equal(t, charged, user.UsedQuota)
+			assert.Equal(t, initialQuota-charged, token.RemainQuota)
+			assert.Equal(t, charged, token.UsedQuota)
 			records := service.VideoScheduleRecords(c)
 			require.Len(t, records, tc.wantCalls)
 			for i := range min(tc.conflicts, tc.wantCalls) {
 				assert.Equal(t, "admission_conflict", records[i].Admission)
 				assert.Equal(t, i+1, records[i].AttemptSeq)
-				channel, err := model.CacheGetChannel(records[i].Recommended)
-				require.NoError(t, err)
-				health, err := service.GetVideoHealthView(channel, false)
-				require.NoError(t, err)
-				assert.Zero(t, health.ValidationSlotsHeld, "an unsent conflict releases its validation reservation")
 			}
-			if tc.name == "outcome_unknown" {
-				channel, err := model.CacheGetChannel(records[0].Recommended)
+			if tc.wantCode == "" {
+				assert.Equal(t, records[0].Recommended, records[1].Recommended, "an unsent conflict can reselect the refreshed channel")
+			}
+			for i := range tc.channels {
+				channel, err := model.CacheGetChannel(base + i)
 				require.NoError(t, err)
 				health, err := service.GetVideoHealthView(channel, false)
 				require.NoError(t, err)
-				assert.Equal(t, 1, health.ValidationSlotsHeld, "an unknown upstream receipt retains its reservation")
+				if tc.name == "outcome_unknown" {
+					assert.Equal(t, 1, health.ValidationSlotsHeld, "an unknown upstream receipt retains its reservation")
+					assert.Equal(t, 1, health.InFlight, "unknown receipt must continue occupying capacity")
+				} else {
+					assert.Zero(t, health.ValidationSlotsHeld, "an unsent conflict or terminal task releases its validation reservation")
+					assert.Zero(t, health.InFlight, "an unsent conflict or terminal task releases its capacity reservation")
+				}
 			}
 			for _, event := range service.RequestPolicy(c).Events() {
 				if event.Attempt <= tc.conflicts && event.Decision.Action == "failure" {
 					assert.Equal(t, "local", event.ErrorSource)
 				}
+			}
+			if tc.name == "sent_failure_then_success" {
+				transmitted, err := model.CacheGetChannel(facts[0].ChannelID)
+				require.NoError(t, err)
+				// An earlier selection conflict can share a transport attempt's
+				// sequence; it is not proof that the attempt sent no bytes.
+				common.SetContextKey(c, constant.ContextKeyVideoSchedBoard, append(records, service.VideoScheduleRecord{
+					AttemptSeq: facts[0].AttemptSeq, Recommended: transmitted.Id, Admission: "admission_conflict",
+				}))
+				input := service.AssembleVideoDecision(c, s, tc.name, "admission-model", []*model.Channel{transmitted}, 1)
+				require.Len(t, input.Candidates, 1)
+				assert.Equal(t, "tried", input.Candidates[0].Excluded)
+				// A later confirmed local conflict on that channel must not erase
+				// the earlier transmission from the request's retry history.
+				service.RequestPolicy(c).BeginAttempt(transmitted, tc.name)
+				local := relaytypes.NewErrorWithStatusCode(errors.New("unsent admission conflict"), "video_health_admission_conflict", http.StatusServiceUnavailable)
+				service.RecordPolicyFailure(c, transmitted.Id, local, service.PolicyDecision{Action: "retry", Reason: "admission_conflict", Source: "video_scheduling"})
+				input = service.AssembleVideoDecision(c, s, tc.name, "admission-model", []*model.Channel{transmitted}, 1)
+				require.Len(t, input.Candidates, 1)
+				assert.Equal(t, "tried", input.Candidates[0].Excluded)
 			}
 		})
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -1368,6 +1369,14 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 		maps.Copy(a.requestHeaders, requestHeaders)
 		a.files = append(a.files[:0], files...)
 	}
+	salesSource := ""
+	if c != nil {
+		if _, unified := service.GetVideoSalesFacts(c); unified {
+			salesSource = billingexpr.SalesSourceVideoRequest
+		}
+	} else if info.TieredBillingSnapshot != nil {
+		salesSource = info.TieredBillingSnapshot.SalesSource
+	}
 	ctx := pluginruntime.BuildUsageContext(pluginruntime.UsageContext{
 		Route:         routeRequest,
 		Headers:       requestHeaders,
@@ -1375,6 +1384,7 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 		Action:        info.Action,
 		Model:         info.OriginModelName,
 		UpstreamModel: info.UpstreamModelName,
+		SalesSource:   salesSource,
 	})
 	ctx["originTaskId"] = info.OriginTaskID
 	if info.TaskRelayInfo != nil && len(info.OriginTasks) > 0 {

@@ -6,11 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -245,6 +248,102 @@ func videoScheduleAdminRequest(t *testing.T, handler gin.HandlerFunc, method, ta
 	var response map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
 	return response
+}
+
+func TestChannelVideoManualRecovery(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.VideoHealthState{}, &model.VideoHealthRegistration{}, &model.VideoHealthAttempt{}))
+	setting := operation_setting.GetVideoSchedulingSetting()
+	previous := *setting
+	t.Cleanup(func() { *setting = previous })
+	setting.Mode, setting.SelectionPolicy, setting.ProbeMaxInFlight = "on", videosched.PolicyStabilityCostV2, 1
+	channel := model.Channel{Id: 7801, Status: common.ChannelStatusEnabled, Models: "video", Key: "private-fixture-key", OtherSettings: `{"video_scheduling":{"models":{"video":{"mode":"per_video","prices":{"*":0.5}}}}}`}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.EnsureVideoHealthState(t.Context(), channel.Id, "video", channel.VideoHealthIdentity()))
+	require.NoError(t, model.DB.Model(&model.VideoHealthState{}).Where("channel_id = ?", channel.Id).Updates(map[string]any{"state": videosched.HealthBlocked, "reason": "new upstream failure", "blocked_at": time.Now().Unix()}).Error)
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"missing note", `{"model":"video","state_version":1}`},
+		{"blank note", `{"model":"video","state_version":1,"note":"  "}`},
+		{"missing version", `{"model":"video","note":"upstream repaired"}`},
+		{"too long", `{"model":"video","state_version":1,"note":"` + strings.Repeat("好", 501) + `"}`},
+		{"body limit", `{"model":"video","state_version":1,"note":"` + strings.Repeat("x", 16<<10) + `"}`},
+		{"stale version", `{"model":"video","state_version":99,"note":"upstream repaired"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := videoScheduleAdminRequest(t, RecoverChannelVideoHealth, http.MethodPost, "/api/channel/7801/video_health/recover", tc.body, gin.Param{Key: "id", Value: "7801"})
+			assert.Equal(t, false, response["success"])
+			var state model.VideoHealthState
+			require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&state).Error)
+			assert.EqualValues(t, 1, state.Version)
+		})
+	}
+	for _, mode := range []string{"off", "shadow"} {
+		setting.Mode = mode
+		_, err := service.RequestVideoHealthRecovery(t.Context(), channel.Id, "video", 1)
+		require.Error(t, err)
+	}
+	setting.Mode, setting.ProbeMaxInFlight = "on", 0
+	_, err := service.RequestVideoHealthRecovery(t.Context(), channel.Id, "video", 1)
+	require.Error(t, err)
+	setting.ProbeMaxInFlight = 1
+	note := strings.Repeat("😀", 500)
+	// ASCII-escaped surrogate pairs still represent 500 Unicode code points.
+	body := `{"model":"video","state_version":1,"note":" ` + strings.Repeat(`\ud83d\ude00`, 500) + ` "}`
+	response := videoScheduleAdminRequest(t, RecoverChannelVideoHealth, http.MethodPost, "/api/channel/7801/video_health/recover", body, gin.Param{Key: "id", Value: "7801"})
+	require.Equal(t, true, response["success"], response)
+	view := service.GetVideoReliability(channel.Id, "video")
+	require.NotNil(t, view)
+	assert.Equal(t, videosched.HealthBlocked, view.State)
+	assert.Equal(t, videosched.ReasonManualRecoveryRequested, view.Reason)
+	assert.EqualValues(t, 2, view.StateVersion)
+	var audit model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ?", "channel.video_recovery").First(&audit).Error)
+	assert.Equal(t, 1, audit.UserId)
+	assert.Equal(t, common.RoleRootUser, audit.ActorRole)
+	require.NotNil(t, audit.Other.Op)
+	paramsJSON, err := common.Marshal(audit.Other.Op.Params)
+	require.NoError(t, err)
+	var params struct{ Note, Model string }
+	require.NoError(t, common.Unmarshal(paramsJSON, &params))
+	assert.Equal(t, note, params.Note)
+	assert.Equal(t, "video", params.Model)
+	encoded, err := common.Marshal(audit)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), channel.Key)
+	response = videoScheduleAdminRequest(t, RecoverChannelVideoHealth, http.MethodPost, "/api/channel/7801/video_health/recover", body, gin.Param{Key: "id", Value: "7801"})
+	assert.Equal(t, false, response["success"], "replaying the previous version cannot trigger another recovery")
+	var audits int64
+	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("action = ?", "channel.video_recovery").Count(&audits).Error)
+	assert.EqualValues(t, 1, audits)
+
+	now := time.Now()
+	input := service.VideoDecisionInput{
+		Candidates: []videosched.Candidate{{ID: channel.Id, Quality: .8, Sell: videosched.SellPrice{Kind: videosched.SellKnown, USD: 1}, Spec: videosched.Spec{Tier: "*"}, Cost: videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": .5}}, Reliability: view}},
+		Policy:     videosched.Policy{SelectionPolicy: videosched.PolicyStabilityCostV2, MinMarginRate: .1, MinGenRate: .8, MinOverallRate: .6, MinSamples: 20, MaxCostUSD: 1000, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800},
+		Explore:    service.VideoExploreSettings{ProbeMaxInFlight: 1, ProbeCooldownSec: 300}, Now: now,
+	}
+	choice := service.DecideVideoSchedule(input)
+	require.NotNil(t, choice.Best, "manual request bypasses only the cooldown")
+	assert.Equal(t, "recover", choice.Flow)
+	input.SlotOccupancy = map[int]int{channel.Id: 1}
+	choice = service.DecideVideoSchedule(input)
+	assert.Nil(t, choice.Best)
+	assert.Equal(t, "validation_slots_full", choice.Reason)
+	input.SlotOccupancy = nil
+	input.Explore.ProbeMaxInFlight = 0
+	choice = service.DecideVideoSchedule(input)
+	assert.Nil(t, choice.Best)
+	assert.Equal(t, "recovery_disabled", choice.Reason)
+	input.Explore.ProbeMaxInFlight = 1
+	input.Candidates[0].Cost.Prices["*"] = 2
+	assert.Nil(t, service.DecideVideoSchedule(input).Best, "manual recovery cannot bypass the cost filter")
+	input.Candidates[0].Cost.Prices["*"] = .5
+	view.State, view.Reason = videosched.HealthRecovering, "recovery verification"
+	choice = service.DecideVideoSchedule(input)
+	assert.Nil(t, choice.Best)
+	assert.Equal(t, "recovery_cooldown", choice.Reason, "starting recovery consumes the bypass")
 }
 
 // The simulator runs a request through the same entry, assembly and decision

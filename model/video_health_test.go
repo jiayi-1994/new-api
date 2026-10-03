@@ -249,6 +249,47 @@ func TestVideoHealthDatabase(t *testing.T) {
 			ctx := context.Background()
 			p := videosched.Policy{MinSamples: 20, MinGenRate: .8, MinOverallRate: .6, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
 			const start int64 = 1800000000 // aligned to the ordinary 1800-second bucket
+			t.Run("capacity_owners_follow_durable_handoff", func(t *testing.T) {
+				t.Cleanup(func() {
+					require.NoError(t, db.Where("task_id LIKE ?", "capacity-owner-%").Delete(&Task{}).Error)
+					require.NoError(t, db.Where("request_id LIKE ?", "capacity-owner-%").Delete(&VideoHealthAttempt{}).Error)
+				})
+				for _, testCase := range []struct {
+					name, final       string
+					expires, reviewed int64
+					status            TaskStatus
+				}{
+					{name: "pending"},
+					{name: "unknown", final: "unknown", expires: start + 60},
+					{name: "reviewed", final: "unknown", expires: start + 60, reviewed: start - 1},
+					{name: "expired", final: "unknown", expires: start},
+					{name: "failed", final: "upstream"},
+					{name: "active", status: TaskStatusInProgress},
+					{name: "terminal", status: TaskStatusSuccess},
+				} {
+					attempt := VideoHealthAttempt{RequestID: "capacity-owner-" + testCase.name, AttemptSeq: 1,
+						ChannelID: 990, ModelName: "video", CapacityToken: testCase.name, CapacityGroup: "frozen-account",
+						FinalOutcome: testCase.final, CapacityExpires: testCase.expires, ReviewedAt: testCase.reviewed}
+					require.NoError(t, db.Create(&attempt).Error)
+					if testCase.status != "" {
+						task := Task{TaskID: attempt.RequestID, ChannelId: 990, Status: testCase.status, Progress: "20%",
+							VideoHealthAttemptID: &attempt.ID, Data: []byte(`{}`)}
+						task.PrivateData.SchedulingSummary = &TaskSchedulingSummary{Model: "video", CapacityToken: attempt.CapacityToken, CapacityGroup: "task-account"}
+						require.NoError(t, db.Create(&task).Error)
+					}
+				}
+				legacy := Task{TaskID: "capacity-owner-legacy", ChannelId: 991, Status: TaskStatusInProgress, Progress: "20%", Data: []byte(`{}`)}
+				legacy.PrivateData.SchedulingSummary = &TaskSchedulingSummary{Model: "video", CapacityGroup: "legacy-account"}
+				require.NoError(t, db.Create(&legacy).Error)
+				owners, err := ListVideoCapacityOwners(ctx, start)
+				require.NoError(t, err)
+				assert.ElementsMatch(t, []VideoCapacityOwner{
+					{Token: "pending", ChannelID: 990, Group: "frozen-account"},
+					{Token: "unknown", ChannelID: 990, Group: "frozen-account", ExpiresAt: start + 60},
+					{Token: "active", ChannelID: 990, Group: "task-account"},
+					{Token: fmt.Sprintf("task:%d", legacy.ID), ChannelID: 991, Group: "legacy-account"},
+				}, owners, "linked tasks replace attempts; reviewed, expired and terminal work owns no capacity")
+			})
 			t.Run("upstream_configuration_fences_evidence_and_transport", func(t *testing.T) {
 				channel := Channel{Id: 901, Key: "fixture", Models: "video", BaseURL: common.GetPointer("https://old.example")}
 				require.NoError(t, db.Create(&channel).Error)
@@ -285,6 +326,128 @@ func TestVideoHealthDatabase(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, facts, 1)
 				assert.Equal(t, "unknown", facts[0].FinalOutcome, "historical facts are retained")
+			})
+			t.Run("manual_recovery_requires_fresh_evidence", func(t *testing.T) {
+				channel := Channel{Id: 903, Key: "fixture", Models: "video", Status: common.ChannelStatusEnabled,
+					OtherSettings: `{"video_scheduling":{"quality":0.9,"capacity":2,"models":{"video":{"mode":"per_video","prices":{"*":0.5}}}}}`}
+				require.NoError(t, db.Create(&channel).Error)
+				identity := channel.VideoHealthIdentity()
+				require.NoError(t, EnsureVideoHealthState(ctx, channel.Id, "video", identity))
+				old := VideoHealthAttempt{RequestID: "manual-old-pending", AttemptSeq: 1, ChannelID: channel.Id, ModelName: "video", ConfigIdentity: identity, StartedAt: start + 1, WindowSeconds: 1800, Flow: "recover"}
+				require.NoError(t, BeginVideoHealthAttempt(ctx, &old, false))
+				certificate := videosched.ReliabilityEvidence{Version: 1, Source: "window", BatchStart: start - 3600, BatchEnd: start - 1800, WindowSeconds: 1800, AsOf: start - 60, ValidatedAt: start - 60, ExpiresAt: start + 86400, Submitted: 20, Accepted: 20, Succeeded: 20}
+				encoded, err := marshalVideoHealthEvidence(certificate)
+				require.NoError(t, err)
+				require.NoError(t, db.Model(&VideoHealthState{}).Where("channel_id = ?", channel.Id).Updates(map[string]any{
+					"state": videosched.HealthBlocked, "reason": "new upstream failure", "blocked_at": start + 80, "last_validation_at": start + 90, "probe_failures": 3,
+					"qualification_json": encoded, "current_json": encoded, "recovery_json": encoded, "config_version": 1,
+					"recovery_started": start, "recovery_expires": start + 3600, "validation_started": start, "validation_expires": start + 3600, "cohort_end": start + 1800, "next_refresh_at": start + 200,
+				}).Error)
+				var before VideoHealthState
+				require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&before).Error)
+				requested, err := RequestVideoHealthRecovery(ctx, channel.Id, "video", before.Version)
+				require.NoError(t, err)
+				view, err := requested.Snapshot()
+				require.NoError(t, err)
+				assert.Equal(t, videosched.HealthBlocked, view.State)
+				assert.Equal(t, videosched.ReasonManualRecoveryRequested, view.Reason)
+				assert.NotEmpty(t, view.NormalReason(p, start+100), "an operator cannot issue a normal qualification")
+				assert.Equal(t, &certificate, view.Qualification)
+				assert.Nil(t, view.Current)
+				assert.Nil(t, view.Recovery)
+				assert.Equal(t, before.Version+1, requested.Version)
+				assert.Equal(t, before.ValidationRound+1, requested.ValidationRound)
+				assert.Equal(t, before.ConfigVersion, requested.ConfigVersion)
+				assert.Equal(t, before.BlockedAt, requested.BlockedAt)
+				assert.Equal(t, before.LastValidationAt, requested.LastValidationAt)
+				assert.Equal(t, before.ProbeFailures, requested.ProbeFailures)
+				assert.Zero(t, requested.RecoveryStarted)
+				assert.Zero(t, requested.RecoveryExpires)
+				assert.Zero(t, requested.ValidationStarted)
+				assert.Zero(t, requested.ValidationExpires)
+				assert.Zero(t, requested.CohortEnd)
+				assert.Zero(t, requested.NextRefreshAt)
+				_, err = RequestVideoHealthRecovery(ctx, channel.Id, "video", before.Version)
+				require.ErrorIs(t, err, ErrVideoHealthStateChanged)
+				_, err = RequestVideoHealthRecovery(ctx, channel.Id, "video", requested.Version)
+				require.ErrorIs(t, err, ErrVideoHealthStateChanged, "a repeated click cannot reset a pending round")
+				stale := VideoHealthAttempt{RequestID: "manual-stale-admission", AttemptSeq: 1, ChannelID: channel.Id, ModelName: "video", ConfigIdentity: identity, StartedAt: start + 101, WindowSeconds: 1800, StateVersion: before.Version, Flow: "normal"}
+				require.ErrorIs(t, BeginVideoHealthAttempt(ctx, &stale, true), ErrVideoHealthStateChanged)
+				require.NoError(t, ObserveVideoHealthAttempt(ctx, old.RequestID, 1, nil, "accepted", "success", "success", start+102))
+				var afterOld VideoHealthState
+				require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&afterOld).Error)
+				assert.Equal(t, before.ProbeFailures, afterOld.ProbeFailures, "an older recovery round cannot reset failures")
+				assert.Equal(t, videosched.ReasonManualRecoveryRequested, afterOld.Reason)
+				version, err := StartVideoHealthRecovery(ctx, channel.Id, "video", requested.Version, start+103, p.ValidationPeriodSeconds)
+				require.NoError(t, err)
+				for i := range 20 {
+					at := start + 200 + int64(i)
+					if i == 19 {
+						view, err = RefreshVideoHealthState(ctx, channel.Id, "video", p, start+1801)
+						require.NoError(t, err)
+						assert.Equal(t, videosched.HealthRecovering, view.State, "19 new successes plus an old completion must not qualify")
+						assert.Equal(t, &certificate, view.Qualification)
+						require.NotNil(t, view.Current)
+						assert.EqualValues(t, 19, view.Current.Succeeded)
+						at = start + 1810
+					}
+					attempt := VideoHealthAttempt{RequestID: fmt.Sprintf("manual-fresh-%d", i), AttemptSeq: 1, ChannelID: channel.Id, ModelName: "video", ConfigIdentity: identity, StartedAt: at, WindowSeconds: 1800, StateVersion: version, Flow: "recover", ValidationLimit: 1, SlotKey: "manual-recovery-slot", SlotToken: fmt.Sprintf("manual-owner-%d", i), SlotExpires: at + 3600}
+					require.NoError(t, BeginVideoHealthAttempt(ctx, &attempt, true))
+					require.NoError(t, ObserveVideoHealthAttempt(ctx, attempt.RequestID, 1, nil, "accepted", "success", "success", at+1))
+				}
+				view, err = RefreshVideoHealthState(ctx, channel.Id, "video", p, start+3601)
+				require.NoError(t, err)
+				assert.Equal(t, videosched.HealthNormal, view.State)
+				require.NotNil(t, view.Qualification)
+				assert.Equal(t, "recovery", view.Qualification.Source)
+				assert.EqualValues(t, 20, view.Qualification.Succeeded)
+				facts, err := ListVideoHealthAttempts(ctx, old.RequestID)
+				require.NoError(t, err)
+				require.Len(t, facts, 1)
+				assert.Equal(t, "success", facts[0].FinalOutcome, "historical attempts remain available")
+			})
+			t.Run("manual_recovery_rejects_unsafe_state", func(t *testing.T) {
+				for i, scenario := range []string{"disabled_channel", "missing_config", "missing_model", "changed_identity", "unverified", "recovering", "uncertain", "invalid_snapshot", "unknown_previous_round", "missing_previous_round"} {
+					t.Run(scenario, func(t *testing.T) {
+						channel := Channel{Id: 910 + i, Key: "fixture", Models: "video", Status: common.ChannelStatusEnabled,
+							OtherSettings: `{"video_scheduling":{"quality":0.9,"capacity":2,"models":{"video":{"mode":"per_video","prices":{"*":0.5}}}}}`}
+						require.NoError(t, db.Create(&channel).Error)
+						identity := channel.VideoHealthIdentity()
+						require.NoError(t, EnsureVideoHealthState(ctx, channel.Id, "video", identity))
+						updates := map[string]any{"state": videosched.HealthBlocked, "validation_round": 5, "version": 3, "config_version": 1}
+						switch scenario {
+						case "disabled_channel":
+							require.NoError(t, db.Model(&channel).Update("status", common.ChannelStatusManuallyDisabled).Error)
+						case "missing_config":
+							require.NoError(t, db.Model(&channel).Update("settings", "{}").Error)
+						case "missing_model":
+							require.NoError(t, db.Model(&channel).Update("models", "other-video").Error)
+						case "changed_identity":
+							require.NoError(t, db.Model(&channel).Update("key", "updated-fixture").Error)
+						case "unverified", "recovering":
+							updates["state"] = scenario
+						case "uncertain":
+							updates["integrity"] = "uncertain"
+						case "invalid_snapshot":
+							updates["qualification_json"] = `{}`
+						case "unknown_previous_round", "missing_previous_round":
+							attempt := VideoHealthAttempt{RequestID: scenario, AttemptSeq: 1, ChannelID: channel.Id, ModelName: "video", ConfigIdentity: identity, StateVersion: 1, ValidationRound: 1, StartedAt: start + 1, WindowSeconds: 1800, FinalOutcome: "unknown"}
+							if scenario == "missing_previous_round" {
+								attempt.FinalOutcome, attempt.Missing = "", true
+							}
+							require.NoError(t, db.Create(&attempt).Error)
+						}
+						require.NoError(t, db.Model(&VideoHealthState{}).Where("channel_id = ?", channel.Id).Updates(updates).Error)
+						var before VideoHealthState
+						require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&before).Error)
+						result, err := RequestVideoHealthRecovery(ctx, channel.Id, "video", before.Version)
+						require.Error(t, err)
+						assert.Nil(t, result)
+						var after VideoHealthState
+						require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&after).Error)
+						assert.Equal(t, before, after, "a rejected request cannot alter health evidence")
+					})
+				}
 			})
 			t.Run("reviewed_unknown_requires_fresh_recovery_and_preserves_audit", func(t *testing.T) {
 				require.NoError(t, EnsureVideoHealthState(ctx, 902, "video"))

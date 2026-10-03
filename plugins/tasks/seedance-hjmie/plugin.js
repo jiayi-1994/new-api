@@ -4,7 +4,7 @@ const MODELS = ["videos-mini", "videos-fast", "videos-standard"];
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
 const RATIOS = ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"];
 const ALLOWED_FIELDS = [
-  "model", "prompt", "seconds", "duration", "size", "video_size",
+  "model", "prompt", "seconds", "duration", "size", "video_size", "n",
   "resolution", "video_resolution", "ratio", "aspect_ratio", "aspectRatio",
   "images", "videos", "audios", "referenceImages", "referenceVideos",
   "referenceAudios", "reference_images", "reference_videos",
@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.3",
+  version: "1.0.4",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -163,6 +163,7 @@ function decodedFields(body) {
 
 function normalize(ctx) {
   const input = decodedFields(ctx.body);
+  if (has(input, "n") && input.n !== 1 && input.n !== "1") throw new Error("n must be 1");
   for (const name of Object.keys(input)) {
     if (!ALLOWED_FIELDS.includes(name)) throw new Error("unsupported video parameter: " + name);
   }

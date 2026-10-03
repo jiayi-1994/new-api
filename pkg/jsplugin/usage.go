@@ -28,6 +28,7 @@ type UsageContext struct {
 	Model         string // client-facing model
 	UpstreamModel string // after channel model_mapping
 	UsagePurpose  string // facts | billing_ratios | spec; omitted when empty
+	SalesSource   string // host-owned frozen sale; omitted for plugin usage pricing
 }
 
 // BuildUsageContext renders the hook argument for u. The request body is
@@ -42,6 +43,9 @@ func BuildUsageContext(u UsageContext) map[string]any {
 	ctx["upstreamModel"] = u.UpstreamModel
 	if u.UsagePurpose != "" {
 		ctx["usagePurpose"] = u.UsagePurpose
+	}
+	if u.SalesSource != "" {
+		ctx["salesSource"] = u.SalesSource
 	}
 	return ctx
 }

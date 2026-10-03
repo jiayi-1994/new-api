@@ -14,10 +14,13 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/plugins"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -499,6 +502,140 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			assert.Equal(t, snap.EstimatedQuotaAfterGroup, result.ActualQuotaAfterGroup)
 			assert.Equal(t, "720p", result.MatchedTier)
 			assert.Equal(t, snap.UsageFacts, usage)
+		})
+	}
+}
+
+func TestUnifiedVideoSaleMapsAcrossPluginBillingUnits(t *testing.T) {
+	saveBillingConfig(t)
+	service.InitHttpClient()
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = previousRedis })
+	source, err := plugins.Source("pidoi")
+	require.NoError(t, err)
+	registry := pluginruntime.NewRegistry()
+	plugin, err := registry.Register(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	const publicModel = "sd-2.5-720p-pro"
+	const mapping = `{"sd-2.5-720p-pro":"jiuyue111"}`
+	for _, unified := range []bool{false, true} {
+		t.Run(strconv.FormatBool(unified), func(t *testing.T) {
+			requests := make(chan map[string]any, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := common.DecodeJson(r.Body, &body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				requests <- body
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"pidoi-mock-task","status":"queued"}`))
+			}))
+			defer upstream.Close()
+			c, info := newTaskSubmitContext(t, publicModel, mapping)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+			common.SetContextKey(c, constant.ContextKeyChannelKey, "fixture-only-key")
+			info.OriginModelName = publicModel
+			info.UserGroup, info.UsingGroup, info.TokenGroup = "default", "default", "default"
+			c.Set("group", "default")
+			// A client-supplied field must never grant the host's exemption.
+			request := map[string]any{"prompt": "cat", "seconds": float64(5), "resolution": "720p", "salesSource": "video_request"}
+			c.Set("task_request", request)
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+			if unified {
+				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: publicModel, Seconds: 5, Resolution: "720p", USDPerSecond: 0.02})
+			}
+			channel := &model.Channel{Id: 8751, Models: publicModel, Status: common.ChannelStatusEnabled, ModelMapping: common.GetPointer(mapping),
+				OtherSettings: `{"video_scheduling":{"models":{"sd-2.5-720p-pro":{"mode":"per_video","prices":{"720p":0.01}}}}}`}
+			setting := *operation_setting.GetVideoSchedulingSetting()
+			setting.SelectionPolicy = ""
+			common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, &setting)
+			decision := service.AssembleVideoDecision(c, &setting, "default", publicModel, []*model.Channel{channel}, 1)
+			require.Len(t, decision.Candidates, 1)
+			candidate := decision.Candidates[0]
+			if unified {
+				require.Empty(t, candidate.Excluded)
+				assert.Equal(t, "jiuyue111", candidate.MappedModel)
+				assert.Equal(t, float64(5), *candidate.Spec.OutputSeconds)
+				assert.Equal(t, "720p", candidate.Spec.Tier)
+			} else {
+				assert.Contains(t, candidate.Excluded, "model mapping cannot change billing unit")
+			}
+			c.Set(pluginruntime.ContextKeyPinnedEndpoint, pluginruntime.PinnedEndpoint{Generation: registry.Generation(), Plugin: plugin, Protocol: "openai_video", Operation: pluginruntime.HostProtocolOperation{Name: "create"}, Model: publicModel})
+			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true})
+			info.Billing = &imageReservation{limit: 1 << 30}
+			submission, taskErr := RelayTaskSubmit(c, info)
+			if !unified {
+				require.NotNil(t, taskErr)
+				assert.Equal(t, "plugin_request_invalid", taskErr.Code)
+				assert.Contains(t, taskErr.Message, "model mapping cannot change billing unit")
+				assert.Nil(t, info.TieredBillingSnapshot)
+				assert.Empty(t, requests)
+				return
+			}
+			require.Nil(t, taskErr, "submission error: %+v", taskErr)
+			require.NotNil(t, submission)
+			assert.Equal(t, "pidoi-mock-task", submission.UpstreamTaskID)
+			require.Len(t, requests, 1)
+			assert.Equal(t, map[string]any{"model": "jiuyue111", "prompt": "cat", "seconds": "5", "resolution": "720p"}, <-requests)
+			require.NotNil(t, info.TieredBillingSnapshot, "submission error: %+v", taskErr)
+			assert.Equal(t, "jiuyue111", info.UpstreamModelName)
+			assert.Equal(t, common.QuotaRound(0.1*common.QuotaPerUnit), info.PriceData.Quota)
+			result, usage, err := service.EvaluateTaskCompletionUsage(info.TieredBillingSnapshot, map[string]any{"requests": float64(1)})
+			require.NoError(t, err)
+			assert.Equal(t, info.PriceData.Quota, result.ActualQuotaAfterGroup)
+			assert.Equal(t, float64(5), usage["seconds"])
+		})
+	}
+}
+
+func TestUnifiedVideoCandidatesPreserveReferenceAliases(t *testing.T) {
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = previousRedis })
+	source, err := plugins.Source("meaicc")
+	require.NoError(t, err)
+	registry := pluginruntime.NewRegistry()
+	plugin, err := registry.Register(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	const mapping = `{"unified-media":"sd-2-c4"}`
+	for _, tc := range []struct{ field, kind, mediaType string }{
+		{"image", "image", "reference_image"},
+		{"video_url", "video", "reference_video"},
+		{"input_video", "video", "reference_video"},
+		{"audio_url", "audio", "reference_voice"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			c, _ := newTaskSubmitContext(t, "unified-media", mapping)
+			value := map[string]any{"model": "unified-media", "prompt": "cat", "seconds": 5, "resolution": "720p", tc.field: "https://cdn.example/reference"}
+			decoded, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+				"model": "unified-media", "body": map[string]any{"kind": "json", "value": value},
+			})
+			require.NoError(t, err)
+			request := decoded.(map[string]any)["requestBody"]
+			c.Set("task_request", request)
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+			service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "unified-media", Seconds: 5, Resolution: "720p", USDPerSecond: 0.02})
+			channel := &model.Channel{Id: 8752, Models: "unified-media", Status: common.ChannelStatusEnabled, ModelMapping: common.GetPointer(mapping),
+				OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{"unified-media":{"mode":"per_video","prices":{"720p":0.01},"references":{%q:{"*":{"mode":"per_input","value":0.02}}}}}}}`, tc.kind)}
+			setting := *operation_setting.GetVideoSchedulingSetting()
+			setting.SelectionPolicy = ""
+			decision := service.AssembleVideoDecision(c, &setting, "default", "unified-media", []*model.Channel{channel}, 1)
+			require.Len(t, decision.Candidates, 1)
+			candidate := decision.Candidates[0]
+			require.Empty(t, candidate.Excluded)
+			assert.Equal(t, 1, candidate.Spec.References[tc.kind])
+			quote := videosched.Quote(candidate.Cost, candidate.Spec)
+			require.Empty(t, quote.Reason)
+			assert.InDelta(t, 0.03, quote.TotalUSD, 1e-12, "the reference must contribute to the purchase quote")
+			built, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+				"model": "unified-media", "upstreamModel": "sd-2-c4", "requestBody": request, "baseUrl": "https://upstream.example", "apiKey": "fixture-only-key",
+			})
+			require.NoError(t, err)
+			body := built.(map[string]any)["body"].(map[string]any)
+			media := body["input"].(map[string]any)["media"]
+			assert.Equal(t, []any{map[string]any{"type": tc.mediaType, "url": "https://cdn.example/reference"}}, media)
 		})
 	}
 }

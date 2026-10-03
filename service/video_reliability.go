@@ -49,6 +49,10 @@ type videoHealthAdmission struct {
 func BindVideoHealthChannel(c *gin.Context, channel *model.Channel, modelName string) {
 	d := VideoSchedDecisionFrom(c)
 	if d.Takeover || d.Shadow {
+		if d.Shadow {
+			c.Set(videoCapacityOwnershipKey, nil)
+		}
+		freezeVideoCapacityOwnership(c, channel)
 		c.Set("video_health_channel", videoHealthAdmission{ChannelID: channel.Id, Model: videoHealthModelName(channel, modelName), Identity: channel.VideoHealthIdentity()})
 	}
 }
@@ -180,9 +184,11 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	stopVideoHealthSubmissionOwner(c)
 	s := frozenVideoSetting(c)
 	strict := decision.Takeover && s.SelectionPolicy == videosched.PolicyStabilityCostV2
+	reservation, _ := common.GetContextKeyType[*videoCapacityReservation](c, videoCapacityReservationKey)
+	requireJournal := strict || reservation != nil
 	channel, bound := common.GetContextKeyType[videoHealthAdmission](c, "video_health_channel")
 	if !bound || channel.ChannelID != info.GetChannelID() || channel.Identity == "" {
-		if strict {
+		if requireJournal {
 			return ErrVideoHealthAdmission
 		}
 		return nil
@@ -215,6 +221,15 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 	defer cancel()
+	if reservation != nil {
+		if reservation.ChannelID != attempt.ChannelID {
+			return ErrVideoHealthAdmission
+		}
+		if err := reservation.store.renewCapacity(ctx, reservation.Keys, reservation.Token, time.Now().Add(videoSubmissionLeaseTTL).UnixMilli()); err != nil {
+			return fmt.Errorf("%w: %w", ErrVideoHealthAdmission, err)
+		}
+		attempt.CapacityToken, attempt.CapacityGroup, attempt.CapacityHoldSeconds = reservation.Token, reservation.Group, reservation.HoldSeconds
+	}
 	if strict && flow != "normal" {
 		owned := false
 		if attempt.SlotKey != "" && attempt.SlotExpires > time.Now().Unix() {
@@ -238,6 +253,9 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	if !strict {
 		if err := model.EnsureVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName, attempt.ConfigIdentity); err != nil {
 			videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
+			if requireJournal {
+				return fmt.Errorf("%w: %w", ErrVideoHealthAdmission, err)
+			}
 			return nil
 		}
 	}
@@ -250,7 +268,7 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 		} else {
 			videoReliabilityWriteFailed(attempt.ChannelID, attempt.ModelName, err)
 		}
-		if strict {
+		if requireJournal {
 			return fmt.Errorf("%w: %w", ErrVideoHealthAdmission, err)
 		}
 		return nil

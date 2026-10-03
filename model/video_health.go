@@ -45,37 +45,41 @@ type VideoHealthRegistration struct {
 // VideoHealthAttempt is a small durable journal of actual transport attempts.
 // It contains no prompt, upstream response, credentials, or free-form errors.
 type VideoHealthAttempt struct {
-	ValidationLimit    int    `json:"-" gorm:"-"`
-	RequestStartedAt   int64  `json:"-" gorm:"-"`
-	Mode               string `json:"mode" gorm:"type:varchar(16)"`
-	SelectionPolicy    string `json:"selection_policy" gorm:"type:varchar(32)"`
-	ID                 int64  `json:"id" gorm:"primaryKey"`
-	RequestID          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex:idx_vh_attempt,priority:1"`
-	AttemptSeq         int    `json:"attempt_seq" gorm:"uniqueIndex:idx_vh_attempt,priority:2"`
-	ChannelID          int    `json:"channel_id" gorm:"index:idx_vh_cohort,priority:1;index:idx_vh_round,priority:1"`
-	ModelName          string `json:"model" gorm:"type:varchar(191);index:idx_vh_cohort,priority:2;index:idx_vh_round,priority:2"`
-	ActualGroup        string `json:"group" gorm:"type:varchar(64)"`
-	StartedAt          int64  `json:"started_at" gorm:"index;index:idx_vh_round,priority:4"`
-	BatchStart         int64  `json:"batch_start" gorm:"index:idx_vh_cohort,priority:3"`
-	WindowSeconds      int    `json:"window_seconds"`
-	StateVersion       int64  `json:"state_version"`
-	ConfigIdentity     string `json:"-" gorm:"type:varchar(64)"`
-	ValidationRound    int64  `json:"validation_round" gorm:"index:idx_vh_round,priority:3"`
-	Flow               string `json:"flow" gorm:"type:varchar(16)"`                                          // normal | explore | probe | shadow | weighted
-	SubmitOutcome      string `json:"submit_outcome" gorm:"type:varchar(16)"`                                // dispatching | accepted | rejected | unknown
-	FinalOutcome       string `json:"final_outcome" gorm:"type:varchar(16);index:idx_vh_pending,priority:1"` // success | upstream | user | cancelled | unknown
-	Attribution        string `json:"attribution" gorm:"type:varchar(32)"`
-	TaskPK             *int64 `json:"task_pk" gorm:"index:idx_vh_pending,priority:2"`
-	FinishedAt         int64  `json:"finished_at"`
-	Missing            bool   `json:"missing"`
-	ReviewedAt         int64  `json:"reviewed_at"`
-	ReviewedBy         int    `json:"reviewed_by"`
-	ReviewNote         string `json:"review_note" gorm:"type:text"`
-	SlotKey            string `json:"-" gorm:"type:varchar(128)"`
-	SlotToken          string `json:"-" gorm:"type:varchar(64)"`
-	SlotExpires        int64  `json:"-" gorm:"index"`
-	SubmitOwner        string `json:"-" gorm:"type:varchar(64)"`
-	SubmitLeaseExpires int64  `json:"-"`
+	ValidationLimit     int    `json:"-" gorm:"-"`
+	RequestStartedAt    int64  `json:"-" gorm:"-"`
+	Mode                string `json:"mode" gorm:"type:varchar(16)"`
+	SelectionPolicy     string `json:"selection_policy" gorm:"type:varchar(32)"`
+	ID                  int64  `json:"id" gorm:"primaryKey"`
+	RequestID           string `json:"request_id" gorm:"type:varchar(64);uniqueIndex:idx_vh_attempt,priority:1"`
+	AttemptSeq          int    `json:"attempt_seq" gorm:"uniqueIndex:idx_vh_attempt,priority:2"`
+	ChannelID           int    `json:"channel_id" gorm:"index:idx_vh_cohort,priority:1;index:idx_vh_round,priority:1"`
+	ModelName           string `json:"model" gorm:"type:varchar(191);index:idx_vh_cohort,priority:2;index:idx_vh_round,priority:2"`
+	ActualGroup         string `json:"group" gorm:"type:varchar(64)"`
+	StartedAt           int64  `json:"started_at" gorm:"index;index:idx_vh_round,priority:4"`
+	BatchStart          int64  `json:"batch_start" gorm:"index:idx_vh_cohort,priority:3"`
+	WindowSeconds       int    `json:"window_seconds"`
+	StateVersion        int64  `json:"state_version"`
+	ConfigIdentity      string `json:"-" gorm:"type:varchar(64)"`
+	ValidationRound     int64  `json:"validation_round" gorm:"index:idx_vh_round,priority:3"`
+	Flow                string `json:"flow" gorm:"type:varchar(16)"`                                          // normal | explore | probe | shadow | weighted
+	SubmitOutcome       string `json:"submit_outcome" gorm:"type:varchar(16)"`                                // dispatching | accepted | rejected | unknown
+	FinalOutcome        string `json:"final_outcome" gorm:"type:varchar(16);index:idx_vh_pending,priority:1"` // success | upstream | user | cancelled | unknown
+	Attribution         string `json:"attribution" gorm:"type:varchar(32)"`
+	TaskPK              *int64 `json:"task_pk" gorm:"index:idx_vh_pending,priority:2"`
+	FinishedAt          int64  `json:"finished_at"`
+	Missing             bool   `json:"missing"`
+	ReviewedAt          int64  `json:"reviewed_at"`
+	ReviewedBy          int    `json:"reviewed_by"`
+	ReviewNote          string `json:"review_note" gorm:"type:text"`
+	SlotKey             string `json:"-" gorm:"type:varchar(128)"`
+	SlotToken           string `json:"-" gorm:"type:varchar(64)"`
+	SlotExpires         int64  `json:"-" gorm:"index"`
+	SubmitOwner         string `json:"-" gorm:"type:varchar(64)"`
+	SubmitLeaseExpires  int64  `json:"-"`
+	CapacityToken       string `json:"-" gorm:"type:varchar(64)"`
+	CapacityGroup       string `json:"-" gorm:"type:varchar(64)"`
+	CapacityHoldSeconds int64  `json:"-"`
+	CapacityExpires     int64  `json:"-"`
 }
 
 // VideoHealthRequest keeps the separate user-facing request denominator,
@@ -443,6 +447,9 @@ func observeVideoHealthAttempt(tx *gorm.DB, requestID string, attemptSeq int, ta
 	changed := finalOutcome != "" && (attempt.FinalOutcome == "" || attempt.FinalOutcome == "unknown" && taskPK != nil && submitOutcome == "accepted" && finalOutcome != "unknown")
 	if changed {
 		updates["final_outcome"], updates["attribution"], updates["finished_at"] = finalOutcome, attribution, now
+		if finalOutcome == "unknown" && attempt.CapacityToken != "" {
+			updates["capacity_expires"] = now + attempt.CapacityHoldSeconds
+		}
 		if expireOnly {
 			updates["missing"] = true
 		}
@@ -554,6 +561,66 @@ func ReconcileAbandonedVideoHealthRequests(ctx context.Context, now int64) error
 		}
 	}
 	return nil
+}
+
+// RequestVideoHealthRecovery makes a blocked channel eligible for a fresh
+// recovery round without changing its qualification or historical evidence.
+func RequestVideoHealthRecovery(ctx context.Context, channelID int, modelName string, expectedVersion int64) (*VideoHealthState, error) {
+	if DB == nil {
+		return nil, errors.New("video health database unavailable")
+	}
+	if channelID <= 0 || strings.TrimSpace(modelName) == "" || expectedVersion <= 0 {
+		return nil, errors.New("invalid video health recovery request")
+	}
+	var state VideoHealthState
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
+			return err
+		}
+		config := channel.GetOtherSettings().VideoScheduling
+		if channel.Status != common.ChannelStatusEnabled || config == nil {
+			return errors.New("video recovery requires an enabled scheduled channel")
+		}
+		configured := false
+		for name := range strings.SplitSeq(channel.Models, ",") {
+			if strings.TrimSpace(name) == modelName {
+				configured = true
+				break
+			}
+		}
+		if !configured {
+			return errors.New("video recovery model is not configured on this channel")
+		}
+		if err := lockForUpdate(tx).Where("channel_id = ? AND model_name = ?", channelID, modelName).First(&state).Error; err != nil {
+			return err
+		}
+		if state.Version != expectedVersion || state.ConfigIdentity != channel.VideoHealthIdentity() ||
+			state.State != videosched.HealthBlocked || state.Integrity != "complete" || state.Reason == videosched.ReasonManualRecoveryRequested {
+			return ErrVideoHealthStateChanged
+		}
+		if _, err := state.Snapshot(); err != nil {
+			return err
+		}
+		var incomplete int64
+		if err := tx.Model(&VideoHealthAttempt{}).Where("channel_id = ? AND model_name = ? AND COALESCE(config_identity, '') = ? AND state_version >= ? AND COALESCE(reviewed_at, 0) = 0 AND (final_outcome = ? OR missing = ?)", channelID, modelName, state.ConfigIdentity, state.ConfigVersion, "unknown", true).Count(&incomplete).Error; err != nil {
+			return err
+		}
+		if incomplete > 0 {
+			return errors.New("unresolved video health submissions must be reviewed before manual recovery")
+		}
+		state.Reason = videosched.ReasonManualRecoveryRequested
+		state.Version++
+		state.ValidationRound++
+		state.CurrentJSON, state.RecoveryJSON = "", ""
+		state.RecoveryStarted, state.RecoveryExpires, state.ValidationStarted, state.ValidationExpires = 0, 0, 0, 0
+		state.CohortEnd, state.NextRefreshAt, state.ValidationSource = 0, 0, "recovery"
+		return SaveVideoHealthState(tx, &state, expectedVersion)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 // StartVideoHealthRecovery admits a real probe after the shared slot has been

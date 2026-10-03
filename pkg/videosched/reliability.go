@@ -11,6 +11,8 @@ const (
 	HealthBlocked    = "blocked"
 	HealthRecovering = "recovering"
 
+	ReasonManualRecoveryRequested = "manual_recovery_requested"
+
 	ReliabilityVersion = 1
 )
 

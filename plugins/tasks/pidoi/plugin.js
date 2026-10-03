@@ -43,6 +43,7 @@ const IMAGE_PRIMARY = ["image_url", "image", "input_reference"];
 const VIDEO_FIELDS = ["reference_video", "reference_videos", "videos", "video_url", "video_urls", "input_video", "referenceVideos"];
 const AUDIO_FIELDS = ["audio_url", "audio_urls", "audios", "input_audio", "referenceAudios", "reference_audios"];
 const MEDIA_FIELDS = IMAGE_LISTS.concat(IMAGE_EXTRAS, IMAGE_PRIMARY, VIDEO_FIELDS, AUDIO_FIELDS);
+const STRUCTURED_MEDIA_FIELDS = ["media", "input", "parameters"];
 const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "aspect_ratio", "aspectRatio", "ratio"].concat(MEDIA_FIELDS);
 const REQUEST_SCHEMA = {
   requests: { type: "number", unit: "count", description: { en: "Video generation unit price", zh: "视频生成单价" } },
@@ -55,7 +56,7 @@ export const meta = {
   apiVersion: 1,
   key: "pidoi",
   name: "Pidoi Video",
-  version: "1.0.3",
+  version: "1.0.4",
   author: { name: "jiayi-1994" },
   description: { en: "Pidoi video generation with per-request or per-second pricing by model", zh: "通过 Pidoi 生成视频，按模型分别按次或按秒计费" },
   icon: "text:PI",
@@ -143,6 +144,9 @@ function mediaAliases(value, names) {
 
 function videoParams(value) {
   if (!isObject(value)) throw new Error("video request must be an object");
+  for (const name of STRUCTURED_MEDIA_FIELDS) {
+    if (has(value, name)) throw new Error(name + " is not supported; use flat reference URL fields");
+  }
   if (typeof value.prompt !== "string" || !value.prompt.trim()) throw new Error("prompt is required");
   const body = { prompt: value.prompt };
   const duration = scalarAlias(value, ["seconds", "duration"], seconds);
@@ -202,9 +206,9 @@ function videoParams(value) {
 function modelRequest(ctx) {
   const name = ctx.upstreamModel || ctx.model;
   if (!has(MODELS, name)) throw new Error("unsupported Pidoi video model: " + name);
-  // Mapping between registered models with different units would reuse the wrong
-  // saved expression. Use a distinct alias/price instead of changing billing units.
-  if (has(MODELS, ctx.model) && MODELS[ctx.model].unit !== MODELS[name].unit) throw new Error("model mapping cannot change billing unit");
+  // Plugin-priced mappings must keep their billing unit. A host-frozen video
+  // sale uses its own request facts and ignores both models' plugin pricing.
+  if (ctx.salesSource !== "video_request" && has(MODELS, ctx.model) && MODELS[ctx.model].unit !== MODELS[name].unit) throw new Error("model mapping cannot change billing unit");
   const model = MODELS[name];
   const body = videoParams(ctx.requestBody);
   if (model.fixed && !has(body, "seconds")) body.seconds = model.fixed;
@@ -374,6 +378,7 @@ export const protocols = {
         value = {};
         for (const rawName of Object.keys(body.fields || {})) {
           const name = rawName.endsWith("[]") ? rawName.slice(0, -2) : rawName;
+          if (STRUCTURED_MEDIA_FIELDS.includes(name)) throw new Error(name + " is not supported; use flat reference URL fields");
           if (!FIELDS.includes(name)) continue;
           if (has(value, name)) throw new Error("duplicate field: " + name);
           const entries = body.fields[rawName];

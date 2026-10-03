@@ -71,7 +71,7 @@ const MEDIA_GROUPS = [
   ["audios", "referenceAudios", "reference_audios"],
 ];
 const MEDIA_FIELDS = MEDIA_GROUPS.flat();
-const FIELDS = ["model", "prompt", "duration", "seconds", "aspect_ratio", "ratio", "resolution", "size"].concat(MEDIA_FIELDS);
+const FIELDS = ["model", "prompt", "duration", "seconds", "aspect_ratio", "ratio", "resolution", "size", "n"].concat(MEDIA_FIELDS);
 const USAGE_FIELDS = {
   requests: { type: "number", unit: "count", unitLabel: { en: "video", zh: "条" }, description: { en: "Video generation per-video price", zh: "视频按条单价" } },
   seconds: { type: "number", unit: "second", description: { en: "Video generation per-second price", zh: "视频按秒单价" } },
@@ -100,7 +100,7 @@ export const meta = {
   apiVersion: 1,
   key: "paipu",
   name: "Paipu Video",
-  version: "2.2.3",
+  version: "2.2.4",
   author: { name: "jiayi-1994" },
   description: { en: "Paipu video generation; choose per-second, per-video or per-resolution pricing on each model's price page", zh: "通过 Paipu 生成视频，在各模型定价页自选按秒、按条或分辨率按条计费" },
   icon: "text:PP",
@@ -170,6 +170,7 @@ function referenceURLs(value, field) {
 // select the template later. Billing and submission share modelRequest.
 function videoParams(value) {
   if (!isObject(value)) throw new Error("video request must be an object");
+  if (has(value, "n") && value.n !== 1 && value.n !== "1") throw new Error("n must be 1");
   for (const name of Object.keys(value)) {
     if (!FIELDS.includes(name)) throw new Error("unsupported video request field: " + name);
   }

@@ -7,9 +7,9 @@ const MODELS = [
 const RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 const MEDIA_TYPES = ["first_frame", "last_frame", "reference_image", "reference_voice", "reference_video"];
 const REFERENCE_FIELDS = [
-  "images", "image_urls", "referenceImages", "reference_images", "input_reference",
-  "videos", "video_urls", "referenceVideos", "reference_videos",
-  "audios", "audio_urls", "referenceAudios", "reference_audios",
+  "images", "image", "image_url", "image_urls", "referenceImages", "reference_images", "reference_image_urls", "input_reference",
+  "videos", "video_url", "video_urls", "input_video", "reference_video", "referenceVideos", "reference_videos",
+  "audios", "audio_url", "audio_urls", "input_audio", "referenceAudios", "reference_audios",
 ];
 const FLAT_FIELDS = ["model", "prompt", "media", "seconds", "duration", "resolution", "size", "ratio", "aspect_ratio", "aspectRatio"].concat(REFERENCE_FIELDS);
 
@@ -17,7 +17,7 @@ export const meta = {
   apiVersion: 1,
   key: "meaicc",
   name: "Meaicc Video",
-  version: "1.1.3",
+  version: "1.1.4",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through Meaicc, billed per request", zh: "通过 Meaicc 生成视频，按次计费" },
   icon: "text:M",
@@ -162,9 +162,9 @@ function videoRequest(value) {
     }
     const media = [];
     for (const group of [
-      { fields: ["images", "image_urls", "referenceImages", "reference_images", "input_reference"], type: "reference_image" },
-      { fields: ["videos", "video_urls", "referenceVideos", "reference_videos"], type: "reference_video" },
-      { fields: ["audios", "audio_urls", "referenceAudios", "reference_audios"], type: "reference_voice" },
+      { fields: ["images", "image", "image_url", "image_urls", "referenceImages", "reference_images", "reference_image_urls", "input_reference"], type: "reference_image" },
+      { fields: ["videos", "video_url", "video_urls", "input_video", "reference_video", "referenceVideos", "reference_videos"], type: "reference_video" },
+      { fields: ["audios", "audio_url", "audio_urls", "input_audio", "referenceAudios", "reference_audios"], type: "reference_voice" },
     ]) {
       const names = group.fields.filter(function (name) { return has(value, name); });
       if (!names.length) continue;

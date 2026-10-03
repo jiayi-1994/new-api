@@ -525,7 +525,8 @@ func ShadowObserveVideoSched(c *gin.Context, group, modelName string, selected *
 
 // AssembleVideoDecision freezes the decision input for channels, the
 // satisfied channels of modelName in group (auto already expanded), under
-// setting. Channels this request already attempted are excluded as tried.
+// setting. Channels this request already attempted are excluded as tried,
+// except for confirmed pre-transport conflicts eligible for local reselection.
 // It reads health, in-flight and probe slot state but writes none.
 func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSchedulingSetting, group, modelName string, channels []*model.Channel, seed uint64) VideoDecisionInput {
 	maxCost, err := operation_setting.VideoSchedMaxCostUSD()
@@ -562,9 +563,20 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		input.Policy.QualificationTTLSeconds, input.Policy.ValidationPeriodSeconds = setting.QualificationTTLSeconds, setting.ValidationPeriodSeconds
 		input.Policy.WindowSeconds = setting.WindowSeconds
 	}
+	events := RequestPolicy(c).Events()
+	unsent := make(map[[2]int]bool)
+	for _, event := range events {
+		// Only the controller's bounded admission retry confirms that this
+		// attempt sent no bytes. Selection records can also contain earlier
+		// admission conflicts within an attempt that later did transmit.
+		if event.Decision.Action == "retry" && event.Decision.Reason == "admission_conflict" &&
+			event.Decision.Source == "video_scheduling" && event.ErrorSource == "local" && event.ErrorCode == "video_health_admission_conflict" {
+			unsent[[2]int{event.Attempt, event.ChannelID}] = true
+		}
+	}
 	tried := make(map[int]bool)
-	for _, event := range RequestPolicy(c).Events() {
-		if event.Decision.Action == "attempt" {
+	for _, event := range events {
+		if event.Decision.Action == "attempt" && !unsent[[2]int{event.Attempt, event.ChannelID}] {
 			tried[event.ChannelID] = true
 		}
 	}

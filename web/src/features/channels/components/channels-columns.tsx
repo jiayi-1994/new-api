@@ -50,6 +50,11 @@ import {
 } from '@/components/ui/tooltip'
 import { toIntlLocale } from '@/i18n/languages'
 import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyLabel,
@@ -60,8 +65,10 @@ import {
   formatTimestampToDate,
 } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { ROLE } from '@/lib/roles'
 import { createServerError } from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getCodexUsage, updateChannelBalance } from '../api'
 import {
@@ -102,6 +109,7 @@ import {
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
+import { VideoHealthRecovery } from './video-health-recovery'
 import { VideoReliabilityDetails } from './video-reliability-details'
 import { VideoUnknownReview } from './video-unknown-review'
 
@@ -190,6 +198,14 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
 /** Video scheduling health; renders nothing for a channel without a scheduling config. */
 export function VideoHealthCell(props: { channel: Channel }) {
   const { t, i18n } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canOperate =
+    (user?.role ?? ROLE.GUEST) >= ROLE.ADMIN &&
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.OPERATE
+    )
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // A tag row copies its first child's fields; health belongs to one channel.
   const health = isTagAggregateRow(props.channel)
@@ -241,10 +257,26 @@ export function VideoHealthCell(props: { channel: Channel }) {
           {models.map(([name, model]) => (
             <section key={name} className='border-t pt-3'>
               <h4 className='mb-2 font-medium break-all'>{name}</h4>
-              <VideoReliabilityDetails
-                health={model.reliability}
-                asOf={health.as_of}
-              />
+              <div className='flex flex-wrap items-start justify-between gap-2'>
+                <VideoReliabilityDetails
+                  health={model.reliability}
+                  asOf={health.as_of}
+                />
+                {canOperate && model.reliability && (
+                  <VideoHealthRecovery
+                    channelId={props.channel.id}
+                    channelName={props.channel.name}
+                    model={name}
+                    stateVersion={model.reliability.state_version}
+                    canRecover={
+                      props.channel.status === 1 &&
+                      model.reliability.integrity === 'complete' &&
+                      model.reliability.state === 'blocked' &&
+                      model.reliability.reason !== 'manual_recovery_requested'
+                    }
+                  />
+                )}
+              </div>
             </section>
           ))}
         </div>

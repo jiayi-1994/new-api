@@ -17,6 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
+import { z } from 'zod'
+
+export const videoHealthRecoverySchema = z.object({
+  note: z
+    .string()
+    .trim()
+    .min(1, 'Enter a reason for restoring scheduling eligibility.')
+    .refine((value) => [...value].length <= 500, {
+      message: 'Use 500 characters or fewer.',
+    }),
+})
+
+export type VideoHealthRecoveryValues = z.infer<
+  typeof videoHealthRecoverySchema
+>
 
 export function videoReliabilityLabel(
   value: string | undefined,
@@ -57,6 +72,8 @@ export function videoReliabilityLabel(
       return t('Upstream configuration changed; validation required')
     case 'unknown_submission_reviewed':
       return t('Unknown submission reviewed; recovery required')
+    case 'manual_recovery_requested':
+      return t('Scheduling recovery requested')
     case 'insufficient_samples':
     case 'health samples insufficient':
       return t('Insufficient samples')

@@ -112,10 +112,12 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.FailReason = reason
 		}
 
-		// Blame the upstream only when the poller kept asking and the task never
-		// finished. A task the poller did not reach in time may well be done.
+		// Only a poll at or after the deadline can establish that the upstream
+		// exceeded it. An earlier RUNNING response may already be obsolete when
+		// a delayed host sweep reaches the task, even inside the stale window.
 		task.VideoHealthAttribution = "host"
-		if now-task.PrivateData.PolledAt > taskPollStaleSeconds {
+		deadline := task.SubmitTime + int64(constant.TaskTimeoutMinutes)*60
+		if task.PrivateData.PolledAt < deadline || now-task.PrivateData.PolledAt > taskPollStaleSeconds {
 			task.VideoHealthAttribution = taskAttributionHostLag
 		}
 		won, err := task.UpdateWithStatus(oldStatus)
@@ -526,6 +528,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	snap := task.Snapshot()
 	polledAt := task.PrivateData.PolledAt
 	task.PrivateData.PolledAt = time.Now().Unix()
+	deadline := task.SubmitTime + int64(constant.TaskTimeoutMinutes)*60
+	// Preserve the first post-deadline observation even when the ordinary
+	// unchanged-poll write throttle has not elapsed.
+	crossedDeadline := constant.TaskTimeoutMinutes > 0 && polledAt < deadline && task.PrivateData.PolledAt >= deadline
 	resp, err := adaptor.FetchTask(baseURL, key, task, proxy)
 	if err != nil {
 		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassTransport, 0, err.Error())
@@ -638,7 +644,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 			shouldFinalizeBilling = false
 		}
-	} else if !snap.Equal(task.Snapshot()) || task.PrivateData.PolledAt-polledAt >= taskPollMarkSeconds {
+	} else if !snap.Equal(task.Snapshot()) || crossedDeadline || task.PrivateData.PolledAt-polledAt >= taskPollMarkSeconds {
 		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
 		}

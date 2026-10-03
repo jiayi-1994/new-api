@@ -1129,11 +1129,11 @@ func TestSweepTimeoutBlamesUpstreamOnlyAfterPolling(t *testing.T) {
 			useVideoHealthBackend(t, "memory")
 			db := useVideoReliabilityDatabase(t, dialect)
 			previousTimeout := constant.TaskTimeoutMinutes
-			constant.TaskTimeoutMinutes = 1
+			constant.TaskTimeoutMinutes = 5
 			t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
 			now := time.Now().Unix()
 			tasks := map[int]*model.Task{}
-			for _, channelID := range []int{7, 8} {
+			for _, channelID := range []int{7, 8, 9, 10} {
 				channel := scheduledTestChannel(channelID, "")
 				channel.Models, channel.OtherSettings = "video", `{"video_scheduling":{"models":{"video":{"mode":"per_video","prices":{"*":1}}}}}`
 				require.NoError(t, db.Create(channel).Error)
@@ -1142,24 +1142,41 @@ func TestSweepTimeoutBlamesUpstreamOnlyAfterPolling(t *testing.T) {
 				attempt := model.VideoHealthAttempt{RequestID: fmt.Sprintf("timeout-%d", channelID), AttemptSeq: 1, ChannelID: channelID, ModelName: "video", ConfigIdentity: identity, StartedAt: now - 120, WindowSeconds: 1800, StateVersion: 1, Flow: "normal", SubmitOutcome: "accepted"}
 				require.NoError(t, db.Create(&attempt).Error)
 				task := &model.Task{TaskID: attempt.RequestID, ChannelId: channelID, Status: model.TaskStatusInProgress, Progress: taskcommon.ProgressInProgress,
-					SubmitTime: now - 120, StartTime: now - 110, Data: []byte(`{}`), VideoHealthAttemptID: &attempt.ID}
+					SubmitTime: now - 330, StartTime: now - 320, Data: []byte(`{}`), VideoHealthAttemptID: &attempt.ID}
 				task.PrivateData.UpstreamTaskID = attempt.RequestID
 				task.PrivateData.VideoHealth = &model.TaskVideoHealthReference{AttemptID: attempt.ID, RequestID: attempt.RequestID, AttemptSeq: 1, ChannelID: channelID, Model: "video"}
+				if channelID == 9 {
+					// A first RUNNING response followed by a host backlog must not
+					// blame the upstream merely because it is under ten minutes old.
+					task.PrivateData.PolledAt = now - 299
+				}
+				if channelID == 10 {
+					// The previous poll was just before the deadline, less than the
+					// normal persistence throttle before the new observation.
+					task.PrivateData.PolledAt = task.SubmitTime + 5*60 - 1
+				}
 				require.NoError(t, db.Create(task).Error)
 				tasks[channelID] = task
 			}
-			// Only channel 8's upstream is asked. Its answer changes nothing else
-			// about the task, yet the poll must still leave a durable trace.
-			polled := tasks[8]
-			ch := &model.Channel{Id: 8, Type: constant.ChannelTypeKling, Key: "sk-test"}
-			require.NoError(t, updateVideoSingleTask(context.Background(), &scriptedPollingAdaptor{}, ch, polled.GetUpstreamTaskID(),
-				map[string]*model.Task{polled.GetUpstreamTaskID(): polled}))
+			// An unchanged response after the deadline must leave a durable trace,
+			// including the first boundary crossing inside the write throttle.
+			for _, channelID := range []int{8, 10} {
+				polled := tasks[channelID]
+				ch := &model.Channel{Id: channelID, Type: constant.ChannelTypeKling, Key: "sk-test"}
+				require.NoError(t, updateVideoSingleTask(context.Background(), &scriptedPollingAdaptor{}, ch, polled.GetUpstreamTaskID(),
+					map[string]*model.Task{polled.GetUpstreamTaskID(): polled}))
+				var persisted model.Task
+				require.NoError(t, db.First(&persisted, polled.ID).Error)
+				assert.GreaterOrEqual(t, persisted.PrivateData.PolledAt, now)
+			}
 
 			sweepTimedOutTasks(context.Background())
 
 			for channelID, want := range map[int]struct{ attribution, final, state string }{
-				7: {taskAttributionHostLag, "cancelled", videosched.HealthUnverified},
-				8: {"host", "upstream", videosched.HealthBlocked},
+				7:  {taskAttributionHostLag, "cancelled", videosched.HealthUnverified},
+				8:  {"host", "upstream", videosched.HealthBlocked},
+				9:  {taskAttributionHostLag, "cancelled", videosched.HealthUnverified},
+				10: {"host", "upstream", videosched.HealthBlocked},
 			} {
 				var task model.Task
 				require.NoError(t, db.First(&task, tasks[channelID].ID).Error)

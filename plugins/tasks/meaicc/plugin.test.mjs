@@ -111,6 +111,31 @@ test("describeSpec classifies every media type into the three reference kinds", 
 const REQUEST = { model: "sd-2-c1", input: { prompt: "一只猫" }, parameters: { duration: 10, resolution: "720p" } };
 const BASE_URL = "https://api.meaicc.com";
 
+test("public media aliases retain every submitted reference in JSON and multipart", () => {
+  for (const [fields, type, kind] of [
+    [["image", "image_url", "reference_image_urls"], "reference_image", "image"],
+    [["video_url", "input_video", "reference_video"], "reference_video", "video"],
+    [["audio_url", "input_audio"], "reference_voice", "audio"],
+  ]) {
+    for (const field of fields) {
+      for (const bodyKind of ["json", "multipart"]) {
+        const value = { model: "sd-2-c4", prompt: "a cat", seconds: 5, resolution: "720p", [field]: "https://cdn.example/reference" };
+        const body = bodyKind === "json" ? { kind: bodyKind, value } : { kind: bodyKind, fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, [String(item)]])) };
+        const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body });
+        const ctx = { model: value.model, requestBody: intent.requestBody, baseUrl: BASE_URL, apiKey: "fixture-only-key" };
+        assert.deepEqual(plugin.buildSubmitRequest(ctx).body.input.media, [{ type, url: value[field] }], field);
+        assert.deepEqual(plugin.describeSpec(ctx).references, { video: 0, image: 0, audio: 0, [kind]: 1 }, field);
+        assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx), field);
+      }
+    }
+  }
+  for (const field of ["image", "video_url", "input_video", "audio_url"]) {
+    const aliases = { image: "images", video_url: "videos", input_video: "videos", audio_url: "audios" };
+    const value = { model: "sd-2-c4", prompt: "a cat", seconds: 5, resolution: "720p", [field]: "https://cdn.example/first", [aliases[field]]: ["https://cdn.example/second"] };
+    assert.throws(() => plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } }), /conflicting reference fields/, field);
+  }
+});
+
 test("A raw channel key and a resolved Bearer header both reach upstream as one Bearer header", () => {
   const intent = plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body: { kind: "json", value: REQUEST } });
   const ctx = { model: REQUEST.model, upstreamModel: REQUEST.model, baseUrl: BASE_URL, requestBody: intent.requestBody, taskId: "task-1" };

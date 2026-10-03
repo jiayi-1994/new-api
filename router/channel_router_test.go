@@ -73,6 +73,7 @@ func assertChannelRoutePermission(t *testing.T, method string, path string, perm
 // the read-only scheduling views follow channel read permission.
 func TestVideoScheduleRoutesPermissions(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodGet, "/:id/video_health", authz.ChannelRead, controller.GetChannelVideoHealth)
+	assertChannelRoutePermission(t, http.MethodPost, "/:id/video_health/recover", authz.ChannelOperate, controller.RecoverChannelVideoHealth)
 	assertChannelRoutePermission(t, http.MethodGet, "/video_schedule/schedulable", authz.ChannelRead, controller.GetVideoSchedulable)
 
 	previousDB, previousLogDB, previousRedis, previousMaster := model.DB, model.LOG_DB, common.RedisEnabled, common.IsMasterNode
@@ -114,6 +115,23 @@ func TestVideoScheduleRoutesPermissions(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, simulate("sim-admin-token"))
 	assert.Equal(t, http.StatusOK, simulate("sim-root-token"), "root reaches the handler, which rejects the empty body")
 	require.NoError(t, db.Create(&model.Token{Key: "audit-api-token", UserId: 2, Status: common.TokenStatusEnabled, ExpiredTime: -1}).Error)
+	require.NoError(t, authz.SetUserPermissions(1, authz.PermissionsMap{authz.ResourceChannel: {authz.ActionOperate: false}}))
+	for _, identity := range []struct {
+		token  string
+		status int
+	}{{"", http.StatusUnauthorized}, {"sim-user-token", http.StatusForbidden}, {"sk-audit-api-token", http.StatusUnauthorized}, {"sim-admin-token", http.StatusForbidden}, {"sim-root-token", http.StatusOK}} {
+		request := httptest.NewRequest(http.MethodPost, "/api/channel/1/video_health/recover", strings.NewReader(`{}`))
+		if identity.token != "" {
+			request.Header.Set("Authorization", "Bearer "+identity.token)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		assert.Equal(t, identity.status, recorder.Code, recorder.Body.String())
+		if identity.status == http.StatusOK {
+			assert.Contains(t, recorder.Body.String(), "recovery reason", "authorized caller reaches request validation")
+		}
+	}
+	require.NoError(t, authz.ClearUserPermissions(1))
 	require.NoError(t, db.Create(&model.VideoScheduleRun{RequestID: "private-audit", StartedAt: time.Now().UnixMilli(), CostUSD: new(float64)}).Error)
 	for _, path := range []string{"/audits", "/audits/private-audit", "/audit_stats", "/audit_export", "/health_attempts?channel=1", "/health_attempts/1/review"} {
 		for _, identity := range []struct {

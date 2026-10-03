@@ -22,6 +22,33 @@ for (const body of [
 
 const fixture = JSON.parse(readFileSync(new URL('./fixture.json', import.meta.url), 'utf8'));
 const catalog = JSON.parse(readFileSync(new URL('./pricing-reference.json', import.meta.url), 'utf8').replace(/^\uFEFF/, ''));
+
+test('Only a host-frozen unified sale permits mapping across plugin billing units', () => {
+  const model = 'sd-2.5-720p-pro';
+  const intent = plugin.protocols.openai_video.decodeRequest({ model, body: { kind: 'json', value: { model, prompt: 'cat', seconds: 5, resolution: '720p', salesSource: 'video_request' } } });
+  const ctx = { model, upstreamModel: 'jiuyue111', requestBody: intent.requestBody, baseUrl: 'https://api.example', apiKey: 'fixture-only-key' };
+  for (const salesSource of [undefined, 'plugin_usage', true]) {
+    assert.throws(() => plugin.describeSpec({ ...ctx, salesSource }), /model mapping cannot change billing unit/);
+    assert.throws(() => plugin.buildSubmitRequest({ ...ctx, salesSource }), /model mapping cannot change billing unit/);
+  }
+  const unified = { ...ctx, salesSource: 'video_request' };
+  assert.equal(plugin.describeSpec(unified).output_seconds, 5);
+  assert.equal(plugin.describeSpec(unified).resolution, '720p');
+  assert.deepEqual(plugin.buildSubmitRequest(unified).body, { model: 'jiuyue111', prompt: 'cat', seconds: '5', resolution: '720p' });
+});
+
+test('Structured media from other video plugins is rejected instead of dropped', () => {
+  for (const field of ['media', 'input', 'parameters']) {
+    const request = { model: 'jiuyue111', prompt: 'cat', seconds: 5, resolution: '720p', [field]: [{ type: 'first_frame', url: 'https://cdn.example/first.png' }] };
+    for (const body of [
+      { kind: 'json', value: request },
+      { kind: 'multipart', fields: Object.fromEntries(Object.entries(request).map(([key, value]) => [key, [typeof value === 'string' ? value : JSON.stringify(value)]])) },
+    ]) {
+      assert.throws(() => plugin.protocols.openai_video.decodeRequest({ model: request.model, body }), /not supported; use flat reference URL fields/, field);
+    }
+  }
+});
+
 for (const entry of fixture.cases) {
   test(entry.name, () => {
     let hook = plugin[entry.hook];

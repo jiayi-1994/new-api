@@ -509,6 +509,8 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'channel.create': 'Created channel {{name}} (type {{type}}, count {{count}})',
   'channel.update': 'Updated channel {{name}} (ID: {{id}})',
   'channel.status_update': 'Updated channel status (ID: {{id}})',
+  'channel.video_recovery':
+    'Requested video scheduling recovery for channel {{id}}, model {{model}}',
   'channel.status_update_batch':
     'Batch updated channel status ({{count}}/{{total}} changed)',
   'channel.delete': 'Deleted channel {{name}} (ID: {{id}})',

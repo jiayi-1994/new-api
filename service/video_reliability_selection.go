@@ -64,7 +64,8 @@ func decideReliableVideoSchedule(input VideoDecisionInput) VideoScheduleChoice {
 				continue
 			}
 			last := max(h.BlockedAt, h.LastValidationAt)
-			if p.Now-last < int64(VideoProbeCooldown(input.Explore.ProbeCooldownSec, VideoProbeState{ConsecutiveFails: h.ProbeFailures}).Seconds()) {
+			manualRecovery := h.State == videosched.HealthBlocked && h.Reason == videosched.ReasonManualRecoveryRequested
+			if !manualRecovery && p.Now-last < int64(VideoProbeCooldown(input.Explore.ProbeCooldownSec, VideoProbeState{ConsecutiveFails: h.ProbeFailures}).Seconds()) {
 				s.Reason, reason = "recovery_cooldown", "recovery_cooldown"
 				continue
 			}
