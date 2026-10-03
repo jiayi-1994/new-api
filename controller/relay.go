@@ -813,6 +813,10 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 	if pinnedValue, exists := c.Get(pluginruntime.ContextKeyPinnedEndpoint); exists {
 		if pinned, ok := pinnedValue.(pluginruntime.PinnedEndpoint); ok && pinned.Protocol == "openai_video" && pinned.Operation.Name == "create" {
 			diagnostics.present(outcome.Task, "openai_video_create")
+			if outcome.Task.IsUnifiedVideoSale() {
+				c.JSON(http.StatusOK, service.BuildUnifiedVideoResponse(outcome.Task))
+				return
+			}
 			c.JSON(http.StatusOK, outcome.Task.ToOpenAIVideo())
 			return
 		}
@@ -834,6 +838,14 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 	service.RecordRequestPolicyTermination(c, taskSubmissionAPIError(taskErr))
 	newTaskPluginSubmitDiagnostics(c).presentError(taskErr)
+	if _, unified := service.GetVideoSalesFacts(c); unified {
+		publicError := *taskErr
+		publicError.Code = "video_request_failed"
+		publicError.Message = "Video request failed"
+		publicError.Data = nil
+		respondTaskError(c, &publicError)
+		return
+	}
 	if middleware.RespondTaskPluginError(c, taskErr) {
 		return
 	}

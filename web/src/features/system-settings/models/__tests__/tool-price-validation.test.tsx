@@ -412,6 +412,117 @@ describe('unified video sales validation and persistence', () => {
     })
   })
 
+  test('keeps tier inputs, previews and saved prices aligned after adding and removing resolutions', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { items: [], total: 0 } },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    render(<VideoSalesFixture value='{}' />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Add video model' }))
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Public model name' }),
+      { target: { value: 'seedance-2.0' } }
+    )
+
+    const table = screen.getByRole('table', {
+      name: 'Sale tiers for seedance-2.0',
+    })
+    const drafts = [
+      { resolution: '480p', price: '1', seconds: '5', preview: '$5' },
+      { resolution: '720p', price: '2', seconds: '10', preview: '$20' },
+      { resolution: '1080p', price: '3', seconds: '15', preview: '$45' },
+    ]
+    for (const [index, draft] of drafts.entries()) {
+      if (index > 0) {
+        await user.click(screen.getByRole('button', { name: 'Add resolution' }))
+      }
+      const row = within(table).getAllByRole('row')[index + 1]
+      fireEvent.change(
+        within(row).getByRole('textbox', { name: 'Resolution' }),
+        { target: { value: draft.resolution } }
+      )
+      fireEvent.change(
+        within(row).getByRole('textbox', { name: 'Price per second (USD)' }),
+        { target: { value: draft.price } }
+      )
+      fireEvent.change(
+        within(row).getByRole('textbox', {
+          name: 'Allowed durations (seconds)',
+        }),
+        { target: { value: draft.seconds } }
+      )
+      expect(
+        within(row).getByText(
+          `${draft.resolution} × ${draft.seconds} seconds = ${draft.preview}`
+        )
+      ).toBeVisible()
+    }
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove resolution 720p' })
+    )
+    expect(
+      within(table).getAllByRole('textbox', { name: 'Resolution' })
+    ).toHaveLength(2)
+    const remaining = within(table).getAllByRole('row')[2]
+    expect(
+      within(remaining).getByRole('textbox', { name: 'Resolution' })
+    ).toHaveValue('1080p')
+    expect(
+      within(remaining).getByRole('textbox', {
+        name: 'Price per second (USD)',
+      })
+    ).toHaveValue('3')
+    expect(
+      within(remaining).getByText('1080p × 15 seconds = $45')
+    ).toBeVisible()
+    expect(
+      within(remaining).getByRole('button', {
+        name: 'Remove resolution 1080p',
+      })
+    ).toBeEnabled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove resolution 480p' })
+    )
+    expect(
+      within(table).getAllByRole('textbox', { name: 'Resolution' })
+    ).toHaveLength(1)
+    fireEvent.change(
+      within(table).getByRole('textbox', { name: 'Resolution' }),
+      { target: { value: '1440p' } }
+    )
+    fireEvent.change(
+      within(table).getByRole('textbox', { name: 'Price per second (USD)' }),
+      { target: { value: '4' } }
+    )
+    fireEvent.change(
+      within(table).getByRole('textbox', {
+        name: 'Allowed durations (seconds)',
+      }),
+      { target: { value: '8' } }
+    )
+    expect(within(table).getByText('1440p × 8 seconds = $32')).toBeVisible()
+    expect(
+      within(table).getByRole('button', {
+        name: 'Remove resolution 1440p',
+      })
+    ).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const request = put.mock.calls[0][1] as { value: string }
+    expect(JSON.parse(request.value)).toEqual({
+      'seedance-2.0': {
+        disabled: true,
+        resolutions: { '1440p': { usd_per_second: 4, seconds: [8] } },
+      },
+    })
+  })
+
   test('blocks zero prices and invalid seconds, then saves canonical 4k with valid values', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
       data: { success: true, data: { items: [], total: 0 } },

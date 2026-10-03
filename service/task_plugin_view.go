@@ -1,10 +1,60 @@
 package service
 
 import (
+	"fmt"
+	"net/url"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	videodto "github.com/QuantumNous/new-api/relaykit/dto"
 )
+
+// RedactUnifiedVideoTaskDTO keeps execution details out of the public sale
+// without changing the persisted task used for polling and administration.
+func RedactUnifiedVideoTaskDTO(task *model.Task, item *dto.TaskDto) {
+	if !task.IsUnifiedVideoSale() {
+		return
+	}
+	item.Platform = "video"
+	item.ChannelId = 0
+	item.Data = nil
+	item.ResultURL = ""
+	item.AdminInfo = nil
+	item.RootInfo = nil
+	properties := task.Properties
+	properties.UpstreamModelName = ""
+	item.Properties = properties
+	item.FailReason = ""
+	if task.Status == model.TaskStatusFailure {
+		item.FailReason = "Video generation failed"
+	}
+}
+
+// BuildUnifiedVideoResponse uses only host lifecycle and frozen sale fields.
+// Provider renderers may include arbitrary metadata and upstream URLs.
+func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
+	video := task.ToOpenAIVideo()
+	if video.CreatedAt == 0 {
+		video.CreatedAt = task.SubmitTime
+	}
+	if task.IsUnifiedVideoSale() {
+		facts := task.PrivateData.BillingContext.TieredSnapshot.UsageFacts
+		if seconds, exists := facts["seconds"]; exists {
+			video.Seconds = fmt.Sprint(seconds)
+		}
+		if resolution, ok := facts["resolution"].(string); ok {
+			video.SetMetadata("resolution", resolution)
+		}
+	}
+	if task.Status == model.TaskStatusSuccess {
+		video.SetMetadata("url", "/v1/videos/"+url.PathEscape(task.TaskID)+"/content")
+	}
+	if task.Status == model.TaskStatusFailure {
+		video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: "Video generation failed"}
+	}
+	return video
+}
 
 // BuildTaskPluginView converts a persisted task into the deliberately narrow
 // public shape permitted at JavaScript plugin boundaries.

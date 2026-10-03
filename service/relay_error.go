@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -86,6 +87,15 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other.SetPublic("error_type", err.GetErrorType())
 		other.SetPublic("error_code", err.GetErrorCode())
 		other.SetPublic("status_code", err.StatusCode)
+		if _, unified := GetVideoSalesFacts(c); unified {
+			// Preserve the diagnostic content for administrators; the persisted
+			// sale marker also protects historical user views after repricing.
+			other.SetPublic("sales_source", billingexpr.SalesSourceVideoRequest)
+			other.SetAdmin("error_type", err.GetErrorType())
+			other.SetAdmin("error_code", err.GetErrorCode())
+			other.SetPublic("error_type", "video_error")
+			other.SetPublic("error_code", "video_request_failed")
+		}
 		AppendRelayLogAdminInfo(c, relayInfo, other)
 		AppendResponseModelLogInfo(relayInfo, other)
 		AppendTaskPluginContextAuditInfo(c, other)

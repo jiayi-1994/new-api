@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -915,42 +916,63 @@ func TestRefundMidjourneyQuotaUsesLegacyChannelFallbackWithoutTokenAdjustment(t 
 // ===========================================================================
 
 func TestRefundTaskQuota_Wallet(t *testing.T) {
-	truncate(t)
-	ctx := context.Background()
+	for _, unified := range []bool{false, true} {
+		t.Run(fmt.Sprint(unified), func(t *testing.T) {
+			truncate(t)
+			ctx := context.Background()
 
-	const userID, tokenID, channelID = 1, 1, 1
-	const initQuota, preConsumed = 10000, 3000
-	const tokenRemain = 5000
+			const userID, tokenID, channelID = 1, 1, 1
+			const initQuota, preConsumed = 10000, 3000
+			const tokenRemain = 5000
 
-	seedUser(t, userID, initQuota)
-	seedToken(t, tokenID, userID, "sk-test-key", tokenRemain)
-	seedChannel(t, channelID)
-	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
+			seedUser(t, userID, initQuota)
+			seedToken(t, tokenID, userID, "sk-test-key", tokenRemain)
+			seedChannel(t, channelID)
+			seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
 
-	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
-	require.NoError(t, model.DB.Create(task).Error)
+			task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+			if unified {
+				task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest}
+			}
+			require.NoError(t, model.DB.Create(task).Error)
 
-	assert.True(t, RefundTaskQuota(ctx, task, "task failed: upstream error"))
+			assert.True(t, RefundTaskQuota(ctx, task, "task failed: upstream error"))
 
-	// User quota should increase by preConsumed
-	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
+			// User quota should increase by preConsumed
+			assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
 
-	// Token remain_quota should increase, used_quota should decrease
-	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
-	assert.Zero(t, getTokenUsedQuota(t, tokenID))
-	usedQuota, requestCount := getUserUsageAccounting(t, userID)
-	assert.Zero(t, usedQuota)
-	assert.Equal(t, 1, requestCount)
-	assert.Zero(t, getChannelUsedQuota(t, channelID))
+			// Token remain_quota should increase, used_quota should decrease
+			assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+			assert.Zero(t, getTokenUsedQuota(t, tokenID))
+			usedQuota, requestCount := getUserUsageAccounting(t, userID)
+			assert.Zero(t, usedQuota)
+			assert.Equal(t, 1, requestCount)
+			assert.Zero(t, getChannelUsedQuota(t, channelID))
 
-	// A refund log should be created
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
-	assert.Equal(t, preConsumed, log.Quota)
-	assert.Equal(t, "test-model", log.ModelName)
-	assert.Zero(t, task.Quota)
-	assert.Zero(t, getTaskQuota(t, task.ID))
+			// A refund log should be created
+			log := getLastLog(t)
+			require.NotNil(t, log)
+			assert.Equal(t, model.LogTypeRefund, log.Type)
+			assert.Equal(t, preConsumed, log.Quota)
+			assert.Equal(t, "test-model", log.ModelName)
+			assert.Zero(t, task.Quota)
+			assert.Zero(t, getTaskQuota(t, task.ID))
+			var other map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+			if unified {
+				assert.Equal(t, "Video generation failed", other["reason"])
+				adminInfo, ok := other["admin_info"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "task failed: upstream error", adminInfo["reason"])
+				userLogs, err := model.GetLogByTokenId(tokenID)
+				require.NoError(t, err)
+				require.Len(t, userLogs, 1)
+				assert.NotContains(t, userLogs[0].Other, "upstream error")
+			} else {
+				assert.Equal(t, "task failed: upstream error", other["reason"])
+			}
+		})
+	}
 }
 
 func TestRefundTaskQuota_Subscription(t *testing.T) {

@@ -289,7 +289,12 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 4. 记录日志
 	other := taskBillingOther(task)
 	other.SetPublic("task_id", task.TaskID)
-	other.SetPublic("reason", reason)
+	if task.IsUnifiedVideoSale() {
+		other.SetAdmin("reason", reason)
+		other.SetPublic("reason", "Video generation failed")
+	} else {
+		other.SetPublic("reason", reason)
+	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,

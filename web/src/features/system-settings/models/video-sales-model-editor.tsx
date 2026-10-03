@@ -56,11 +56,13 @@ export function VideoSalesModelEditor(props: {
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   useSystemConfigStore((state) => state.config.currency)
   const path = `models.${props.index}` as const
-  const model = useWatch({ control: props.form.control, name: path })
+  useWatch({ control: props.form.control, name: path })
   const tiers = useFieldArray({
     control: props.form.control,
     name: `${path}.tiers`,
   })
+  // Field-array edits update form values before the watch subscription catches up.
+  const model = props.form.getValues(path)
   const modelLabel = model.name || t('New video model')
   const validated = createVideoSalesFormSchema(t).safeParse({ models: [model] })
   const sales = validated.success

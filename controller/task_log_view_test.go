@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,19 +10,29 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestUnifiedVideoTaskViewsHideOnlyUpstreamModel(t *testing.T) {
+func TestUnifiedVideoTaskViewsHideUpstreamDetails(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	task.Properties = model.Properties{OriginModelName: "public-video", UpstreamModelName: "private-upstream-video"}
+	task.Platform = "private-plugin"
+	task.Data = []byte(`{"provider":"private-provider","url":"https://private-upstream.invalid/result"}`)
+	task.PrivateData.ResultURL = "https://private-upstream.invalid/result"
 	for _, unified := range []bool{false, true} {
 		if unified {
-			task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest}}
+			task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+				SalesSource: billingexpr.SalesSourceVideoRequest,
+				UsageFacts:  map[string]any{"seconds": 7.0, "resolution": "720p"},
+			}}
 		}
 		require.NoError(t, model.DB.Save(task).Error)
 		for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser, common.RoleRootUser} {
@@ -31,8 +42,14 @@ func TestUnifiedVideoTaskViewsHideOnlyUpstreamModel(t *testing.T) {
 			assert.Equal(t, "public-video", properties.OriginModelName)
 			if unified && role < common.RoleAdminUser {
 				assert.Empty(t, properties.UpstreamModelName)
+				assert.Equal(t, "video", item.Platform)
+				assert.Zero(t, item.ChannelId)
+				assert.Empty(t, item.Data)
 			} else {
 				assert.Equal(t, "private-upstream-video", properties.UpstreamModelName)
+				assert.Equal(t, "private-plugin", item.Platform)
+				assert.Equal(t, task.ChannelId, item.ChannelId)
+				assert.Equal(t, task.Data, item.Data)
 			}
 		}
 		assert.Equal(t, "private-upstream-video", task.Properties.UpstreamModelName, "views must not mutate the persisted task")
@@ -47,10 +64,127 @@ func TestUnifiedVideoTaskViewsHideOnlyUpstreamModel(t *testing.T) {
 		assert.Contains(t, recorder.Body.String(), "public-video")
 		if unified {
 			assert.NotContains(t, recorder.Body.String(), "private-upstream-video", "token responses omit upstream names even for an administrator's token")
+			assert.NotContains(t, recorder.Body.String(), "private-plugin")
+			assert.NotContains(t, recorder.Body.String(), "private-provider")
+			assert.NotContains(t, recorder.Body.String(), "private-upstream.invalid")
 		} else {
 			assert.Contains(t, recorder.Body.String(), "private-upstream-video")
 		}
 	}
+	// Public retrieval does not depend on an installed upstream plugin and
+	// never exposes provider errors or raw response extensions.
+	for _, status := range []model.TaskStatus{model.TaskStatusInProgress, model.TaskStatusSuccess, model.TaskStatusFailure} {
+		task.Status = status
+		task.FailReason = "private-plugin: private-provider at private-upstream.invalid"
+		require.NoError(t, model.DB.Save(task).Error)
+		for _, endpoint := range []string{"/v1/tasks/", "/v1/videos/", "/v1/video/generations/"} {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Set("id", task.UserId)
+			c.Set("role", common.RoleRootUser)
+			c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}, {Key: "key", Value: task.TaskID}}
+			c.Request = httptest.NewRequest(http.MethodGet, endpoint+task.TaskID, nil)
+			if endpoint == "/v1/tasks/" {
+				GetTask(c)
+			} else {
+				require.Nil(t, relay.RelayTaskFetch(c, relayconstant.RelayModeVideoFetchByID))
+			}
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "private-", endpoint)
+			assert.Contains(t, recorder.Body.String(), task.TaskID)
+			if status == model.TaskStatusFailure {
+				assert.Contains(t, recorder.Body.String(), "Video generation failed")
+			}
+			if endpoint == "/v1/videos/" {
+				assert.Contains(t, recorder.Body.String(), `"seconds":"7"`)
+				assert.Contains(t, recorder.Body.String(), `"resolution":"720p"`)
+			}
+		}
+		view := tasksToDto([]*model.Task{task}, false, common.RoleCommonUser)[0]
+		encoded, err := common.Marshal(view)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "private-")
+		adminView := tasksToDto([]*model.Task{task}, false, common.RoleAdminUser)[0]
+		assert.Equal(t, task.FailReason, adminView.FailReason)
+		assert.Equal(t, "private-plugin", string(task.Platform))
+		assert.Contains(t, string(task.Data), "private-provider")
+	}
+}
+
+func TestUnifiedVideoErrorsKeepDiagnosticsOutOfUserViews(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Log{}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Migrator().DropTable(&model.Log{})) })
+	previousLogDB, previousLogType := model.LOG_DB, common.LogDatabaseType()
+	previousEnabled := constant.ErrorLogEnabled
+	model.LOG_DB = model.DB
+	common.SetLogDatabaseType(common.MainDatabaseType())
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		model.LOG_DB = previousLogDB
+		common.SetLogDatabaseType(previousLogType)
+		constant.ErrorLogEnabled = previousEnabled
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	c.Set("id", task.UserId)
+	c.Set("token_id", 99)
+	c.Set("original_model", "public-video")
+	c.Set("group", "default")
+	c.Set(common.UpstreamRequestIdKey, "private-upstream-request")
+	service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "public-video", Seconds: 7, Resolution: "720p", USDPerSecond: 1})
+	err := errors.New("private-plugin private-provider https://private-upstream.invalid")
+	apiErr := relaytypes.NewOpenAIError(err, "private-provider-error", http.StatusBadGateway)
+	service.ProcessChannelError(c, relaytypes.ChannelError{ChannelId: task.ChannelId}, apiErr, nil)
+
+	userLogs, queryErr := model.GetLogByTokenId(99)
+	require.NoError(t, queryErr)
+	require.Len(t, userLogs, 1)
+	assert.Equal(t, "Video request failed", userLogs[0].Content)
+	userJSON, marshalErr := common.Marshal(userLogs)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(userJSON), "private-")
+	assert.Zero(t, userLogs[0].ChannelId)
+	var adminLogs []*model.Log
+	require.NoError(t, model.LOG_DB.Find(&adminLogs).Error)
+	model.FormatAdminLogs(adminLogs)
+	require.Len(t, adminLogs, 1)
+	assert.Contains(t, adminLogs[0].Content, "private-provider")
+	assert.Contains(t, adminLogs[0].Other, "private-provider-error")
+	assert.Equal(t, task.ChannelId, adminLogs[0].ChannelId)
+
+	taskErr := service.TaskErrorWrapper(err, "private-plugin-error", http.StatusBadGateway)
+	taskErr.Data = map[string]any{"provider": "private-provider"}
+	respondTaskSubmissionError(c, taskErr)
+	assert.Equal(t, http.StatusBadGateway, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "private-")
+	assert.Contains(t, recorder.Body.String(), "Video request failed")
+	assert.Equal(t, "private-plugin-error", taskErr.Code, "public projection must not mutate diagnostics")
+	assert.Contains(t, taskErr.Message, "private-provider")
+}
+
+func TestUnifiedVideoCreateReceiptUsesOnlyPublicFields(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set(pluginruntime.ContextKeyPinnedEndpoint, pluginruntime.PinnedEndpoint{
+		Protocol: "openai_video", Operation: pluginruntime.HostProtocolOperation{Name: "create"},
+	})
+	task := &model.Task{
+		TaskID: "task_public", Platform: "private-plugin", Status: model.TaskStatusSubmitted, CreatedAt: 456,
+		Properties: model.Properties{OriginModelName: "public-video", UpstreamModelName: "private-model"},
+		Data:       []byte(`{"provider":"private-provider"}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+			SalesSource: billingexpr.SalesSourceVideoRequest, UsageFacts: map[string]any{"seconds": 7, "resolution": "720p"},
+		}}},
+	}
+	presentTaskSubmission(c, &taskSubmissionOutcome{Result: &relay.TaskSubmitResult{}, Task: task, RelayInfo: &relaycommon.RelayInfo{}})
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "private-")
+	assert.Contains(t, recorder.Body.String(), `"seconds":"7"`)
+	assert.Contains(t, recorder.Body.String(), `"resolution":"720p"`)
+	assert.Contains(t, recorder.Body.String(), `"model":"public-video"`)
 }
 
 func TestTaskLogDTOSeparatesUserAdminAndRootDetails(t *testing.T) {

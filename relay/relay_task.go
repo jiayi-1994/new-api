@@ -540,6 +540,19 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
+	if originTask.IsUnifiedVideoSale() {
+		if isOpenAIVideoAPI {
+			respBody, err = common.Marshal(service.BuildUnifiedVideoResponse(originTask))
+		} else {
+			item := TaskModel2Dto(originTask)
+			service.RedactUnifiedVideoTaskDTO(originTask, item)
+			respBody, err = common.Marshal(dto.TaskResponse[any]{Code: "success", Data: item})
+		}
+		if err != nil {
+			taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+		}
+		return
+	}
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
 	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
@@ -569,11 +582,6 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 
 	// 通用 TaskDto 格式
 	item := TaskModel2Dto(originTask)
-	if originTask.IsUnifiedVideoSale() {
-		properties := originTask.Properties
-		properties.UpstreamModelName = ""
-		item.Properties = properties
-	}
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
 		Data: item,

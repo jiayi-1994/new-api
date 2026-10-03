@@ -105,17 +105,19 @@ func TestLegacyLogOtherVisibilityIsRoleSeparated(t *testing.T) {
 
 	t.Run("user", func(t *testing.T) {
 		logs := []*Log{{
-			Id:          99,
-			ChannelId:   77,
-			ChannelName: "resolved-secret-channel",
-			Other:       other,
+			Id:                99,
+			ChannelId:         77,
+			ChannelName:       "resolved-secret-channel",
+			UpstreamRequestId: "upstream-private-request",
+			Other:             other,
 		}}
 
 		formatUserLogs(logs, 10)
 
 		assert.Equal(t, 11, logs[0].Id)
-		assert.Equal(t, 77, logs[0].ChannelId)
+		assert.Zero(t, logs[0].ChannelId)
 		assert.Empty(t, logs[0].ChannelName)
+		assert.Empty(t, logs[0].UpstreamRequestId)
 		parsed, err := common.StrToMap(logs[0].Other)
 		require.NoError(t, err)
 		assert.Equal(t, "/v1/chat/completions", parsed["request_path"])

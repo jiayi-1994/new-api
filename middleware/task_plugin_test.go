@@ -971,6 +971,36 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 	}
 }
 
+func TestUnifiedVideoDecodeErrorsDoNotExposePlugins(t *testing.T) {
+	saved := config.GlobalConfig.ExportAllConfigs()[billing_setting.VideoSalesOption]
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: saved}))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: `{"public-video":{"resolutions":{"720p":{"usd_per_second":1,"seconds":[7]}}}}`}))
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			for index := range count {
+				key := fmt.Sprintf("private-decoder-%d", index)
+				_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(key, "1.0.0", `["public-video"]`, "/v1/videos",
+					`throw new Error("private-provider private-model https://private-upstream.invalid");`), jsplugin.Options{})
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+			}
+			router := gin.New()
+			router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				t.Error("rejected request reached submission")
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"public-video","seconds":7,"resolution":"720p"}`))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "Invalid video request")
+			assert.NotContains(t, recorder.Body.String(), "private-")
+		})
+	}
+}
+
 // The OpenAI Images edits endpoint accepts multipart uploads. Every file of a
 // repeated image[] field is exposed to the decoder with its own ref, and an
 // unclaimed model on the shared endpoint still reaches the ordinary relay.

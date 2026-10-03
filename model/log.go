@@ -9,9 +9,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 
 	"gorm.io/gorm"
 )
@@ -115,7 +117,12 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
+		logs[i].ChannelId = 0
 		logs[i].ChannelName = ""
+		logs[i].UpstreamRequestId = ""
+		if logs[i].Type == LogTypeError && gjson.Get(logs[i].Other, "sales_source").String() == billingexpr.SalesSourceVideoRequest {
+			logs[i].Content = "Video request failed"
+		}
 		logs[i].Other = formatLogOtherJSON(logs[i].Other, logOtherVisibilityUser)
 	}
 	assignDisplayLogIds(logs, startIdx)

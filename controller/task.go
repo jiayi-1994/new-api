@@ -51,12 +51,18 @@ func GetTask(c *gin.Context) {
 		createdAt = task.SubmitTime
 	}
 	failReason := task.FailReason
+	platform := string(task.Platform)
+	if task.IsUnifiedVideoSale() {
+		item := relay.TaskModel2Dto(task)
+		service.RedactUnifiedVideoTaskDTO(task, item)
+		platform, failReason = item.Platform, item.FailReason
+	}
 	if task.Status == model.TaskStatusSuccess && taskFailReasonIsLegacyResultURL(task.FailReason) {
 		failReason = ""
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"task_id":     task.TaskID,
-		"platform":    task.Platform,
+		"platform":    platform,
 		"status":      task.Status,
 		"progress":    task.Progress,
 		"fail_reason": failReason,
@@ -456,10 +462,8 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 			}
 		}
 		item := relay.TaskModel2Dto(task)
-		if viewerRole < common.RoleAdminUser && task.IsUnifiedVideoSale() {
-			properties := task.Properties
-			properties.UpstreamModelName = ""
-			item.Properties = properties
+		if viewerRole < common.RoleAdminUser {
+			service.RedactUnifiedVideoTaskDTO(task, item)
 		}
 		item.LegacyVideoAvailable = legacyVideoAvailable(task)
 		item.ResultDiscarded = task.PrivateData.ResultDiscarded

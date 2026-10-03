@@ -116,7 +116,9 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
       <div className='space-y-3'>
         <DetailSection label={t('Basic Information')}>
           <DetailRow label={t('Task ID')} value={props.log.task_id} mono />
-          <DetailRow label={t('Platform')} value={props.log.platform} mono />
+          {props.isAdmin ? (
+            <DetailRow label={t('Platform')} value={props.log.platform} mono />
+          ) : null}
           <DetailRow
             label={t('Action')}
             value={t(taskActionMapper.getLabel(props.log.action))}
@@ -148,7 +150,7 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
               mono
             />
           ) : null}
-          {properties?.upstream_model_name ? (
+          {props.isAdmin && properties?.upstream_model_name ? (
             <DetailRow
               label={t('Actual Model')}
               value={properties.upstream_model_name}

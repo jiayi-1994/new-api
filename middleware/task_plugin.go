@@ -715,6 +715,10 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 			}
 		}
 		if len(accepted) == 0 {
+			if unified {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid video request")
+				return
+			}
 			if len(candidates) > 1 {
 				for index, detail := range failures {
 					failures[index] = strings.Join(rejectedPlugins[detail], ", ") + ": " + detail
