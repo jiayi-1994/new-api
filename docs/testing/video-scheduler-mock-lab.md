@@ -122,7 +122,7 @@ python .scratch/feature-v110-review/run_native.py --stage all --backend redis --
 | 所有新回归证据 | `.scratch/unified-video-model-plan/stress/runs/`；以每次源码/二进制哈希为准，不用旧结果证明新代码 |
 | 售卖规格与分组计费演示 | `.scratch/seedance-sales-preview/duration-demo/run_demo.py`、`group-privacy-demo/run_demo.py`；绑定 `33880` 预览，先核对价格/渠道；分组脚本会建用户/令牌并修改测试分组 |
 | 已有任务隐私复核 | `.scratch/seedance-sales-preview/group-privacy-demo/verify_privacy.py`；除正常登录刷新外只读，不代替新提交验证 |
-| 本次清理失败证据 | `.scratch/video-mock-maintenance/cleanup-attempt.json` 及该目录的快照；只保留本地，不公开私有配置/事件 |
+| 清理记录 | 2026-10-04 成功核对：`.scratch/video-mock-maintenance/cleanup-verification-20261004.json`；2026-10-03 首次失败：同目录 `cleanup-attempt.json`；只保留本地，不公开私有配置/事件 |
 
 不要把 `create_lab.py`、`lab.py setup`、`setup_multi.py`、`prepare_*.py` 当作容器恢复步骤，它们会生成或修改环境。尤其旧 `create_lab.py` 会直接覆写现有 Compose。`experiments.py`、`throughput.py`、`steady_backlog.py`、`run_remaining.py`、`recover_multi.py` 等会发起批量任务或改实验配置；名字含“恢复”不代表无副作用。`lab/run_tests.py` 使用共享测试数据库，也不是容器恢复命令。
 
