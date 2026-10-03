@@ -1,4 +1,4 @@
-"""Manage only the two local video scheduler mock fleets; preserve images and volumes."""
+"""Manage known local video scheduler mock fleets; preserve images and volumes."""
 
 import argparse
 import json
@@ -20,6 +20,11 @@ LABS = {
     "unified": {
         "project": "codex-unified-video-20261002",
         "compose": ".scratch/unified-video-model-plan/lab/compose.json",
+        "services": [f"mock{i:02d}" for i in range(1, 21)],
+    },
+    "seedance": {
+        "project": "codex-uvm-stress-seedance-20261004-f1567e0d",
+        "compose": ".scratch/unified-video-model-plan/stress/runs/seedance-20261004/compose.private.json",
         "services": [f"mock{i:02d}" for i in range(1, 21)],
     },
 }
@@ -61,7 +66,8 @@ def containers(project: str) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("status", "start", "clean"), nargs="?", default="status")
-    parser.add_argument("--lab", choices=("legacy", "unified", "both"), default="both")
+    parser.add_argument("--lab", choices=("legacy", "unified", "seedance", "both"), default="both",
+                        help="both means the legacy and unified fleets; seedance must be selected explicitly")
     parser.add_argument("--services", nargs="+", help="Select named mock services within one lab")
     parser.add_argument("--apply", action="store_true", help="Execute start/clean; otherwise print the plan")
     parser.add_argument("--rancher-wsl", action="store_true",
@@ -72,8 +78,8 @@ def main() -> int:
     DOCKER_COMMAND[:] = (["wsl", "--distribution", "rancher-desktop", "--exec", "docker"]
                          if args.rancher_wsl else ["docker"])
     if args.services and args.lab == "both":
-        parser.error("--services requires --lab legacy or --lab unified")
-    names = list(LABS) if args.lab == "both" else [args.lab]
+        parser.error("--services requires one named lab")
+    names = ["legacy", "unified"] if args.lab == "both" else [args.lab]
     labs = [load_lab(name) for name in names]
     for lab in labs:
         if args.services:

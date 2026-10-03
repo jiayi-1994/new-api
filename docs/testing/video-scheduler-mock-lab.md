@@ -4,7 +4,67 @@
 
 **2026-10-04 清理已完成：删除 46 个容器。** 旧实验室删除 41 个，统一实验室删除实际存在的 `mock01`–`mock05` 共 5 个；其余 15 个统一 mock 原本不存在。容器总数从 178 降至 132，所有非目标容器的 ID 和状态未变，59 个卷、41 条镜像标签、19 个网络均未变化。证据保存在本机 `.scratch/video-mock-maintenance/cleanup-verification-20261004.json`。
 
-本次通过 Rancher 自有 WSL 中的同一 Docker 引擎执行清理，未执行全局 `wsl --shutdown`。Windows Docker 接口仍有 Hyper-V socket 超时，Rancher 界面仍报告 `STARTING`，不能把清理成功视为这些问题已修复。两实验室保留的 7 个网关、数据库和缓存容器在清理前就已停止，清理后仍保留该状态；复测前须恢复所需依赖。2026-10-03 的 HTTP 快照保存在 `.scratch/video-mock-maintenance/snapshot-20261003T144157Z/`，属于历史证据，不代表当前运行状态。
+本次通过 Rancher 自有 WSL 中的同一 Docker 引擎执行清理，未执行全局 `wsl --shutdown`。清理时 Windows Docker 接口仍有 Hyper-V socket 超时；随后补建 Seedance 实验室时，该接口已恢复，实际完成了容器创建和 HTTP 验证。两套旧实验室保留的 7 个网关、数据库和缓存容器在清理前就已停止，清理后仍保留该状态。2026-10-03 的 HTTP 快照保存在 `.scratch/video-mock-maintenance/snapshot-20261003T144157Z/`，属于历史证据，不代表当前运行状态。
+
+## 新增：统一售价与 20 个 Seedance 上游
+
+独立网关：`http://127.0.0.1:35000`。Compose 项目为 `codex-uvm-stress-seedance-20261004-f1567e0d`，包含网关、PostgreSQL、Redis 和 20 个上游；另有同项目标签的参考媒体容器。旧实验室不参与这些测试。上游管理端口为 `35010`–`35029`，媒体统计端口为 `35005`，数据库和 Redis 不发布宿主端口。
+
+公开模型统一为 `seedance-2.0`，时长逐秒覆盖 **4–15 秒**，分辨率为 **480p / 720p / 1080p / 4K**；原需求中的 1024 已按用户确认替换为 1080p。实验售价分别为 **0.56 / 1 / 3 / 5 USD 每输出秒**。这些是实验参数，不代表真实供应商报价。不同采购模式、模型映射和参考视频费用均不改变公开模型的统一售价。
+
+| 采购类别 | 渠道编号 | 能力与价格规则 |
+| --- | --- | --- |
+| 单分辨率按条 | 01–04 | 固定 480p、720p、720p、4K；02 仅允许 5/10/15 秒 |
+| 多分辨率按条 | 05–08 | 各分辨率独立条价；05 的 720p 上限为 12 秒 |
+| 单分辨率按秒 | 09–12 | 分别支持 480p、720p、1080p、4K |
+| 多分辨率按秒 | 13–16 | 各档独立秒价；16 的 4K 仅允许 10–15 秒 |
+| 多分辨率加参考视频费用 | 17–20 | 17/18/20 按参考视频输入秒数加价；19 按输出秒数加价 |
+
+20 个容器使用 `seedance-hjmie`、`megabyai`、`meaicc`、`paipu`、`pidoi` 五种真实插件协议。MeAI `sd-2-c1` 只支持 720p，因此 03 的能力表仅包含 720p。各渠道详细价格及独立的 Decimal 选渠核算在 `scripts/testing/seedance-scheduler-e2e.py` 的 `PROFILES` / `expected_candidates` 中。
+
+测试经管理 API 配置售价、分组、渠道和令牌，经 `/v1/videos` 提交真实网关请求，经真实轮询进入终态。数据库仅作只读核对，不写入健康样本或伪造资格。先满足能力、毛利、健康和容量门槛，再按既有优先级、稳定性、质量、采购成本规则选渠；“最优”不等同于无条件选最低价格。
+
+本机入口依赖保留的 `.scratch/unified-video-model-plan/stress/{fixture.py,run_stress.py}`、mock 源码、媒体/TLS 文件及已缓存 Docker 镜像。它是该本地实验室的复测入口，不能在仅克隆仓库后直接运行。凭据保存在运行目录的 `credentials.private.json`、`relay-tokens.private.json`，不要提交这些文件。
+
+```powershell
+# 恢复现有实验室；不重建数据库、不重放请求。
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --resume --stage prepare
+
+# 用新证据前缀实际复测；同名前缀的已完成阶段不会重复提交。
+# 资格过期或模式重新开启后，先用真实任务重新取得资格。
+$seedanceCheck = Get-Date -Format 'yyyyMMdd_HHmmss'
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --resume --stage qualify --qualification-label "recheck_$seedanceCheck"
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --resume --stage matrix --phase-prefix "recheck_$seedanceCheck-"
+
+# 仅查看新增 20 个 mock；旧清理命令的默认范围仍是 legacy + unified。
+python scripts/testing/video-mock-lab.py status --lab seedance
+# 仅预览清理计划；加 --apply 才会删除这 20 个 mock，保留其数据卷和网关。
+python scripts/testing/video-mock-lab.py clean --lab seedance
+
+# 全新隔离实验：标签与端口都必须未被使用。
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-fresh-run --port-base 35100 --stage all
+```
+
+`all` 依次执行真实资格验证、三套 48 格矩阵、逐上游参考视频计价、输入边界与毛利、优先级与质量、售价快照、模式切换、容量与 429、提交/生成/轮询故障、未知接纳、操作员复核及恢复。测试结束保留服务运行，便于查看界面与审计。参考视频仅使用本地 HTTPS 媒体；`fetch_setting.allow_private_ip=true` 只配置在这个隔离网关中。
+
+统一售价模型在 `off` / `shadow` 模式下应拒绝新提交且不扣费；切回 `on` 会开始新的健康验证轮次。不能把“切回开启”当成“已恢复正常资格”，也不能把验证槽位限制误判成业务容量故障。入口通过真实请求积累至少 20 个完成样本；本实验资格有效期为 1 小时，过期或重新激活后使用新的 `--qualification-label` 运行 `--stage qualify`，再以新的 `--phase-prefix` 复测。失败阶段的原始证据始终保留。
+
+结果位于 `.scratch/unified-video-model-plan/stress/runs/seedance-20261004/results/`。每阶段同时核对返回任务 ID、请求令牌、公开模型、冻结的售价事实、每条消费/退款日志、钱包与令牌余额，以及 mock 接纳事件是否重复；矩阵还核对审计采购成本与独立报价。最终结果须以报告为准，容器启动或请求 HTTP 200 均不代表完成验证。
+
+**2026-10-04 实测结果：30 项要求全部通过，最终选定阶段共 381 次请求、3361 项检查。** 正常矩阵与故障恢复后的矩阵各为 `12 个时长 × 4 档分辨率 × 3 种参考视频输入`，共 288 格。三种输入分别为无参考视频、2.5 秒参考视频，以及 8+12 秒两个参考视频。五种采购类别均实际成为过最优候选并被选中。
+
+| 实测结果 | 数量与核对 |
+| --- | --- |
+| 成功任务 | 359；公开售价、采购成本、模型映射、钱包及令牌逐项一致 |
+| 预期终态失败 | 6；各恰好一笔消费、一笔等额退款，最终扣费为零 |
+| 拒绝或未知接纳 | 16；未返回公开任务，未保留扣费；其中 3 次未知接纳均只被一个上游接纳，未转投备用渠道 |
+| 资格恢复 | 20 个渠道全部 `normal` 且证据完整；人工恢复没有直接授予正常资格 |
+| 最终环境 | 无在途任务，价格/优先级/容量/故障配置恢复基线，3 条未知接纳记录已通过管理 API 复核 |
+| 参考媒体 | 未收到网关鉴权凭据；整数、小数、多视频及重复 URL 的计价均已核对 |
+
+以 `summary.json` 的 `requirements`、`complete=true`、`all_checks_passed=true`，以及 `fault-classification.json`、`final-baseline-verification.json` 为本轮结论。`earlier_failed_trials` 保留了四次前期试验：首次校准未完成、误把关闭模式视为可提交、模式切换后尚未重新取得资格，以及误以为全阻断时不会运行受限恢复探测。修正测试前提后，使用 `guards-`、`qualified-`、`recovery2-` 等新前缀复测，未删除失败证据，也未修改生产逻辑去迎合错误预期。
+
+实测运行时为 Docker 29.5.3、PostgreSQL 15.19、Redis 8.10.2；网关由 Go 1.25.1 构建为 Linux amd64，生产源码基线为 `d1147a10e`，精确二进制和前端哈希见 `fixture.json`。本轮提交仅增加实验入口、管理范围和文档，不修改数据库或计费实现。本轮属于功能与记账验证；600 秒持续吞吐使用下文的独立性能入口。管理界面登录信息单独保存在本机运行目录的 `admin-login.private.json`，不要提交。
 
 ## 1. 查看、清理和恢复
 
@@ -36,6 +96,7 @@ python scripts/testing/video-mock-lab.py status --rancher-wsl
 | --- | --- | --- | --- |
 | `legacy` | `codex-vsched-analysis-20261002` | `mock01`–`mock20`、`multi01`–`multi20`、`inputmedia`，41 个服务 | `app/db/cache`；`database/gateway_data` 卷；宿主媒体与 TLS 目录 |
 | `unified` | `codex-unified-video-20261002` | `mock01`–`mock20`，20 个服务 | `app/postgres/mysql/cache`；数据库、网关及全部 `mockNN_data` 卷 |
+| `seedance`（须显式选择） | `codex-uvm-stress-seedance-20261004-f1567e0d` | `mock01`–`mock20`，20 个服务 | `app/db/cache`、独立媒体容器及全部数据卷 |
 
 实际容器数量以 `status` 为准。保留 `33800` / `33960` 网关；`33880` / `33881` 独立预览及 Windows 原生进程不在清理范围。不要使用 `compose down`、`prune`、`-v/--volumes`、`--remove-orphans`，不要删除宿主实验目录。
 
@@ -101,7 +162,7 @@ Redis 场景还需 Python `redis` 包和已有 `.scratch/feature-v110-review/red
 
 结果在 `.scratch/unified-video-model-plan/stress/runs/<label>/`：`fixture.json` 记录源码/二进制/前端哈希和进程生命周期；`results/summary.json` 与各阶段 `*-requests.*`、`*-evidence.json` 保存请求和对账；独立探针分别写 `service-availability.json`、`capacity-ownership.json`、`manual-recovery.json`；网关日志、mock 日志与持久事件保留在运行目录。
 
-判定报告按入口选择：`run_native.py` 看 `summary.json` 的 `complete` 与 `all_checks_passed`；服务/容量探针分别看独立报告的 `complete` 与全部检查，不要求其辅助 `summary.json` 的完成标志；恢复探针同时检查 `manual-recovery.json` 和 `summary.json`。上述标志和检查均应为真，程序正常退出，阶段已接纳任务均到终态，逐任务/令牌/钱包一致且无重复接纳，并确认本次进程已停止。只看提交 HTTP 200、总余额或编译通过均不够；故障场景允许明确预期的非 200 响应。
+判定报告按入口选择：`run_native.py` 看 `summary.json` 的 `complete` 与 `all_checks_passed`；服务/容量探针分别看独立报告的 `complete` 与全部检查，不要求其辅助 `summary.json` 的完成标志；恢复探针同时检查 `manual-recovery.json` 和 `summary.json`。上述标志和检查均应为真，程序正常退出，阶段已接纳任务均到终态，逐任务/令牌/钱包一致且无重复接纳。原生入口还应确认本次进程已停止；Seedance Docker 入口则刻意保留容器运行，供后续查看。只看提交 HTTP 200、总余额或编译通过均不够；故障场景允许明确预期的非 200 响应。
 
 遇到资源保护拒绝，保留报告，解决负载/空间后用新标签重跑；不要关闭保护。`video_health_unavailable` 先检查首次校准和任务轮询；未知接纳先核对 mock 事件与健康尝试，不能直接重发同一请求。新建数据库会保留用于复核，删除数据库是单独的数据清理操作。
 
