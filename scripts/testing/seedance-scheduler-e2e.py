@@ -14,10 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from decimal import Decimal
 import json
+import math
 import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 
 import requests
@@ -211,7 +213,7 @@ class SeedanceRunner(Runner):
             body.update({"videos": case["videos"], "images": ["https://inputmedia:8443/reference.png"]})
         body.update(case.get("body", {}))
         started = time.perf_counter()
-        record = {**case, "token_id": token["id"], "model": MODEL}
+        record = {**case, "token_id": token["id"], "model": MODEL, "started_at": time.time()}
         try:
             if case.get("multipart"):
                 files = {key: (None, json.dumps(value) if isinstance(value, list) else str(value)) for key, value in body.items()}
@@ -222,9 +224,78 @@ class SeedanceRunner(Runner):
         except (requests.RequestException, ValueError) as error:
             record.update({"status": 0, "error": self.lab._redact(str(error))})
         record["latency_ms"] = (time.perf_counter() - started) * 1000
+        record["ended_at"] = time.time()
         return record
 
-    def phase(self, label, cases, concurrency=8, after_submit=None):
+    def timed_workload(self, label, cases, concurrency, duration, rps):
+        """Closed-loop concurrency ramp or paced, bounded-in-flight sustained load."""
+        # Python 3.10 on Windows uses 15.625 ms ticks for monotonic(). A final
+        # scheduled request can have a smaller deadline margin; use QPC here.
+        # Paced requests are offered during the window and may dispatch at most
+        # one second late. Record wake-up jitter instead of discarding the tail.
+        start = time.perf_counter()
+        epoch = time.time()
+        lock = threading.Lock()
+        records = []
+        next_index = 0
+        offered = math.ceil(duration * rps) if rps else None
+        with (self.results / f"{label}-requests.jsonl").open("x", encoding="utf-8") as journal:
+            def worker():
+                nonlocal next_index
+                while True:
+                    if offered is None and time.perf_counter() - start >= duration:
+                        return
+                    with lock:
+                        index = next_index
+                        next_index += 1
+                    if offered is not None and index >= offered:
+                        return
+                    due = index / rps if rps else time.perf_counter() - start
+                    delay = due - (time.perf_counter() - start)
+                    if delay > 0:
+                        time.sleep(delay)
+                    sent = time.perf_counter() - start
+                    if (offered is None and sent >= duration) or (offered is not None and sent - due > 1):
+                        return
+                    record = self.post_case({**cases[index % len(cases)], "prompt": f"{label}:{index}",
+                                             "offered_at": epoch + due, "dispatch_seconds": sent,
+                                             "scheduling_delay_ms": max(0, sent - due) * 1000})
+                    with lock:
+                        records.append(record)
+                        journal.write(json.dumps(record) + "\n")
+                        journal.flush()
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                for future in [pool.submit(worker) for _ in range(concurrency)]:
+                    future.result()
+        remaining = duration - (time.perf_counter() - start)
+        if remaining > 0:
+            time.sleep(remaining)
+        return records, {"started_at": epoch, "load_window_seconds": duration,
+                         "elapsed_seconds": time.perf_counter() - start, "offered_rps": rps,
+                         "last_request_start_seconds": max((record["dispatch_seconds"] for record in records), default=0),
+                         "offered_count": offered, "not_dispatched": max(0, offered - len(records)) if offered is not None else 0,
+                         "concurrency": concurrency}
+
+    def sample_load(self, label, stop, samples):
+        due = time.monotonic()
+        with (self.results / f"{label}-resources.jsonl").open("x", encoding="utf-8") as journal:
+            while not stop.is_set():
+                point = {"time": time.time()}
+                try:
+                    point.update({"resource": self.lab.resources(), "pending": self.pending()})
+                    started = time.monotonic()
+                    response = requests.get(self.lab.base + "/api/status", timeout=5)
+                    point["public_status"] = {"status": response.status_code, "success": response.json().get("success"),
+                                              "latency_ms": (time.monotonic() - started) * 1000}
+                except Exception as error:
+                    point["sampling_error"] = self.lab._redact(str(error))
+                samples.append(point)
+                journal.write(json.dumps(point) + "\n")
+                journal.flush()
+                due += 5
+                stop.wait(max(0, due - time.monotonic()))
+
+    def phase(self, label, cases, concurrency=8, after_submit=None, duration=None, rps=None):
         label = getattr(self.args, "phase_prefix", "") + label
         if self.completed(label):
             return next(p for p in self.report["phases"] if p["label"] == label)
@@ -233,14 +304,29 @@ class SeedanceRunner(Runner):
         self.begin_phase(label, before, cursors)
         self.report.update({"complete": False, "all_checks_passed": False})
         self.save()
-        work = [{**case, "prompt": f"{label}:{index}"} for index, case in enumerate(cases)]
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            records = list(pool.map(self.post_case, work))
-        write_json(self.results / f"{label}-requests.json", records)
-        if after_submit:
-            after_submit()
-        drained = self.drain(210)
-        tasks = self.lab.rows(f"SELECT id,task_id,platform,channel_id,status,quota,fail_reason,video_health_attribution,(private_data::json->>'token_id')::bigint token_id,properties::json properties,private_data::json->'billing_context'->'tiered_snapshot' sales_snapshot,private_data::json->'scheduling_summary' scheduling FROM tasks WHERE id>{before['task_id']} ORDER BY id")
+        metrics, samples = {}, []
+        sampling_done = threading.Event()
+        sampler = None
+        if duration:
+            sampler = threading.Thread(target=self.sample_load, args=(label, sampling_done, samples), daemon=True)
+            sampler.start()
+        try:
+            if duration:
+                records, metrics = self.timed_workload(label, cases, concurrency, duration, rps)
+            else:
+                work = [{**case, "prompt": f"{label}:{index}"} for index, case in enumerate(cases)]
+                with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                    records = list(pool.map(self.post_case, work))
+            write_json(self.results / f"{label}-requests.json", records)
+            if after_submit:
+                after_submit()
+            pending_at_stop = self.pending() if duration else []
+            drained = self.drain(300 if duration else 210)
+        finally:
+            sampling_done.set()
+            if sampler:
+                sampler.join(timeout=25)
+        tasks = self.lab.rows(f"SELECT id,task_id,platform,channel_id,status,quota,submit_time,finish_time,fail_reason,video_health_attribution,(private_data::json->>'token_id')::bigint token_id,properties::json properties,private_data::json->'billing_context'->'tiered_snapshot' sales_snapshot,private_data::json->'scheduling_summary' scheduling FROM tasks WHERE id>{before['task_id']} ORDER BY id")
         total = sum(task["quota"] for task in tasks)
         deadline = time.monotonic() + 25
         while True:
@@ -260,11 +346,35 @@ class SeedanceRunner(Runner):
         phase = {"label": label, "count": len(records), "terminal": dict(Counter(t["status"] for t in tasks)),
                  "statuses": dict(Counter(r["status"] for r in records)), "checks": [], "drain_seconds": drained,
                  "money": money, "selected_channels": dict(Counter(t["channel_id"] for t in tasks))}
+        if duration:
+            phase.update(metrics)
+            phase.update({"accepted": len(tasks), "resource_samples": len(samples), "pending_at_stop": pending_at_stop,
+                          "peak_pending": max((sum(row['n'] for row in point.get('pending', [])) for point in samples), default=0),
+                          "completed_per_second_including_drain": sum(t['status'] == 'SUCCESS' for t in tasks) / (metrics['elapsed_seconds'] + drained),
+                          "submission_rps": len(records) / metrics['elapsed_seconds']})
+            for name, values in (("latency_ms", [record["latency_ms"] for record in records]),
+                                 ("scheduling_delay_ms", [record["scheduling_delay_ms"] for record in records]),
+                                 ("task_completion_seconds", [task["finish_time"]-task["submit_time"] for task in tasks])):
+                ordered = sorted(values)
+                phase[name] = {key: ordered[max(0, math.ceil(len(ordered)*quantile)-1)] if ordered else None
+                               for key, quantile in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}
         receipt = {r["data"]["id"]: r for r in records if 200 <= r["status"] < 300 and r.get("data", {}).get("id")}
         self.check(phase, "returned task IDs and persisted tasks correspond one-to-one", len(receipt) == len(tasks) and set(receipt) == {t["task_id"] for t in tasks})
         self.check(phase, "wallet and aggregate token balances match terminal quotas", all(value == total for value in money.values()), money)
         self.check(phase, "consume minus refund logs match terminal quotas", sum(l["quota"] * (1 if l["type"] == 2 else -1) for l in logs) == total)
         self.check(phase, "no duplicate upstream acceptance", all(count == 1 for count in Counter(e["prompt"] for e in accepts).values()))
+        if duration:
+            rejected = [record for record in records if record["status"] >= 400]
+            codes = {"system_cpu_overloaded", "system_memory_overloaded", "system_disk_overloaded"}
+            self.check(phase, "load rejections are explicit resource protection", all(record["status"] == 503
+                       and isinstance(record.get("data", {}).get("error"), dict)
+                       and record["data"]["error"].get("code") in codes for record in rejected),
+                       dict(Counter(str(record.get("data", {}).get("error")) for record in rejected)))
+            rejected_prompts = {record["prompt"] for record in rejected}
+            self.check(phase, "resource-rejected requests never reached upstream", not any(event["prompt"] in rejected_prompts for event in submits))
+            public_samples = [point["public_status"] for point in samples if "public_status" in point]
+            self.check(phase, "public status remains available under load", bool(public_samples)
+                       and all(point["status"] == 200 and point["success"] for point in public_samples))
         expected_tokens = Counter()
         outcomes = []
         for task in tasks:
@@ -362,6 +472,126 @@ class SeedanceRunner(Runner):
                     case["expected"] = case["oracle"]["numbers"]
                     cases.append(case)
             self.phase(prefix + "-" + name, cases)
+
+    def pressure(self):
+        """Measure the existing heterogeneous fleet without rewriting its prices."""
+        report_path = self.results / f"{self.args.phase_prefix}pressure-report.json"
+        if report_path.exists():
+            raise RuntimeError("Pressure evidence already exists; choose a new --phase-prefix")
+        baseline = None
+        if self.args.reuse_ramp_prefix:
+            baseline = json.loads((self.results / f"{self.args.reuse_ramp_prefix}pressure-report.json").read_text(encoding="utf-8"))
+            for result in baseline["ramp"]:
+                previous = next((phase for phase in self.report["phases"] if phase["label"] == result["label"]), None)
+                if not previous or not previous.get("finalized") or any(not check["passed"] for check in previous["checks"]):
+                    raise RuntimeError("Cannot reuse an unverified ramp measurement")
+        self.drain()
+        # Start a fresh activation and acquire new certificates through real
+        # tasks. A normal certificate may otherwise expire during the load run.
+        self.lab.sched(mode="off")
+        self.lab.sched(mode="on")
+        self.qualify(suffix="pressure")
+        cases = []
+        # Interleave resolution and reference inputs so even short ramps exercise
+        # every pricing path instead of exhausting one tier before the next.
+        for seconds in SECONDS:
+            for tier in TIERS:
+                for videos, input_seconds in (([], 0), (["https://inputmedia:8443/fraction.mp4"], 2.5),
+                                              (["https://inputmedia:8443/eight.mp4", "https://inputmedia:8443/twelve.mov"], 20)):
+                    case = {"seconds": seconds, "resolution": tier, "videos": videos, "input_seconds": input_seconds,
+                            "allow_rejection": True}
+                    case["oracle"] = expected_candidates(case)
+                    case["expected"] = case["oracle"]["numbers"]
+                    cases.append(case)
+        pressure = {"complete": False, "all_checks_passed": False, "ramp": [], "workload_cases": len(cases),
+                    "fixture_prices_unchanged": True, "sample_interval_seconds": 5,
+                    "resource_protection": "unchanged", "sustain_seconds": self.args.sustain_seconds,
+                    "selection_rule": "Select the lowest concurrency within 90 percent of the best measured end-to-end completion rate, then offer 80 percent of that selected point's measured rate"}
+        self.report["pressure"] = pressure
+        self.save()
+        stable = []
+        if baseline:
+            pressure["ramp"] = baseline["ramp"]
+            pressure["ramp_source"] = f"{self.args.reuse_ramp_prefix}pressure-report.json"
+            stable = [phase for phase in self.report["phases"] if phase.get("stable_load")
+                      and any(result["label"] == phase["label"] for result in baseline["ramp"])]
+        for concurrency in (() if baseline else (1, 4, 16, 32, 64)):
+            idle = []
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                point = self.lab.resources()
+                idle.append(point)
+                if len(idle) >= 3 and all(point.get("vm_cpu_percent", 100) < 60 and point["vm_available_bytes"] > 1024**3 for point in idle[-3:]):
+                    break
+                time.sleep(5)
+            else:
+                write_json(self.results / f"{self.args.phase_prefix}pressure-idle-failed-c{concurrency}.json", idle)
+                raise RuntimeError("Rancher VM did not become idle for a reliable load measurement")
+            pressure.setdefault("idle_before_ramp", {})[str(concurrency)] = idle
+            phase = self.phase(f"pressure-ramp-c{concurrency}", cases, concurrency=concurrency, duration=self.args.ramp_seconds)
+            phase["stable_load"] = (phase["count"] > 0 and phase["accepted"] == phase["count"]
+                                     and phase["terminal"].get("SUCCESS") == phase["count"] and phase["latency_ms"]["p95"] < 1500)
+            self.save_phase(phase, finalized=True)
+            pressure["ramp"].append({key: phase[key] for key in ("label", "concurrency", "count", "accepted", "terminal",
+                                      "latency_ms", "submission_rps", "completed_per_second_including_drain", "peak_pending", "stable_load")})
+            if phase["stable_load"] and all(check["passed"] for check in phase["checks"]):
+                stable.append(phase)
+            self.save()
+            if (phase["count"]-phase["accepted"])/max(1, phase["count"]) > .1 or phase["latency_ms"]["p95"] > 5000:
+                pressure["ramp_stop"] = {"concurrency": concurrency, "reason": "resource rejection rate exceeded 10 percent or p95 exceeded 5 seconds"}
+                break
+        if not stable:
+            raise AssertionError("No stable ramp point; sustained load was not started")
+        best = max(phase["completed_per_second_including_drain"] for phase in stable)
+        knee = min((phase for phase in stable if phase["completed_per_second_including_drain"] >= best*.9), key=lambda phase: phase["concurrency"])
+        offered = knee["completed_per_second_including_drain"] * .8
+        pressure["selected_load"] = {"measured_phase": knee["label"], "concurrency": knee["concurrency"],
+                                      "measured_completion_rps": knee["completed_per_second_including_drain"], "offered_rps": offered}
+        self.save()
+        print(json.dumps({"pressure_selected_load": pressure["selected_load"]}), flush=True)
+        phase = self.phase("pressure-sustain", cases, concurrency=knee["concurrency"], duration=self.args.sustain_seconds, rps=offered)
+        self.check(phase, "full sustained schedule dispatched", phase["load_window_seconds"] == self.args.sustain_seconds
+                   and phase["not_dispatched"] == 0 and phase["count"] == phase["offered_count"])
+        self.check(phase, "sustained client maintained offered rate", phase["submission_rps"] >= offered*.99
+                   and phase["scheduling_delay_ms"]["p95"] < 1000 and phase["scheduling_delay_ms"]["max"] <= 1000)
+        self.check(phase, "all sustained requests accepted and completed", phase["accepted"] == phase["count"]
+                   and phase["terminal"] == {"SUCCESS": phase["count"]})
+        samples = [json.loads(line) for line in (self.results / f"{phase['label']}-resources.jsonl").read_text(encoding="utf-8").splitlines()]
+        duration, epoch = self.args.sustain_seconds, phase["started_at"]
+        points = [(point["time"]-epoch, sum(row["n"] for row in point.get("pending", []))) for point in samples
+                  if "sampling_error" not in point and epoch <= point["time"] < epoch+duration]
+        early = [pending for at, pending in points if duration*.2 <= at < duration*.4]
+        late = [pending for at, pending in points if duration*.8 <= at < duration]
+        trend = [(at, pending) for at, pending in points if at >= duration*.2]
+        coverage = len(points) >= duration / 5 * .8 and min(len(early), len(late)) >= duration*.2/5*.8
+        self.check(phase, "backlog sampling covers at least 80 percent of the interval and comparison windows", coverage,
+                   {"total": len(points), "early": len(early), "late": len(late)})
+        if coverage:
+            mean_time = sum(at for at, _ in trend)/len(trend)
+            mean_pending = sum(pending for _, pending in trend)/len(trend)
+            slope = sum((at-mean_time)*(pending-mean_pending) for at, pending in trend)/sum((at-mean_time)**2 for at, _ in trend)
+            backlog = {"early_mean": sum(early)/len(early), "late_mean": sum(late)/len(late), "slope_tasks_per_second": slope,
+                       "growth_tolerance": max(5, offered), "slope_tolerance": max(.01, offered*.01)}
+            self.check(phase, "pending tasks do not grow continuously after warmup", backlog["late_mean"] <= backlog["early_mean"]+backlog["growth_tolerance"]
+                       and slope <= backlog["slope_tolerance"], backlog)
+            phase["backlog_stability"] = backlog
+        resources = [point["resource"] for point in samples if "resource" in point]
+        phase["resources"] = {"peak_gateway_rss_mib": max(point["rss_bytes"] for point in resources)/1024**2,
+                               "minimum_vm_available_mib": min(point["vm_available_bytes"] for point in resources)/1024**2,
+                               "peak_gateway_cpu_percent": max(point.get("gateway_process_cpu_percent", 0) for point in resources),
+                               "peak_vm_cpu_percent": max(point.get("vm_cpu_percent", 0) for point in resources)}
+        health = self.state()
+        self.check(phase, "twenty providers remain qualified after pressure", len(health) == 20 and all(state["state"] == "normal" and state["integrity"] == "complete" for state in health))
+        self.save_phase(phase, finalized=True)
+        pressure.update({"sustained_phase": phase["label"], "final_health": health,
+                         "complete": all(check["passed"] for check in phase["checks"]),
+                         "all_checks_passed": all(check["passed"] for check in phase["checks"])})
+        self.report["complete"] = pressure["complete"] and all(item["passed"] for item in self.report.get("requirements", []))
+        self.report["all_checks_passed"] = self.report["complete"]
+        self.save()
+        write_json(report_path, pressure)
+        if not pressure["complete"]:
+            raise AssertionError("Sustained pressure checks failed; retain evidence and diagnose before another run")
 
     def boundaries(self):
         self.pool(range(1, 21))
@@ -655,10 +885,18 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--qualification-label", default="initial")
     parser.add_argument("--phase-prefix", default="", help="New evidence namespace after diagnosing a failed phase")
-    parser.add_argument("--stage", choices=("prepare", "qualify", "matrix", "contracts", "boundaries", "policies", "modes", "faults", "capacity", "recover", "all"), default="all")
+    parser.add_argument("--ramp-seconds", type=int, default=20)
+    parser.add_argument("--sustain-seconds", type=int, default=600)
+    parser.add_argument("--reuse-ramp-prefix", help="Reuse verified ramps from a prior pressure report in this same fixture")
+    parser.add_argument("--stage", choices=("prepare", "qualify", "matrix", "contracts", "boundaries", "policies", "modes", "faults", "capacity", "recover", "pressure", "all"), default="all")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", args.qualification_label) or not re.fullmatch(r"[A-Za-z0-9_-]{0,48}", args.phase_prefix):
         parser.error("Evidence labels accept only ASCII letters, digits, underscores and hyphens")
+    if not 10 <= args.ramp_seconds <= 120 or not 60 <= args.sustain_seconds <= 3600:
+        parser.error("Ramp duration must be 10–120 seconds and sustained duration 60–3600 seconds")
+    if args.reuse_ramp_prefix and (args.stage != "pressure" or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", args.reuse_ramp_prefix)
+                                   or args.reuse_ramp_prefix == args.phase_prefix):
+        parser.error("Ramp reuse requires --stage pressure and distinct, valid evidence prefixes")
     fixture = start_fixture(args)
     runner = SeedanceRunner(fixture, args)
     runner.bootstrap()
@@ -669,6 +907,8 @@ def main():
     for stage in ("contracts", "boundaries", "policies", "modes", "capacity", "faults", "recover"):
         if args.stage in (stage, "all"):
             getattr(runner, stage)()
+    if args.stage == "pressure":
+        runner.pressure()
     runner.save()
     print(json.dumps({"base": fixture.base, "report": str(runner.report_path), "services_retained_running": True}), flush=True)
 
