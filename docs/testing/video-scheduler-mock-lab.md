@@ -107,6 +107,38 @@ python -B scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --
 
 结论依据为 `pressure3-pressure-report.json` 与 `pressure3-pressure-sustain-analysis.json`；原始前两轮报告和请求、资源、对账证据保留在相同目录。测试入口修复由确定性时钟回归、第三轮真实 600 秒负载、Python 语法检查及文档 PowerShell 解析验证。本次未修改生产调度、计费或数据库实现。
 
+### 压测收尾与下次恢复
+
+最终复测共通过 **61413 项检查**。代码与压测报告已提交为 `cc6efa9d750a5f49b8d7cd00097ec1cd1bdaec8a`，[CI 检查及镜像发布成功](https://github.com/jiayi-1994/new-api/actions/runs/37167479881)。GHCR `ghcr.io/jiayi-1994/new-api` 与 Docker Hub `xjy94/new-api` 的 `feature-v1.1.0-cc6efa9d7` 标签均对应此提交，镜像摘要一致：`sha256:f0c56393f647544f006b5ec25523a4de5e35f6a19fa6563d8a69d17cd1042360`。这是压测入口的发布版本，实验网关仍使用上文记录的冻结二进制。
+
+日常停用只停止本次 `seedance` 实验室的 `mock01`–`mock20`，保留容器、镜像、卷、配置和原始测试证据。网关、数据库、Redis 与参考媒体服务继续保留。停止前须确认没有在途任务；`clean --apply` 会删除容器，不用于这种保留现场的停用。
+
+**2026-10-04 已完成停用：20 个 mock 均为 `exited`，没有删除容器。** 停止前在途任务为零；停止后核对全部 156 个容器仍存在，非目标容器的 ID 与状态未变，数据卷、镜像和网络清单完全一致。核对记录保存在本机运行目录的 `mock-stop-verification.json`，六项检查全部通过；恢复命令已完成无副作用预览。
+
+```powershell
+# 在确认当前实验没有在途任务后，只停止这 20 个上游。
+$seedanceCompose = Join-Path (Get-Location) '.scratch/unified-video-model-plan/stress/runs/seedance-20261004/compose.private.json'
+$seedanceMocks = 1..20 | ForEach-Object { 'mock{0:D2}' -f $_ }
+docker compose -p codex-uvm-stress-seedance-20261004-f1567e0d -f $seedanceCompose stop --timeout 10 @seedanceMocks
+python scripts/testing/video-mock-lab.py status --lab seedance
+
+# 下次测试：先预览，再恢复所保留的模拟器，不拉镜像、不构建、不提交任务。
+python scripts/testing/video-mock-lab.py start --lab seedance
+python scripts/testing/video-mock-lab.py start --lab seedance --apply
+python scripts/testing/video-mock-lab.py status --lab seedance
+foreach ($mockPort in 35010..35029) {
+    Invoke-RestMethod "http://127.0.0.1:$mockPort/health"
+    Invoke-RestMethod "http://127.0.0.1:$mockPort/_config"
+}
+
+# 容器恢复不等于调度资格仍有效；先重新积累真实样本，再使用新证据前缀。
+$resumeStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --resume --stage qualify --qualification-label "resume_$resumeStamp" --phase-prefix "resume_$resumeStamp-"
+python scripts/testing/seedance-scheduler-e2e.py --label seedance-20261004 --resume --stage matrix --phase-prefix "resume_$resumeStamp-"
+```
+
+若网关或参考媒体也被另行停用，先运行前文的 `--resume --stage prepare` 恢复完整环境。恢复后核对 `/health` 与 `/_config`，确认未遗留故障注入或 `hold_ack`；保留的历史健康状态不能替代重新取得资格。复测当前保留版本可沿用本标签；验证修改后的生产代码须用新标签和空闲端口建立隔离实验。
+
 ## 1. 查看、清理和恢复
 
 ```powershell
