@@ -208,6 +208,8 @@ export function ChannelVideoSchedulingSection(
                         <Input
                           {...field}
                           type='number'
+                          min={0}
+                          max={1}
                           step='any'
                           placeholder='0 - 1'
                         />
@@ -226,7 +228,9 @@ export function ChannelVideoSchedulingSection(
                         <Input
                           {...field}
                           type='number'
-                          step='any'
+                          min={0}
+                          max={Number.MAX_SAFE_INTEGER}
+                          step={1}
                           placeholder={t('Unlimited')}
                         />
                       </FormControl>

@@ -295,7 +295,7 @@ test('an out-of-range quality on a hidden tab still reveals routing and focuses 
   const form = screen
     .getByRole('dialog', { name: 'Edit Channel' })
     .querySelector('form')
-  expect(form?.checkValidity()).toBe(true)
+  expect(form).toHaveAttribute('novalidate')
 
   await user.click(screen.getByRole('button', { name: 'Update Channel' }))
 
@@ -305,6 +305,52 @@ test('an out-of-range quality on a hidden tab still reveals routing and focuses 
   await waitFor(() => expect(quality).toHaveFocus())
   expect(quality).toHaveAttribute('aria-invalid', 'true')
   expect(put).not.toHaveBeenCalled()
+})
+
+test('quality is validated on blur and correcting it clears the error before saving', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = await openRouting(editingChannel(pricedConfig(undefined)))
+  const quality = await screen.findByLabelText('Quality')
+
+  await user.clear(quality)
+  await user.type(quality, '2')
+  await user.tab()
+
+  expect(
+    await screen.findByText('Enter a quality between 0 and 1')
+  ).toBeVisible()
+  expect(quality).toHaveAttribute('aria-invalid', 'true')
+  expect(put).not.toHaveBeenCalled()
+
+  await user.clear(quality)
+  await user.type(quality, '1')
+  await waitFor(() => expect(quality).toHaveAttribute('aria-invalid', 'false'))
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { settings: string }
+  expect(JSON.parse(payload.settings).video_scheduling.quality).toBe(1)
+})
+
+test('clearing routing weight blocks saving until an explicit zero or positive integer is entered', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = await openRouting(editingChannel(pricedConfig(undefined)))
+  const weight = await screen.findByLabelText('Weight')
+
+  await user.clear(weight)
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+
+  await waitFor(() => expect(weight).toHaveAttribute('aria-invalid', 'true'))
+  expect(weight).toHaveValue(null)
+  expect(put).not.toHaveBeenCalled()
+
+  await user.type(weight, '0')
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  expect(put.mock.calls[0]?.[1]).toMatchObject({ weight: 0 })
 })
 
 test('the only base price tier cannot be removed', async () => {

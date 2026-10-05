@@ -84,6 +84,96 @@ function savedSettings(draft: VideoSchedulingDraft) {
 }
 
 describe('video scheduling channel settings', () => {
+  test.each(['', '-0.01', '1.01', 'Infinity', 'NaN'])(
+    'quality %s is rejected before a channel can be saved',
+    (quality) => {
+      const result = channelFormSchema.safeParse({
+        ...storedForm(),
+        video_scheduling: { ...storedDraft(), quality },
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error?.issues).toContainEqual(
+        expect.objectContaining({ path: ['video_scheduling', 'quality'] })
+      )
+    }
+  )
+
+  test.each(['0', '1'])(
+    'quality boundary %s is preserved when saving',
+    (quality) => {
+      const validated = channelFormSchema.parse({
+        ...storedForm(),
+        video_scheduling: { ...storedDraft(), quality },
+      })
+
+      expect(savedSettings(draftOf(validated)).video_scheduling.quality).toBe(
+        Number(quality)
+      )
+    }
+  )
+
+  test('capacity beyond exact integer precision is rejected instead of rounded and saved', () => {
+    const result = channelFormSchema.safeParse({
+      ...storedForm(),
+      video_scheduling: { ...storedDraft(), capacity: '9007199254740993' },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({ path: ['video_scheduling', 'capacity'] })
+    )
+  })
+
+  test('a nonempty duration list containing only separators is rejected instead of removing restrictions', () => {
+    const draft = storedDraft()
+    const result = channelFormSchema.safeParse({
+      ...storedForm(),
+      video_scheduling: {
+        ...draft,
+        models: [{ ...draft.models[0], allowed_seconds: ', , ' }],
+      },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        path: ['video_scheduling', 'models', 0, 'allowed_seconds'],
+      })
+    )
+  })
+
+  test.each([
+    ['priority', 1.5],
+    ['priority', Number.MAX_SAFE_INTEGER + 1],
+    ['weight', -1],
+    ['weight', 1.5],
+    ['weight', Number.MAX_SAFE_INTEGER + 1],
+  ] as const)('invalid routing %s=%s is rejected', (field, value) => {
+    const result = channelFormSchema.safeParse({
+      ...storedForm(),
+      [field]: value,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({ path: [field] })
+    )
+  })
+
+  test('negative priority and zero weight remain valid routing settings', () => {
+    const validated = channelFormSchema.parse({
+      ...storedForm(),
+      priority: -2,
+      weight: 0,
+    })
+
+    expect(transformFormDataToUpdatePayload(validated, 7)).toMatchObject({
+      priority: -2,
+      weight: 0,
+    })
+  })
+
   test('an untouched stored config saves back unchanged, keeping explicit zeros and unknown settings', () => {
     const validated = channelFormSchema.parse(storedForm())
     const settings = savedSettings(draftOf(validated))

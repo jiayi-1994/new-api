@@ -17,8 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Minus, Plus } from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
+import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 
@@ -39,15 +42,27 @@ export function NumericSpinnerInput({
   onChange,
   onCommit,
   min = 0,
-  max,
+  max = Number.MAX_SAFE_INTEGER,
   step = 1,
   disabled = false,
   className,
   label,
 }: NumericSpinnerInputProps) {
+  const { t } = useTranslation()
+  const inputId = useId()
   const [localValue, setLocalValue] = useState(String(value ?? 0))
   const [editing, setEditing] = useState(false)
+  const [showError, setShowError] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const numericValue = Number(localValue)
+  const valid =
+    /^-?\d+$/.test(localValue) &&
+    Number.isSafeInteger(numericValue) &&
+    numericValue >= min &&
+    numericValue <= max
+  const invalid = showError && !valid
+  const atMin = numericValue <= min
+  const atMax = numericValue >= max
 
   useEffect(() => {
     if (!editing) {
@@ -65,47 +80,43 @@ export function NumericSpinnerInput({
 
   const handleIncrement = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (disabled) return
-    const next = clamp((Number(localValue) || 0) + step)
+    if (disabled || !valid || atMax) return
+    const next = clamp(numericValue + step)
+    if (!Number.isSafeInteger(next)) return
     setLocalValue(String(next))
     onChange(next)
   }
 
   const handleDecrement = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (disabled) return
-    const next = clamp((Number(localValue) || 0) - step)
+    if (disabled || !valid || atMin) return
+    const next = clamp(numericValue - step)
+    if (!Number.isSafeInteger(next)) return
     setLocalValue(String(next))
     onChange(next)
   }
 
   const handleStartEdit = () => {
     if (disabled) return
+    setShowError(false)
     setEditing(true)
     requestAnimationFrame(() => inputRef.current?.select())
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value
-    if (raw === '' || raw === '-') {
-      setLocalValue(raw)
-      return
-    }
-    if (!/^-?\d+$/.test(raw)) return
-    setLocalValue(raw)
+    setLocalValue(e.target.value)
   }
 
   const commitValue = () => {
-    setEditing(false)
-    const num = Number(localValue)
-    if (Number.isNaN(num) || localValue === '' || localValue === '-') {
-      setLocalValue(String(value ?? 0))
+    if (!valid) {
+      setShowError(true)
       return
     }
-    const clamped = clamp(num)
-    setLocalValue(String(clamped))
-    if (clamped !== (value ?? 0)) {
-      onChange(clamped)
+    setShowError(false)
+    setEditing(false)
+    setLocalValue(String(numericValue))
+    if (numericValue !== (value ?? 0)) {
+      onChange(numericValue)
     }
   }
 
@@ -127,18 +138,18 @@ export function NumericSpinnerInput({
       // so commit and onCommit each fire exactly once.
       inputRef.current?.blur()
     } else if (e.key === 'Escape') {
+      setShowError(false)
       setEditing(false)
       setLocalValue(String(value ?? 0))
     }
   }
 
-  const atMin = min !== undefined && Number(localValue) <= min
-  const atMax = max !== undefined && Number(localValue) >= max
-
   return (
-    <div className={cn('inline-flex items-center', className)}>
+    <div className={cn('inline-flex flex-col items-start gap-1', className)}>
       {label && (
-        <Label className='text-muted-foreground mr-1.5 text-xs'>{label}</Label>
+        <Label htmlFor={inputId} className='text-muted-foreground text-xs'>
+          {label}
+        </Label>
       )}
       <div
         onBlur={handleControlBlur}
@@ -148,37 +159,46 @@ export function NumericSpinnerInput({
           editing && 'bg-muted/60 ring-primary/30 ring-1'
         )}
       >
-        <button
+        <Button
           type='button'
+          variant='ghost'
+          size='icon-sm'
           tabIndex={-1}
-          aria-label='Decrement'
+          aria-label={t('Decrement')}
           onClick={handleDecrement}
-          disabled={disabled || atMin}
+          disabled={disabled || !valid || atMin}
           className={cn(
-            'text-muted-foreground/0 group-hover/spinner:text-muted-foreground flex h-7 w-6 shrink-0 items-center justify-center rounded-l-md transition-colors',
+            'text-muted-foreground/0 group-hover/spinner:text-muted-foreground h-7 w-6 rounded-l-md rounded-r-none',
             !disabled &&
+              valid &&
               !atMin &&
               'group-hover/spinner:hover:text-foreground group-hover/spinner:hover:bg-muted',
-            (disabled || atMin) && 'group-hover/spinner:opacity-30'
+            (disabled || !valid || atMin) && 'group-hover/spinner:opacity-30'
           )}
         >
           <Minus className='size-3' />
-        </button>
+        </Button>
 
         {editing ? (
-          <input
+          <Input
+            id={inputId}
             ref={inputRef}
             type='text'
+            aria-label={label ?? t('Value')}
+            aria-invalid={invalid}
+            aria-describedby={invalid ? `${inputId}-error` : undefined}
             value={localValue}
             onChange={handleInputChange}
             onBlur={commitValue}
             onKeyDown={handleKeyDown}
-            className='h-7 w-10 bg-transparent text-center font-mono text-sm outline-none'
+            className='h-7 w-10 rounded-none border-0 bg-transparent px-0 text-center font-mono text-sm'
             autoFocus
           />
         ) : (
-          <button
+          <Button
             type='button'
+            variant='ghost'
+            size='sm'
             onClick={handleStartEdit}
             disabled={disabled}
             title={localValue}
@@ -188,26 +208,38 @@ export function NumericSpinnerInput({
             )}
           >
             {localValue}
-          </button>
+          </Button>
         )}
 
-        <button
+        <Button
           type='button'
+          variant='ghost'
+          size='icon-sm'
           tabIndex={-1}
-          aria-label='Increment'
+          aria-label={t('Increment')}
           onClick={handleIncrement}
-          disabled={disabled || atMax}
+          disabled={disabled || !valid || atMax}
           className={cn(
-            'text-muted-foreground/0 group-hover/spinner:text-muted-foreground flex h-7 w-6 shrink-0 items-center justify-center rounded-r-md transition-colors',
+            'text-muted-foreground/0 group-hover/spinner:text-muted-foreground h-7 w-6 rounded-l-none rounded-r-md',
             !disabled &&
+              valid &&
               !atMax &&
               'group-hover/spinner:hover:text-foreground group-hover/spinner:hover:bg-muted',
-            (disabled || atMax) && 'group-hover/spinner:opacity-30'
+            (disabled || !valid || atMax) && 'group-hover/spinner:opacity-30'
           )}
         >
           <Plus className='size-3' />
-        </button>
+        </Button>
       </div>
+      {invalid && (
+        <p
+          id={`${inputId}-error`}
+          role='alert'
+          className='text-destructive max-w-48 text-xs whitespace-normal'
+        >
+          {t('Enter an integer between {{min}} and {{max}}.', { min, max })}
+        </p>
+      )}
     </div>
   )
 }

@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link } from '@tanstack/react-router'
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { type FieldErrors, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -75,7 +75,7 @@ function parseCapacityGroups(value: string): Record<string, number> | null {
         name !== '' &&
         name === name.trim() &&
         new TextEncoder().encode(name).length <= 64 &&
-        Number.isInteger(quota) &&
+        Number.isSafeInteger(quota) &&
         (quota as number) > 0
     )
     return valid ? (parsed as Record<string, number>) : null
@@ -84,17 +84,15 @@ function parseCapacityGroups(value: string): Record<string, number> | null {
   }
 }
 
-const rate = z
-  .number()
+const number = z.number({ error: 'Enter a valid number' })
+const rate = number
   .min(0, 'Enter a value between 0 and 1')
   .max(1, 'Enter a value between 0 and 1')
-const nonNegative = z.number().min(0, 'Enter a non-negative number')
-const count = z
-  .number()
+const nonNegative = number.min(0, 'Enter a non-negative number')
+const count = number
   .int('Enter a non-negative whole number')
   .min(0, 'Enter a non-negative whole number')
-const positive = z
-  .number()
+const positive = number
   .int('Enter a positive whole number')
   .min(1, 'Enter a positive whole number')
 
@@ -102,15 +100,23 @@ const videoSchedulingSchema = z
   .object({
     mode: z.enum(['off', 'shadow', 'on']),
     selection_policy: z.enum(['weighted_v1', 'stability_cost_v2']),
-    min_margin_rate: rate.lt(1),
+    min_margin_rate: rate.lt(
+      1,
+      'Enter a value from 0 up to but not including 1'
+    ),
     min_overall_rate: rate,
     stability_tolerance: rate,
-    qualification_ttl_seconds: positive.max(604800),
-    validation_period_seconds: positive.max(2592000),
+    qualification_ttl_seconds: positive.max(
+      604800,
+      'Enter a whole number between 1 and 604800'
+    ),
+    validation_period_seconds: positive.max(
+      2592000,
+      'Enter a whole number between 1 and 2592000'
+    ),
     audit_enabled: z.boolean(),
-    audit_retention_days: z
-      .number()
-      .int()
+    audit_retention_days: number
+      .int('Audit retention must be between 7 and 180 days')
       .min(7, 'Audit retention must be between 7 and 180 days')
       .max(180, 'Audit retention must be between 7 and 180 days'),
     models: z.array(z.string()),
@@ -120,12 +126,18 @@ const videoSchedulingSchema = z
     min_submit_rate: rate,
     min_gen_rate: rate,
     min_samples: count,
-    window_seconds: positive.max(86400),
+    window_seconds: positive.max(
+      86400,
+      'Enter a whole number between 1 and 86400'
+    ),
     explore_share: rate,
     explore_max_in_flight: count,
     probe_ratio: rate,
-    probe_cooldown_sec: positive.max(86400),
-    probe_max_in_flight: count.max(16),
+    probe_cooldown_sec: positive.max(
+      86400,
+      'Enter a whole number between 1 and 86400'
+    ),
+    probe_max_in_flight: count.max(16, 'Enter a whole number between 0 and 16'),
     unknown_sell_policy: z.enum(['exclude', 'relative']),
     max_cost_to_sell_ratio: nonNegative,
     tie_epsilon: nonNegative,
@@ -167,20 +179,15 @@ const videoSchedulingSchema = z
 type VideoSchedulingFormValues = z.infer<typeof videoSchedulingSchema>
 type SettingField = keyof VideoSchedulingSetting
 
-/** The form values as the backend setting object. */
-function toVideoSchedulingSetting(
-  values: VideoSchedulingFormValues
-): VideoSchedulingSetting {
-  return {
-    ...values,
-    capacity_groups: parseCapacityGroups(values.capacity_groups) ?? {},
-  }
-}
-
 /** Option values keyed by option name, as PUT /api/option/ stores them. */
-function toOptionValues(setting: VideoSchedulingSetting) {
+function toOptionValues(values: VideoSchedulingFormValues) {
+  // Keep invalid JSON distinct from an empty group table during dirty checks.
+  const groups = parseCapacityGroups(values.capacity_groups)
   return Object.fromEntries(
-    Object.entries(setting).map(([field, value]) => [
+    Object.entries({
+      ...values,
+      capacity_groups: groups ?? values.capacity_groups,
+    }).map(([field, value]) => [
       PREFIX + field,
       typeof value === 'object' ? JSON.stringify(value) : String(value),
     ])
@@ -191,8 +198,8 @@ function sameOptionValues(
   a: VideoSchedulingFormValues,
   b: VideoSchedulingFormValues
 ): boolean {
-  const left = toOptionValues(toVideoSchedulingSetting(a))
-  const right = toOptionValues(toVideoSchedulingSetting(b))
+  const left = toOptionValues(a)
+  const right = toOptionValues(b)
   return Object.keys(left).every((key) => left[key] === right[key])
 }
 
@@ -203,7 +210,7 @@ function toFormValues(settings: OperationsSettings): VideoSchedulingFormValues {
       settings[`${PREFIX}${field as SettingField}`],
     ])
   ) as VideoSchedulingFormValues
-  const groups = parseCapacityGroups(values.capacity_groups) ?? {}
+  const groups = parseCapacityGroups(values.capacity_groups)
   return {
     ...values,
     selection_policy: values.selection_policy || 'weighted_v1',
@@ -214,9 +221,10 @@ function toFormValues(settings: OperationsSettings): VideoSchedulingFormValues {
     validation_period_seconds: values.validation_period_seconds ?? 604800,
     audit_enabled: values.audit_enabled ?? true,
     audit_retention_days: values.audit_retention_days ?? 30,
-    capacity_groups: Object.keys(groups).length
-      ? JSON.stringify(groups, null, 2)
-      : '',
+    capacity_groups:
+      groups === null
+        ? values.capacity_groups
+        : JSON.stringify(groups, null, 2),
   }
 }
 
@@ -238,7 +246,22 @@ export function VideoSchedulingSettingsSection(props: {
   const form = useForm<VideoSchedulingFormValues>({
     resolver: zodResolver(videoSchedulingSchema),
     defaultValues: formDefaults,
+    mode: 'onTouched',
   })
+  const [revealedFields, setRevealedFields] = useState<
+    Set<keyof VideoSchedulingFormValues>
+  >(() => new Set())
+  const revealInvalidFields = (
+    errors: FieldErrors<VideoSchedulingFormValues>
+  ) => {
+    setRevealedFields(
+      (previous) =>
+        new Set([
+          ...previous,
+          ...(Object.keys(errors) as (keyof VideoSchedulingFormValues)[]),
+        ])
+    )
+  }
   // Server values replace the form only while it holds no unsaved edits: each
   // saved key refetches the options, and a reset between keys would discard
   // the rest of the submission, mode included.
@@ -247,16 +270,13 @@ export function VideoSchedulingSettingsSection(props: {
     if (!sameOptionValues(form.getValues(), pristineRef.current)) return
     pristineRef.current = formDefaults
     form.reset(formDefaults)
+    setRevealedFields(new Set())
   }, [formDefaults, form])
-  const liveSetting = useMemo(
-    () => toVideoSchedulingSetting(formDefaults),
-    [formDefaults]
-  )
   // Saved option values; a key moves here only after the server accepts it.
-  const baselineRef = useRef(toOptionValues(liveSetting))
+  const baselineRef = useRef(toOptionValues(formDefaults))
   useEffect(() => {
-    baselineRef.current = toOptionValues(liveSetting)
-  }, [liveSetting])
+    baselineRef.current = toOptionValues(formDefaults)
+  }, [formDefaults])
 
   const weights = useWatch({
     control: form.control,
@@ -267,6 +287,27 @@ export function VideoSchedulingSettingsSection(props: {
     name: 'selection_policy',
   })
   const isV2 = selectionPolicy === 'stability_cost_v2'
+  const showStabilityFields =
+    isV2 ||
+    (
+      [
+        'min_margin_rate',
+        'min_overall_rate',
+        'stability_tolerance',
+        'qualification_ttl_seconds',
+        'validation_period_seconds',
+      ] as const
+    ).some((field) => revealedFields.has(field))
+  const showWeights =
+    !isV2 ||
+    (['price_weight', 'quality_weight', 'service_weight'] as const).some(
+      (field) => revealedFields.has(field)
+    )
+  const showPricing =
+    !isV2 ||
+    (
+      ['unknown_sell_policy', 'max_cost_to_sell_ratio', 'tie_epsilon'] as const
+    ).some((field) => revealedFields.has(field))
   const weightSum = weights.reduce(
     (sum, weight) => sum + (Number(weight) || 0),
     0
@@ -278,7 +319,7 @@ export function VideoSchedulingSettingsSection(props: {
 
   const onSubmit = async (values: VideoSchedulingFormValues) => {
     const baseline = baselineRef.current
-    const next = toOptionValues(toVideoSchedulingSetting(values))
+    const next = toOptionValues(values)
     const changed = Object.keys(next).filter(
       (key) => next[key] !== baseline[key]
     )
@@ -323,6 +364,7 @@ export function VideoSchedulingSettingsSection(props: {
     const current = form.getValues()
     pristineRef.current = values
     form.reset(values)
+    setRevealedFields(new Set())
     for (const field of Object.keys(values) as (keyof typeof values)[]) {
       if (JSON.stringify(current[field]) !== JSON.stringify(values[field])) {
         form.setValue(field, current[field], { shouldDirty: true })
@@ -334,30 +376,50 @@ export function VideoSchedulingSettingsSection(props: {
     name: NumberFieldName,
     label: string,
     options: { step?: number | 'any'; description?: string } = {}
-  ) => (
-    <FormField
-      key={name}
-      control={form.control}
-      name={name}
-      render={({ field }) => (
-        <FormItem>
-          <FormLabel>{label}</FormLabel>
-          <FormControl>
-            <Input
-              type='number'
-              min={0}
-              step={options.step ?? 'any'}
-              {...safeNumberFieldProps(field)}
-            />
-          </FormControl>
-          {options.description && (
-            <FormDescription>{options.description}</FormDescription>
-          )}
-          <FormMessage />
-        </FormItem>
-      )}
-    />
-  )
+  ) => {
+    const schema = videoSchedulingSchema.shape[name]
+    let minimum = schema.minValue ?? 0
+    let maximum = schema.maxValue ?? undefined
+    if (isV2) {
+      if (name === 'min_gen_rate') minimum = 0.8
+      if (name === 'min_overall_rate') minimum = 0.6
+      if (name === 'min_samples' || name === 'explore_max_in_flight') {
+        minimum = 1
+      }
+      if (name === 'explore_max_in_flight') maximum = 16
+    }
+    return (
+      <FormField
+        key={name}
+        control={form.control}
+        name={name}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>{label}</FormLabel>
+            <FormControl>
+              <Input
+                type='number'
+                min={minimum}
+                max={maximum}
+                step={options.step ?? 'any'}
+                {...safeNumberFieldProps(field)}
+                onChange={(event) => {
+                  // A cleared setting must not silently reuse the last number.
+                  field.onChange(
+                    event.target.value === '' ? '' : event.target.valueAsNumber
+                  )
+                }}
+              />
+            </FormControl>
+            {options.description && (
+              <FormDescription>{options.description}</FormDescription>
+            )}
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    )
+  }
 
   const modeItems = [
     { value: 'off', label: t('Off') },
@@ -376,9 +438,12 @@ export function VideoSchedulingSettingsSection(props: {
   return (
     <SettingsSection title={t('Video Smart Scheduling')}>
       <Form {...form}>
-        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+        <SettingsForm
+          noValidate
+          onSubmit={form.handleSubmit(onSubmit, revealInvalidFields)}
+        >
           <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
+            onSave={form.handleSubmit(onSubmit, revealInvalidFields)}
             isSaving={updateOption.isPending || form.formState.isSubmitting}
           />
           <SettingsFormGrid>
@@ -448,8 +513,11 @@ export function VideoSchedulingSettingsSection(props: {
                 <Select
                   items={policyItems}
                   value={field.value}
-                  onValueChange={field.onChange}
-                  disabled={liveSetting.mode === 'on'}
+                  onValueChange={(value) => {
+                    field.onChange(value)
+                    setRevealedFields(new Set())
+                  }}
+                  disabled={formDefaults.mode === 'on'}
                 >
                   <FormControl>
                     <SelectTrigger>
@@ -477,8 +545,9 @@ export function VideoSchedulingSettingsSection(props: {
             type='button'
             variant='outline'
             className='self-start'
-            disabled={liveSetting.mode === 'on'}
+            disabled={formDefaults.mode === 'on'}
             onClick={() => {
+              setRevealedFields(new Set())
               const preset = {
                 selection_policy: 'stability_cost_v2',
                 min_margin_rate: 0.1,
@@ -499,7 +568,7 @@ export function VideoSchedulingSettingsSection(props: {
           >
             {t('Apply stability and cost preset')}
           </Button>
-          {isV2 && (
+          {showStabilityFields && (
             <>
               <p className='text-muted-foreground text-sm'>
                 {t(
@@ -562,7 +631,7 @@ export function VideoSchedulingSettingsSection(props: {
             {t('Open scheduling audit')}
           </Link>
 
-          {!isV2 && (
+          {showWeights && (
             <>
               <h4 className='font-medium'>{t('Score weights')}</h4>
               <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
@@ -587,7 +656,7 @@ export function VideoSchedulingSettingsSection(props: {
 
           <h4 className='font-medium'>{t('Health gates')}</h4>
           <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
-            {!isV2 &&
+            {(!isV2 || revealedFields.has('min_submit_rate')) &&
               numberField('min_submit_rate', t('Minimum submit success rate'))}
             {numberField('min_gen_rate', t('Minimum generation success rate'))}
             {numberField('min_samples', t('Minimum samples'), { step: 1 })}
@@ -627,7 +696,7 @@ export function VideoSchedulingSettingsSection(props: {
             })}
           </div>
 
-          {!isV2 && (
+          {showPricing && (
             <>
               <h4 className='font-medium'>{t('Pricing')}</h4>
               <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
@@ -703,11 +772,31 @@ export function VideoSchedulingSettingsSection(props: {
         </SettingsForm>
       </Form>
       <VideoScheduleSimulatorDialog
-        getConfigSnapshot={() => ({
-          ...toVideoSchedulingSetting(form.getValues()),
-          // The simulator rejects a window that differs from the live one.
-          window_seconds: liveSetting.window_seconds,
-        })}
+        getConfigSnapshot={() => {
+          const result = videoSchedulingSchema.safeParse({
+            ...form.getValues(),
+            // The simulator rejects a window that differs from the live one.
+            window_seconds: formDefaults.window_seconds,
+          })
+          if (!result.success) {
+            const invalidFields: FieldErrors<VideoSchedulingFormValues> = {}
+            for (const issue of result.error.issues) {
+              const field = issue.path[0] as keyof VideoSchedulingFormValues
+              const error = { type: issue.code, message: issue.message }
+              form.setError(field, error)
+              Object.assign(invalidFields, { [field]: error })
+            }
+            revealInvalidFields(invalidFields)
+            throw new Error(
+              t('Correct the invalid scheduling settings before simulating')
+            )
+          }
+          return {
+            ...result.data,
+            capacity_groups:
+              parseCapacityGroups(result.data.capacity_groups) ?? {},
+          }
+        }}
       />
     </SettingsSection>
   )

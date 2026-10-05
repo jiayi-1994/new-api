@@ -45,6 +45,7 @@ import {
 
 import type { ChannelFormValues } from '../../../lib'
 import {
+  MAX_TASK_DURATION_SECONDS,
   VIDEO_REFERENCE_CHARGING_MODES,
   VIDEO_REFERENCE_KINDS,
   type VideoModelDraft,
@@ -193,6 +194,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                       <InputGroupInput
                         {...field}
                         type='number'
+                        min={0}
                         step='any'
                         inputMode='decimal'
                         aria-label={t('Base price')}
@@ -256,7 +258,9 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                   <Input
                     {...field}
                     type='number'
-                    step='any'
+                    min={0}
+                    max={MAX_TASK_DURATION_SECONDS}
+                    step={1}
                     placeholder={t('No limit')}
                   />
                 </FormControl>
@@ -409,6 +413,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                                 <InputGroupInput
                                   {...field}
                                   type='number'
+                                  min={row.mode === 'multiplier' ? 1 : 0}
                                   step='any'
                                   inputMode='decimal'
                                   aria-label={t('Fee value')}

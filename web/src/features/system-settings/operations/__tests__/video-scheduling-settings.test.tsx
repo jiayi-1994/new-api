@@ -72,7 +72,7 @@ const liveSettings = {
 
 let applyServerValue: (key: string, value: string) => void
 
-function Harness() {
+function Harness(props: { settings?: OperationsSettings }) {
   const [client] = useState(() => new QueryClient())
   const [router] = useState(() =>
     createRouter({
@@ -81,7 +81,7 @@ function Harness() {
     })
   )
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
-  const [settings, setSettings] = useState(liveSettings)
+  const [settings, setSettings] = useState(props.settings ?? liveSettings)
   applyServerValue = (key, value) =>
     setSettings((previous) => ({
       ...previous,
@@ -185,6 +185,161 @@ test('stability policy rejects insufficient generation rate and unbounded valida
     (await screen.findAllByText(/Stability policy requires generation/)).length
   ).toBe(2)
   expect(put).not.toHaveBeenCalled()
+})
+
+test('clearing a scheduling number keeps it empty and blocks saving until an explicit value is entered', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  const weight = screen.getByLabelText('Price weight')
+  await user.clear(weight)
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(await screen.findByText('Enter a valid number')).toBeVisible()
+  expect(weight).toHaveValue(null)
+  expect(weight).toHaveAttribute('aria-invalid', 'true')
+  expect(put).not.toHaveBeenCalled()
+
+  fireEvent.change(weight, { target: { value: '0' } })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  expect(put.mock.calls[0]?.[1]).toEqual({
+    key: 'video_scheduling_setting.price_weight',
+    value: '0',
+  })
+})
+
+test.each([
+  [
+    'Minimum estimated margin',
+    '1',
+    'Enter a value from 0 up to but not including 1',
+  ],
+  [
+    'Qualification lifetime (seconds)',
+    '604801',
+    'Enter a whole number between 1 and 604800',
+  ],
+  [
+    'Validation accumulation period (seconds)',
+    '2592001',
+    'Enter a whole number between 1 and 2592000',
+  ],
+  ['Window (seconds)', '86401', 'Enter a whole number between 1 and 86400'],
+  ['Probe max in flight', '17', 'Enter a whole number between 0 and 16'],
+  [
+    'Audit retention (days)',
+    '7.5',
+    'Audit retention must be between 7 and 180 days',
+  ],
+])(
+  'invalid %s shows its scheduling constraint and prevents a save',
+  async (label, value, message) => {
+    const put = mockOptionSaves()
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(
+      screen.getByRole('button', { name: 'Apply stability and cost preset' })
+    )
+    const input = screen.getByLabelText(label)
+    fireEvent.change(input, { target: { value } })
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText(message)).toBeVisible()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(put).not.toHaveBeenCalled()
+  }
+)
+
+test('switching policies reveals invalid hidden weights so they can be corrected', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  fireEvent.change(screen.getByLabelText('Quality weight'), {
+    target: { value: '-1' },
+  })
+  await user.click(
+    screen.getByRole('button', { name: 'Apply stability and cost preset' })
+  )
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(await screen.findByText('Enter a non-negative number')).toBeVisible()
+  expect(screen.getByLabelText('Quality weight')).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+})
+
+test('a revealed policy field stays editable through intermediate valid values', async () => {
+  mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  fireEvent.change(screen.getByLabelText('Minimum submit success rate'), {
+    target: { value: '2' },
+  })
+  await user.click(
+    screen.getByRole('button', { name: 'Apply stability and cost preset' })
+  )
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  const input = await screen.findByLabelText('Minimum submit success rate')
+  await user.clear(input)
+  await user.type(input, '0.7')
+  expect(screen.getByLabelText('Minimum submit success rate')).toHaveValue(0.7)
+  expect(input).toHaveFocus()
+})
+
+test('the simulator blocks an invalid unsaved snapshot before sending a request', async () => {
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: false, message: 'no channels' } })
+  const user = userEvent.setup()
+  render(<Harness />)
+  fireEvent.change(screen.getByLabelText('Minimum generation success rate'), {
+    target: { value: '1.1' },
+  })
+  await user.click(
+    screen.getByRole('button', { name: 'Open scheduling simulator' })
+  )
+  await user.click(
+    screen.getByRole('checkbox', { name: /Use the unsaved settings/ })
+  )
+  await user.click(screen.getByRole('button', { name: 'Simulate' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Correct the invalid scheduling settings before simulating'
+  )
+  expect(post).not.toHaveBeenCalled()
+})
+
+test('capacity group quotas beyond exact integer precision prevent saving', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  fireEvent.change(screen.getByDisplayValue('5'), {
+    target: { value: '9007199254740992' },
+  })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(
+    await screen.findByText(
+      'Each capacity group needs a trimmed name of at most 64 bytes and a whole-number quota above 0'
+    )
+  ).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+})
+
+test('clearing saved invalid capacity groups persists the empty group table', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(
+    <Harness
+      settings={{
+        ...liveSettings,
+        'video_scheduling_setting.capacity_groups':
+          '{"account-a":9007199254740992}',
+      }}
+    />
+  )
+  await user.click(screen.getByRole('button', { name: 'Delete row' }))
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  expect(put.mock.calls[0]?.[1]).toEqual({
+    key: 'video_scheduling_setting.capacity_groups',
+    value: '{}',
+  })
 })
 
 test('audit collection and retention save independently and reject retention below seven days', async () => {

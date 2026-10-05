@@ -573,6 +573,7 @@ export function ChannelMutateDrawer({
   const form = useForm<ChannelFormValues>({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
+    mode: 'onTouched',
   })
 
   // Watch values once for conditional fields and configuration indicators.
@@ -2192,9 +2193,13 @@ export function ChannelMutateDrawer({
               <FormControl>
                 <Input
                   type='number'
+                  step={1}
+                  min={Number.MIN_SAFE_INTEGER}
+                  max={Number.MAX_SAFE_INTEGER}
                   placeholder='0'
                   {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
+                  value={Number.isFinite(field.value) ? field.value : ''}
+                  onChange={(e) => field.onChange(e.target.valueAsNumber)}
                 />
               </FormControl>
               <FormDescription>
@@ -2214,9 +2219,13 @@ export function ChannelMutateDrawer({
               <FormControl>
                 <Input
                   type='number'
+                  step={1}
+                  min={0}
+                  max={Number.MAX_SAFE_INTEGER}
                   placeholder='0'
                   {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
+                  value={Number.isFinite(field.value) ? field.value : ''}
+                  onChange={(e) => field.onChange(e.target.valueAsNumber)}
                 />
               </FormControl>
               <FormDescription>{t(FIELD_DESCRIPTIONS.WEIGHT)}</FormDescription>
@@ -4911,6 +4920,7 @@ export function ChannelMutateDrawer({
             <form
               id='channel-form'
               ref={channelFormRef}
+              noValidate
               onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className={sideDrawerFormClassName(
                 cn(

@@ -40,7 +40,7 @@ export const VIDEO_REFERENCE_CHARGING_MODES: VideoReferenceMode[] = [
   'per_input_second',
   'multiplier',
 ]
-const MAX_TASK_DURATION_SECONDS = 3600
+export const MAX_TASK_DURATION_SECONDS = 3600
 const MAX_CAPACITY_GROUP_BYTES = 64
 
 /** A reference fee row; mode '' is "not configured" and is never saved. */
@@ -254,7 +254,7 @@ export const videoSchedulingDraftSchema = z
     const capacity = Number(draft.capacity)
     if (
       draft.capacity.trim() &&
-      (!Number.isInteger(capacity) || capacity < 0)
+      (!Number.isSafeInteger(capacity) || capacity < 0)
     ) {
       issue(['capacity'], 'Enter a non-negative whole number')
     }
@@ -309,8 +309,10 @@ export const videoSchedulingDraftSchema = z
           'Minimum seconds exceed maximum seconds'
         )
       }
+      const allowedSeconds = parseSeconds(item.allowed_seconds)
       if (
-        parseSeconds(item.allowed_seconds).some(
+        (item.allowed_seconds.trim() && allowedSeconds.length === 0) ||
+        allowedSeconds.some(
           (seconds) =>
             !Number.isInteger(seconds) ||
             seconds < 1 ||

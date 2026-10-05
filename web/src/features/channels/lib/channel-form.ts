@@ -226,8 +226,15 @@ export const channelFormSchema = z
         isOptionalModelMapping,
         'Model mapping must be a JSON object with string values'
       ),
-    priority: z.number().optional(),
-    weight: z.number().optional(),
+    priority: z
+      .number({ error: 'Enter a whole number' })
+      .int('Enter a whole number')
+      .optional(),
+    weight: z
+      .number({ error: 'Enter a non-negative whole number' })
+      .int('Enter a non-negative whole number')
+      .min(0, 'Enter a non-negative whole number')
+      .optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     status: z.number(),

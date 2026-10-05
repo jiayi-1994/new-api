@@ -331,7 +331,7 @@ function PriorityCell({ channel }: { channel: Channel }) {
       channelId={channel.id}
       value={channel.priority}
       field='priority'
-      min={-999}
+      min={Number.MIN_SAFE_INTEGER}
     />
   )
 }
@@ -353,7 +353,7 @@ function TagPriorityCell({ channel }: { channel: TagRow }) {
           setPendingValue(value)
           setConfirmOpen(true)
         }}
-        min={-999}
+        min={Number.MIN_SAFE_INTEGER}
       />
       <ConfirmDialog
         open={confirmOpen}

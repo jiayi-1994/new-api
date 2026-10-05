@@ -823,6 +823,13 @@ export const STATIC_I18N_KEYS = [
   'Shown',
   'Not shown',
   // Video scheduling validation messages, translated by FormMessage.
+  'Enter a whole number',
+  'Enter a valid number',
+  'Enter a value from 0 up to but not including 1',
+  'Enter a whole number between 1 and 604800',
+  'Enter a whole number between 1 and 2592000',
+  'Enter a whole number between 1 and 86400',
+  'Enter a whole number between 0 and 16',
   'Stability policy requires generation ≥80%, completion ≥60%, positive samples and 1–16 validation slots',
   'Enter a quality between 0 and 1',
   'Enter a non-negative whole number',
