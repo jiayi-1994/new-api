@@ -512,6 +512,35 @@ func GetVideoScheduleAuditStats(ctx context.Context, filter VideoScheduleAuditFi
 	return stats, rows.Err()
 }
 
+// VideoAuditChannelStat summarizes the requests one channel served for one
+// model. Failures exclude cancellations, matching GenerationSuccess; the mean
+// duration covers successful tasks only, matching the percentiles.
+type VideoAuditChannelStat struct {
+	SelectedChannel int      `json:"channel"`
+	ModelName       string   `json:"model"`
+	Requests        int64    `json:"requests"`
+	Success         int64    `json:"success"`
+	Failure         int64    `json:"failure"`
+	MeanCostUSD     *float64 `json:"mean_cost_usd"`
+	MeanDurationMS  *float64 `json:"mean_duration_ms"`
+}
+
+// GetVideoScheduleChannelStats groups the filtered cohort by its final
+// channel. Requests that never reached a channel are left out.
+func GetVideoScheduleChannelStats(ctx context.Context, filter VideoScheduleAuditFilter) ([]VideoAuditChannelStat, error) {
+	if err := filter.Validate(time.Now()); err != nil {
+		return nil, err
+	}
+	stats := []VideoAuditChannelStat{}
+	err := filter.query(ctx).Where("selected_channel > 0").Select(`selected_channel, model_name, COUNT(*) AS requests,
+	COALESCE(SUM(CASE WHEN task_status = 'SUCCESS' THEN 1 ELSE 0 END),0) AS success,
+	COALESCE(SUM(CASE WHEN task_status = 'FAILURE' AND terminal_class <> 'cancelled' THEN 1 ELSE 0 END),0) AS failure,
+	AVG(cost_usd) AS mean_cost_usd,
+	AVG(CASE WHEN task_status = 'SUCCESS' AND duration_ms >= 0 THEN duration_ms ELSE NULL END) AS mean_duration_ms`).
+		Group("selected_channel, model_name").Order("requests DESC, selected_channel ASC, model_name ASC").Scan(&stats).Error
+	return stats, err
+}
+
 type VideoAuditExportCursor struct {
 	Version       int    `json:"v"`
 	FilterHash    string `json:"filter"`

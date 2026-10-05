@@ -409,7 +409,7 @@ func EvaluateProbe(cands []Candidate, p Policy) []Score {
 }
 
 func evaluate(cands []Candidate, p Policy, relaxHealth bool) []Score {
-	wp, wq, ws := normalizeWeights(p.Weights)
+	wp, wq, ws := NormalizeWeights(p.Weights)
 	policyReason := ""
 	switch {
 	case !validRate(p.MinSubmitRate) || !validRate(p.MinGenRate):
@@ -507,7 +507,7 @@ func evaluate(cands []Candidate, p Policy, relaxHealth bool) []Score {
 			}
 		}
 		s.Quality = clamp01(c.Quality)
-		s.Service = effectiveRate(c.Submit, p.MinSamples) * effectiveRate(c.Gen, p.MinSamples) * clamp01(headroom(c))
+		s.Service = ServiceScore(c, p.MinSamples)
 		s.Total = wp*s.PriceScore + wq*s.Quality + ws*s.Service
 	}
 
@@ -615,10 +615,10 @@ func candidateReason(c *Candidate, p Policy, policyReason string, relaxHealth bo
 	return ""
 }
 
-// normalizeWeights zeroes each invalid weight independently, falls back to
+// NormalizeWeights zeroes each invalid weight independently, falls back to
 // DefaultWeights when all are zero, and scales by the max before summing so
 // large finite weights cannot overflow.
-func normalizeWeights(w Weights) (float64, float64, float64) {
+func NormalizeWeights(w Weights) (float64, float64, float64) {
 	for _, weight := range []*float64{&w.Price, &w.Quality, &w.Service} {
 		if !finiteNonNeg(*weight) {
 			*weight = 0
@@ -632,6 +632,12 @@ func normalizeWeights(w Weights) (float64, float64, float64) {
 	p, q, s := w.Price/scale, w.Quality/scale, w.Service/scale
 	sum := p + q + s
 	return p / sum, q / sum, s / sum
+}
+
+// ServiceScore is the weighted_v1 service component: both success rates times
+// the remaining capacity headroom. It needs no request, unlike the price score.
+func ServiceScore(c *Candidate, minSamples int) float64 {
+	return effectiveRate(c.Submit, minSamples) * effectiveRate(c.Gen, minSamples) * clamp01(headroom(c))
 }
 
 // effectiveRate counts an under-sampled metric as 1; Score.Unproven records it.

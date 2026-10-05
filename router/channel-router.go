@@ -34,6 +34,7 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	channelRoute.GET("/video_schedule/audits", middleware.RootAuth(), middleware.DisableCache(), controller.ListVideoScheduleAudits)
 	channelRoute.GET("/video_schedule/audits/:request_id", middleware.RootAuth(), middleware.DisableCache(), controller.GetVideoScheduleAudit)
 	channelRoute.GET("/video_schedule/audit_stats", middleware.RootAuth(), middleware.DisableCache(), controller.GetVideoScheduleAuditStats)
+	channelRoute.GET("/video_schedule/channel_overview", middleware.RootAuth(), middleware.DisableCache(), controller.GetVideoScheduleChannelOverview)
 	channelRoute.GET("/video_schedule/audit_export", middleware.RootAuth(), middleware.DisableCache(), controller.ExportVideoScheduleAudits)
 	channelRoute.GET("/video_schedule/health_attempts", middleware.RootAuth(), middleware.DisableCache(), controller.ListUnknownVideoHealthAttempts)
 	channelRoute.POST("/video_schedule/health_attempts/:id/review", middleware.RootAuth(), middleware.CriticalRateLimit(), controller.ReviewUnknownVideoHealthAttempt)

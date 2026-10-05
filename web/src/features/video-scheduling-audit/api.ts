@@ -20,7 +20,13 @@ import type { ApiResponse } from '@/features/profile/types'
 import { api } from '@/lib/api'
 import { createServerError } from '@/lib/server-error-message'
 
-import type { AuditDetail, AuditFilters, AuditList, AuditStats } from './types'
+import type {
+  AuditDetail,
+  AuditFilters,
+  AuditList,
+  AuditStats,
+  ChannelOverview,
+} from './types'
 
 const BASE = '/api/channel/video_schedule'
 
@@ -33,6 +39,8 @@ export const getAuditList = (filters: AuditFilters) =>
   queryAudit<AuditList>('/audits', filters)
 export const getAuditStats = (filters: AuditFilters) =>
   queryAudit<AuditStats>('/audit_stats', filters)
+export const getChannelOverview = (filters: AuditFilters) =>
+  queryAudit<ChannelOverview>('/channel_overview', filters)
 export const getAuditDetail = (requestId: string) =>
   queryAudit<AuditDetail>(`/audits/${encodeURIComponent(requestId)}`)
 

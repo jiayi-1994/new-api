@@ -279,6 +279,10 @@ func verifyVideoAuditStatisticsAndExport(t *testing.T, ctx context.Context, now 
 			runs[i].TerminalHealth = "ignored"
 		}
 		runs[i].ModelName, runs[i].StartedAt, runs[i].EndedAt, runs[i].SnapshotComplete = "stats", now.Add(-time.Minute).UnixMilli(), now.UnixMilli(), true
+		runs[i].SelectedChannel = []int{7, 7, 8, 8}[min(i, 3)]
+		if runs[i].TaskPK == nil {
+			runs[i].SelectedChannel = 0
+		}
 		audit := VideoScheduleAudit{Run: runs[i]}
 		if i == 0 {
 			audit.Decisions = []VideoScheduleDecision{{SelectionSeq: 1, CandidateCount: 3, ExclusionsJSON: `{"capacity":1}`, ShadowComparable: true, ShadowDifferent: true, ShadowCostDelta: &zero}, {SelectionSeq: 2, CandidateCount: 2, ExclusionsJSON: `{"capacity":1}`}, {SelectionSeq: 3, CandidateCount: 2}}
@@ -306,6 +310,15 @@ func verifyVideoAuditStatisticsAndExport(t *testing.T, ctx context.Context, now 
 	assert.EqualValues(t, 3, stats.Selections)
 	assert.EqualValues(t, 7, stats.Candidates)
 	assert.EqualValues(t, 2, stats.Exclusions["capacity"])
+	// Requests without a channel are not attributed; failures and durations
+	// follow the cohort statistics above.
+	channels, err := GetVideoScheduleChannelStats(ctx, filter)
+	require.NoError(t, err)
+	cost1, duration5s := 1.0, 5000.0
+	assert.Equal(t, []VideoAuditChannelStat{
+		{SelectedChannel: 7, ModelName: "stats", Requests: 2, Success: 2, MeanCostUSD: &cost1, MeanDurationMS: &duration5s},
+		{SelectedChannel: 8, ModelName: "stats", Requests: 2, Failure: 1},
+	}, channels)
 	filter.Model = "empty"
 	empty, err := GetVideoScheduleAuditStats(ctx, filter)
 	require.NoError(t, err)

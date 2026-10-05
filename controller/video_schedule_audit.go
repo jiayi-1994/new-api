@@ -126,6 +126,22 @@ func GetVideoScheduleAuditStats(c *gin.Context) {
 	common.ApiSuccess(c, stats)
 }
 
+func GetVideoScheduleChannelOverview(c *gin.Context) {
+	filter, err := bindVideoAuditFilter(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	overview, err := service.GetVideoChannelOverview(ctx, filter)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, overview)
+}
+
 func ExportVideoScheduleAudits(c *gin.Context) {
 	filter, err := bindVideoAuditFilter(c)
 	if err != nil {

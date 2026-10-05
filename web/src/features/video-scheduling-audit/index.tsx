@@ -47,6 +47,7 @@ import { getAuditList, getAuditStats } from './api'
 import { AuditExportButton } from './components/audit-export-button'
 import { AuditFilterBar } from './components/audit-filter-bar'
 import { AuditOverview } from './components/audit-overview'
+import { ChannelOverview } from './components/channel-overview'
 import { auditOutcomeLabel } from './lib/outcome'
 import type { AuditFilters, AuditRun } from './types'
 
@@ -305,6 +306,7 @@ export function AuditViewer({
           {!stats.isError && valid && stats.data && (
             <AuditOverview stats={stats.data} />
           )}
+          {valid && <ChannelOverview filters={statsFilters} />}
           <Accordion defaultValue={valid ? [] : ['filters']}>
             <AccordionItem value='filters'>
               <AccordionTrigger>

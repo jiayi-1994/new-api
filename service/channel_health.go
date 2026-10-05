@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -576,6 +577,127 @@ func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView
 func videoGated(submit, gen videosched.HealthStat, minSubmit, minGen float64, minSamples int) bool {
 	return (minSubmit > 0 && submit.Samples >= minSamples && submit.Rate < minSubmit) ||
 		(minGen > 0 && gen.Samples >= minSamples && gen.Rate < minGen)
+}
+
+// VideoChannelOverview lists each channel x model that is scheduled now or
+// served requests in the audit window. It reports no weighted total: the price
+// score depends on each request's spec and sell price, so only the simulator
+// can rank channels for a concrete request.
+type VideoChannelOverview struct {
+	SelectionPolicy string `json:"selection_policy"`
+	// Weights are normalized as the weighted_v1 total uses them.
+	PriceWeight   float64                   `json:"price_weight"`
+	QualityWeight float64                   `json:"quality_weight"`
+	ServiceWeight float64                   `json:"service_weight"`
+	MinSamples    int                       `json:"min_samples"`
+	AsOf          int64                     `json:"as_of"`
+	Rows          []VideoChannelOverviewRow `json:"rows"`
+}
+
+type VideoChannelOverviewRow struct {
+	ChannelID int    `json:"channel_id"`
+	Name      string `json:"name"`
+	Status    int    `json:"status"` // 0: the channel no longer exists
+	Group     string `json:"group"`
+	Priority  int64  `json:"priority"`
+	Weight    int    `json:"weight"`
+	Model     string `json:"model"`
+	// Scheduled reports that the channel prices this model now and is in the
+	// filtered group; the live fields below are empty otherwise.
+	Scheduled     bool                        `json:"scheduled"`
+	Quality       float64                     `json:"quality"`
+	CostMode      string                      `json:"cost_mode,omitempty"`
+	Prices        map[string]float64          `json:"prices,omitempty"`
+	Capacity      int                         `json:"capacity"`
+	CapacityGroup string                      `json:"capacity_group,omitempty"`
+	GroupCapacity int                         `json:"group_capacity,omitempty"`
+	GroupInFlight int                         `json:"group_in_flight,omitempty"`
+	Health        *VideoChannelHealth         `json:"health,omitempty"` // nil when unreadable
+	Gated         bool                        `json:"gated"`
+	Unproven      bool                        `json:"unproven"`
+	Service       *float64                    `json:"service,omitempty"` // weighted_v1 only
+	Usage         model.VideoAuditChannelStat `json:"usage"`
+}
+
+// GetVideoChannelOverview joins live config and health with the filtered audit
+// window. Model, group and channel filters also narrow the live rows; the other
+// filters only describe requests.
+func GetVideoChannelOverview(ctx context.Context, filter model.VideoScheduleAuditFilter) (*VideoChannelOverview, error) {
+	usage, err := model.GetVideoScheduleChannelStats(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	served := make([]int, 0, len(usage))
+	for _, stat := range usage {
+		served = append(served, stat.SelectedChannel)
+	}
+	var channels []model.Channel
+	query := model.DB.WithContext(ctx).Where("settings LIKE ? OR id IN ?", `%"video_scheduling"%`, served)
+	if filter.Channel != 0 {
+		query = query.Where("id = ?", filter.Channel)
+	}
+	if err := query.Order("id ASC").Find(&channels).Error; err != nil {
+		return nil, err
+	}
+
+	setting := operation_setting.GetVideoSchedulingSetting()
+	overview := &VideoChannelOverview{SelectionPolicy: setting.SelectionPolicy, MinSamples: setting.MinSamples, AsOf: time.Now().UnixMilli(), Rows: []VideoChannelOverviewRow{}}
+	overview.PriceWeight, overview.QualityWeight, overview.ServiceWeight = videosched.NormalizeWeights(videosched.Weights{Price: setting.PriceWeight, Quality: setting.QualityWeight, Service: setting.ServiceWeight})
+	type rowKey struct {
+		channel int
+		model   string
+	}
+	index := map[rowKey]int{}
+	byID := make(map[int]*model.Channel, len(channels))
+	for i := range channels {
+		channel := &channels[i]
+		byID[channel.Id] = channel
+		cfg, ok := VideoSchedulingConfigOf(channel)
+		if !ok || filter.Group != "" && !slices.Contains(channel.GetGroups(), filter.Group) {
+			continue
+		}
+		view, err := GetVideoHealthView(channel, true)
+		if err != nil {
+			common.SysError("video scheduling health read failed: channel=" + strconv.Itoa(channel.Id) + " error=" + err.Error())
+			view = &VideoHealthView{} // rows stay listed without health
+		}
+		for modelName := range strings.SplitSeq(channel.Models, ",") {
+			cost, priced := videoModelCost(cfg.Models, modelName)
+			key := rowKey{channel.Id, modelName}
+			if _, seen := index[key]; modelName == "" || !priced || seen || filter.Model != "" && modelName != filter.Model {
+				continue
+			}
+			row := VideoChannelOverviewRow{ChannelID: channel.Id, Name: channel.Name, Status: channel.Status, Group: channel.Group, Priority: channel.GetPriority(), Weight: channel.GetWeight(),
+				Model: modelName, Scheduled: true, Quality: cfg.Quality, CostMode: cost.Mode, Prices: cost.Prices, Capacity: cfg.Capacity, CapacityGroup: cfg.CapacityGroup}
+			if health, ok := view.Models[modelName]; ok {
+				row.Health, row.GroupCapacity, row.GroupInFlight = &health, view.GroupCapacity, view.GroupInFlight
+				row.Gated = videoGated(health.Submit, health.Gen, setting.MinSubmitRate, setting.MinGenRate, setting.MinSamples)
+				row.Unproven = health.Submit.Samples < setting.MinSamples || health.Gen.Samples < setting.MinSamples
+				if setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
+					score := videosched.ServiceScore(&videosched.Candidate{Submit: health.Submit, Gen: health.Gen, Capacity: cfg.Capacity, InFlight: health.InFlight,
+						GroupCapacity: view.GroupCapacity, GroupInFlight: view.GroupInFlight}, setting.MinSamples)
+					row.Service = &score
+				}
+			}
+			index[key] = len(overview.Rows)
+			overview.Rows = append(overview.Rows, row)
+		}
+	}
+	for _, stat := range usage {
+		if i, ok := index[rowKey{stat.SelectedChannel, stat.ModelName}]; ok {
+			overview.Rows[i].Usage = stat
+			continue
+		}
+		row := VideoChannelOverviewRow{ChannelID: stat.SelectedChannel, Model: stat.ModelName, Usage: stat}
+		if channel := byID[stat.SelectedChannel]; channel != nil {
+			row.Name, row.Status, row.Group, row.Priority, row.Weight = channel.Name, channel.Status, channel.Group, channel.GetPriority(), channel.GetWeight()
+		}
+		overview.Rows = append(overview.Rows, row)
+	}
+	slices.SortStableFunc(overview.Rows, func(a, b VideoChannelOverviewRow) int {
+		return cmp.Or(strings.Compare(a.Model, b.Model), cmp.Compare(b.Usage.Requests, a.Usage.Requests), cmp.Compare(b.Priority, a.Priority), cmp.Compare(a.ChannelID, b.ChannelID))
+	})
+	return overview, nil
 }
 
 // GetVideoGroupInFlight reads the in-flight gauge of a capacity group.

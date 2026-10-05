@@ -18,9 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { VideoHealthStat } from '@/features/channels/types'
 import type {
-  VideoScheduleCandidate,
+  VideoReliability,
   VideoReliabilityEvidence,
+  VideoScheduleCandidate,
+  VideoSelectionPolicy,
 } from '@/features/system-settings/types'
 
 export const auditSearchSchema = z.object({
@@ -212,3 +215,48 @@ export type AuditStats = {
   exclusions: Record<string, number>
 }
 export type AuditCandidate = VideoScheduleCandidate
+export type ChannelOverviewRow = {
+  channel_id: number
+  name: string
+  /** 0: the channel no longer exists */
+  status: number
+  group: string
+  priority: number
+  weight: number
+  model: string
+  /** The channel prices this model now; live fields are empty otherwise. */
+  scheduled: boolean
+  quality: number
+  cost_mode?: 'per_video' | 'per_second'
+  prices?: Record<string, number>
+  capacity: number
+  capacity_group?: string
+  group_capacity?: number
+  group_in_flight?: number
+  health?: {
+    submit: VideoHealthStat
+    gen: VideoHealthStat
+    in_flight: number
+    reliability?: VideoReliability
+  }
+  gated: boolean
+  unproven: boolean
+  /** weighted_v1 only */
+  service?: number
+  usage: {
+    requests: number
+    success: number
+    failure: number
+    mean_cost_usd: number | null
+    mean_duration_ms: number | null
+  }
+}
+export type ChannelOverview = {
+  selection_policy: VideoSelectionPolicy
+  price_weight: number
+  quality_weight: number
+  service_weight: number
+  min_samples: number
+  as_of: number
+  rows: ChannelOverviewRow[]
+}

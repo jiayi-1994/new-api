@@ -49,6 +49,7 @@ import {
   type AuditList,
   type AuditRun,
   type AuditStats,
+  type ChannelOverview,
 } from '../types'
 
 const filters = {
@@ -281,13 +282,76 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function mockAuditAPI() {
+const overview: ChannelOverview = {
+  selection_policy: 'weighted_v1',
+  price_weight: 0.5,
+  quality_weight: 0.3,
+  service_weight: 0.2,
+  min_samples: 20,
+  as_of: filters.end,
+  rows: [
+    {
+      channel_id: 7,
+      name: 'Busy channel',
+      status: 1,
+      group: 'default',
+      priority: 5,
+      weight: 1,
+      model: 'video',
+      scheduled: true,
+      quality: 0.9,
+      cost_mode: 'per_video',
+      prices: { '720p': 1 },
+      capacity: 4,
+      health: {
+        submit: { rate: 0.75, samples: 40 },
+        gen: { rate: 1, samples: 30 },
+        in_flight: 1,
+      },
+      gated: true,
+      unproven: false,
+      service: 0.5625,
+      usage: {
+        requests: 3,
+        success: 2,
+        failure: 1,
+        mean_cost_usd: 1,
+        mean_duration_ms: 5000,
+      },
+    },
+    {
+      channel_id: 9,
+      name: 'Retired channel',
+      status: 1,
+      group: 'default',
+      priority: 0,
+      weight: 0,
+      model: 'video',
+      scheduled: false,
+      quality: 0,
+      capacity: 0,
+      gated: false,
+      unproven: false,
+      usage: {
+        requests: 1,
+        success: 1,
+        failure: 0,
+        mean_cost_usd: null,
+        mean_duration_ms: null,
+      },
+    },
+  ],
+}
+
+function mockAuditAPI(channels: ChannelOverview = overview) {
   return vi.spyOn(api, 'get').mockImplementation(async (url) => {
-    let data: AuditStats | AuditDetail | AuditList = list
+    let data: AuditStats | AuditDetail | AuditList | ChannelOverview = list
     if (url.endsWith('/audit_stats')) {
       data = stats
     } else if (url.endsWith('/audits/request-1')) {
       data = detail
+    } else if (url.endsWith('/channel_overview')) {
+      data = channels
     }
     return { data: { success: true, data } }
   })
@@ -331,6 +395,42 @@ test('applying a model and shadow filter resets server pagination and preserves 
   )
 })
 
+test('channel overview shows live service inputs beside per-model call share without a request-independent total', async () => {
+  const get = mockAuditAPI()
+  render(<Harness />)
+  const busy = await screen.findByRole('row', { name: /Busy channel/ })
+  expect(within(busy).getByText('0.56')).toBeVisible()
+  expect(within(busy).getByText('Below health gate')).toBeVisible()
+  expect(within(busy).getByText(/· 75%/)).toBeVisible()
+  const retired = screen.getByRole('row', { name: /Retired channel/ })
+  expect(within(retired).getByText('Not scheduled')).toBeVisible()
+  expect(within(retired).getByText(/· 25%/)).toBeVisible()
+  expect(screen.getByText(/Composite score = price × 0.5/)).toBeVisible()
+  expect(get).toHaveBeenCalledWith(
+    '/api/channel/video_schedule/channel_overview',
+    {
+      params: expect.objectContaining({
+        page: 1,
+        start: filters.start,
+        end: filters.end,
+      }),
+    }
+  )
+})
+
+test('stability-cost overview shows reliability instead of a service score', async () => {
+  mockAuditAPI({
+    ...overview,
+    selection_policy: 'stability_cost_v2',
+    rows: [{ ...overview.rows[0], service: undefined }],
+  })
+  render(<Harness />)
+  const busy = await screen.findByRole('row', { name: /Busy channel/ })
+  expect(within(busy).getByText('Health state unavailable')).toBeVisible()
+  expect(within(busy).queryByText('Below health gate')).not.toBeInTheDocument()
+  expect(screen.getByText(/Stability-cost policy/)).toBeVisible()
+})
+
 test('keyboard opens historical candidates and incomplete snapshots without treating a missing task as rejection', async () => {
   mockAuditAPI()
   render(<Harness />)
@@ -369,8 +469,9 @@ test('keyboard opens historical candidates and incomplete snapshots without trea
 
 test('a measured input video duration is displayed separately from the output duration', async () => {
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
-    let data: AuditStats | AuditDetail | AuditList = list
+    let data: AuditStats | AuditDetail | AuditList | ChannelOverview = list
     if (url.endsWith('/audit_stats')) data = stats
+    if (url.endsWith('/channel_overview')) data = overview
     if (url.endsWith('/audits/request-1')) {
       data = {
         ...detail,
@@ -437,16 +538,18 @@ test('a failed query shows retry and does not render prior request data', async 
 })
 
 test('empty statistics retain null rates and do not display zero percent', async () => {
-  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
-    data: {
-      success: true,
-      data: url.endsWith('/audit_stats')
-        ? stats
-        : { ...list, items: [], total: 0 },
-    },
-  }))
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    let data: AuditStats | AuditList | ChannelOverview = {
+      ...list,
+      items: [],
+      total: 0,
+    }
+    if (url.endsWith('/audit_stats')) data = stats
+    if (url.endsWith('/channel_overview')) data = { ...overview, rows: [] }
+    return { data: { success: true, data } }
+  })
   render(<Harness />)
-  expect(await screen.findByText('No records')).toBeVisible()
+  await waitFor(() => expect(screen.getAllByText('No records')).toHaveLength(2))
   expect(screen.queryByText('0%')).not.toBeInTheDocument()
 })
 

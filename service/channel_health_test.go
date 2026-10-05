@@ -1245,3 +1245,66 @@ func TestCalibrateVideoInFlight(t *testing.T) {
 		})
 	}
 }
+
+func TestVideoChannelOverviewJoinsLiveStateWithServedRequests(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	require.NoError(t, db.AutoMigrate(&model.VideoScheduleRun{}))
+	useVideoHealthBackend(t, "memory")
+	s := operation_setting.GetVideoSchedulingSetting()
+	s.SelectionPolicy, s.MinSamples, s.MinSubmitRate, s.MinGenRate = videosched.PolicyWeightedV1, 2, .8, .5
+	s.PriceWeight, s.QualityWeight, s.ServiceWeight = 5, 3, 2
+	createVideoSchedChannel(t, db, 1, "default", "p", 5, `{"video_scheduling":{"quality":0.9,"capacity":4,"models":{"videos-fast":{"mode":"per_video","prices":{"720p":1}}}}}`, "")
+	createVideoSchedChannel(t, db, 2, "vip", "p", 1, `{"video_scheduling":{"quality":0.5,"models":{"videos-fast":{"mode":"per_second","prices":{"*":0.1}}}}}`, "")
+	createVideoSchedChannel(t, db, 3, "default", "p", 9, "", "") // served earlier, no longer scheduled
+	for _, field := range []string{videoSubmitOK, videoSubmitOK, videoSubmitOK, videoSubmitFail, videoGenOK, videoGenOK} {
+		recordVideoSamples(1, "videos-fast", field)
+	}
+	reserved, err := videoHealthStore().reserve([]string{videoInFlightKey(1)}, []int64{4}, "overview-task", time.Now().Add(time.Hour).UnixMilli())
+	require.NoError(t, err)
+	require.True(t, reserved)
+	now := time.Now().UnixMilli()
+	for i, channel := range []int{1, 1, 3, 0} {
+		run := model.VideoScheduleRun{RequestID: fmt.Sprintf("overview-%d", i), StartedAt: now - 1000, ModelName: "videos-fast", ActualGroup: "default", SelectedChannel: channel}
+		if i == 0 {
+			run.TaskStatus = string(model.TaskStatusSuccess)
+		}
+		require.NoError(t, db.Create(&run).Error)
+	}
+	filter := model.VideoScheduleAuditFilter{Start: now - 60000, End: now + 60000}
+
+	overview, err := GetVideoChannelOverview(t.Context(), filter)
+	require.NoError(t, err)
+	assert.InDeltaSlice(t, []float64{.5, .3, .2}, []float64{overview.PriceWeight, overview.QualityWeight, overview.ServiceWeight}, 1e-9, "weights are reported as the total normalizes them")
+	require.Len(t, overview.Rows, 3)
+	busy, retired, idle := overview.Rows[0], overview.Rows[1], overview.Rows[2]
+	assert.Equal(t, []int{1, 3, 2}, []int{busy.ChannelID, retired.ChannelID, idle.ChannelID}, "most served first")
+	assert.True(t, busy.Scheduled)
+	assert.EqualValues(t, 2, busy.Usage.Requests)
+	assert.EqualValues(t, 1, busy.Usage.Success)
+	assert.True(t, busy.Gated, "submit 3/4 is below 80%")
+	assert.False(t, busy.Unproven)
+	require.NotNil(t, busy.Service)
+	assert.InDelta(t, .75*1*.75, *busy.Service, 1e-9, "submit rate x gen rate x headroom 3/4, as the scheduler scores it")
+	assert.Equal(t, map[string]float64{"720p": 1}, busy.Prices)
+	assert.False(t, retired.Scheduled)
+	assert.Equal(t, "video-3", retired.Name)
+	assert.Nil(t, retired.Health)
+	assert.EqualValues(t, 1, retired.Usage.Requests)
+	assert.True(t, idle.Unproven)
+	require.NotNil(t, idle.Service)
+	assert.InDelta(t, 1, *idle.Service, 1e-9, "unproven rates count as 1")
+
+	filter.Group = "vip"
+	overview, err = GetVideoChannelOverview(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, overview.Rows, 1, "the group narrows live rows and served requests alike")
+	assert.Equal(t, 2, overview.Rows[0].ChannelID)
+
+	s.SelectionPolicy = videosched.PolicyStabilityCostV2
+	filter.Group = ""
+	overview, err = GetVideoChannelOverview(t.Context(), filter)
+	require.NoError(t, err)
+	for _, row := range overview.Rows {
+		assert.Nil(t, row.Service, "stability_cost_v2 has no service score")
+	}
+}
