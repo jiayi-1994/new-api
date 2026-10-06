@@ -75,6 +75,18 @@ export function createVideoSalesFormSchema(t: Translate) {
                       Number(value) > 0,
                     t('Price per second must be a positive number')
                   ),
+                // A cleared field is an error, never a silent free price.
+                inputPrice: z
+                  .string()
+                  .refine(
+                    (value) =>
+                      value.trim() !== '' &&
+                      Number.isFinite(Number(value)) &&
+                      Number(value) >= 0,
+                    t(
+                      'Input video price must be 0 or more; 0 means no extra charge'
+                    )
+                  ),
                 seconds: z
                   .string()
                   .refine(
@@ -135,6 +147,7 @@ export function videoSalesFormValues(
       tiers: Object.entries(model.resolutions).map(([resolution, tier]) => ({
         resolution,
         price: String(tier.usd_per_second),
+        inputPrice: String(tier.input_video_usd_per_second ?? 0),
         seconds: tier.seconds.join(', '),
       })),
     })),
@@ -155,6 +168,7 @@ export function videoSalesFromForm(
             canonicalVideoSalesTier(tier.resolution) ?? tier.resolution,
             {
               usd_per_second: Number(tier.price),
+              input_video_usd_per_second: Number(tier.inputPrice),
               seconds: parseVideoSalesSeconds(tier.seconds) ?? [],
             },
           ])

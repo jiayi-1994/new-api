@@ -180,6 +180,32 @@ export function VideoSalesModelEditor(props: {
               ),
             },
             {
+              id: 'input-price',
+              header: t('Input video price per second (USD)'),
+              className: 'min-w-40',
+              cell: (row) => (
+                <FormField
+                  control={props.form.control}
+                  name={`${path}.tiers.${row.index}.inputPrice`}
+                  render={({ field, fieldState }) => (
+                    <FormItem>
+                      <FormLabel className='sr-only'>
+                        {t('Input video price per second (USD)')}
+                      </FormLabel>
+                      <FormControl>
+                        <PricingAmountInput
+                          {...field}
+                          disabled={props.pending}
+                          aria-invalid={fieldState.invalid}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ),
+            },
+            {
               id: 'seconds',
               header: t('Allowed durations (seconds)'),
               className: 'min-w-44',
@@ -213,9 +239,24 @@ export function VideoSalesModelEditor(props: {
                 const tier = model.tiers[row.index]
                 const seconds = parseVideoSalesSeconds(tier.seconds)
                 const price = Number(tier.price)
-                if (!seconds || !Number.isFinite(price) || price <= 0) {
+                const inputPrice = Number(tier.inputPrice)
+                if (
+                  !seconds ||
+                  !Number.isFinite(price) ||
+                  price <= 0 ||
+                  tier.inputPrice.trim() === '' ||
+                  !Number.isFinite(inputPrice) ||
+                  inputPrice < 0
+                ) {
                   return '—'
                 }
+                const currency = {
+                  locale,
+                  digitsLarge: 4,
+                  digitsSmall: 6,
+                  abbreviate: false,
+                }
+                // Input duration is unknown here, so no total is shown.
                 return (
                   <div className='space-y-1 font-mono text-xs tabular-nums'>
                     {seconds.map((duration) => (
@@ -225,16 +266,21 @@ export function VideoSalesModelEditor(props: {
                           seconds: formatNumber(duration, locale),
                           price: formatBillingCurrencyFromUSD(
                             price * duration,
-                            {
-                              locale,
-                              digitsLarge: 4,
-                              digitsSmall: 6,
-                              abbreviate: false,
-                            }
+                            currency
                           ),
                         })}
                       </div>
                     ))}
+                    <div className='text-muted-foreground font-sans'>
+                      {inputPrice > 0
+                        ? t('Plus input video: {{price}} per second', {
+                            price: formatBillingCurrencyFromUSD(
+                              inputPrice,
+                              currency
+                            ),
+                          })
+                        : t('Input video: no extra charge')}
+                    </div>
                   </div>
                 )
               },
@@ -261,6 +307,11 @@ export function VideoSalesModelEditor(props: {
             },
           ]}
         />
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Input video price: 0 means no extra charge; input videos are charged by their total duration.'
+          )}
+        </p>
         {(tierError?.root?.message || tierError?.message) && (
           <p role='alert' className='text-destructive text-sm'>
             {tierError.root?.message || tierError.message}
@@ -273,7 +324,12 @@ export function VideoSalesModelEditor(props: {
           className='w-fit'
           disabled={props.pending}
           onClick={() =>
-            tiers.append({ resolution: '', price: '', seconds: '' })
+            tiers.append({
+              resolution: '',
+              price: '',
+              inputPrice: '0',
+              seconds: '',
+            })
           }
         >
           <Plus aria-hidden='true' data-icon='inline-start' />

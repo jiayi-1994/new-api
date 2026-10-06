@@ -90,6 +90,21 @@ export function VideoSalesPriceTable(props: {
             }),
         },
         {
+          id: 'input-price',
+          header: t('Input video price per second'),
+          cellClassName: 'font-mono tabular-nums',
+          cell: (row) =>
+            row.input_video_usd_per_second
+              ? formatVideoSalesPrice(row.input_video_usd_per_second, {
+                  ...props.options,
+                  groupRatio: getConfiguredGroupRatio(
+                    props.groupRatio ?? {},
+                    row.group
+                  ),
+                })
+              : t('No extra charge'),
+        },
+        {
           id: 'seconds',
           header: t('Allowed durations (seconds)'),
           cell: (row) =>

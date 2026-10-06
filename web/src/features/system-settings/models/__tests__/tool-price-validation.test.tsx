@@ -112,11 +112,23 @@ describe('tool price validation', () => {
 const sales: Record<string, VideoSalesModel> = {
   'video-main': {
     disabled: true,
-    resolutions: { '720p': { usd_per_second: 0.02, seconds: [5, 10, 15] } },
+    resolutions: {
+      '720p': {
+        usd_per_second: 0.02,
+        input_video_usd_per_second: 0,
+        seconds: [5, 10, 15],
+      },
+    },
   },
   'video-other': {
     disabled: false,
-    resolutions: { '1080p': { usd_per_second: 0.08, seconds: [5, 10] } },
+    resolutions: {
+      '1080p': {
+        usd_per_second: 0.08,
+        input_video_usd_per_second: 0,
+        seconds: [5, 10],
+      },
+    },
   },
 }
 const videoClients: QueryClient[] = []
@@ -192,7 +204,7 @@ describe('unified video sales validation and persistence', () => {
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
     expect(JSON.parse(request.value)['video-main'].resolutions['720p']).toEqual(
-      { usd_per_second: 0.06, seconds: [5, 10] }
+      { usd_per_second: 0.06, input_video_usd_per_second: 0, seconds: [5, 10] }
     )
   })
 
@@ -368,7 +380,13 @@ describe('unified video sales validation and persistence', () => {
       ...sales,
       'video-main': {
         ...sales['video-main'],
-        resolutions: { '720p': { usd_per_second: 0.06, seconds: [5, 10, 15] } },
+        resolutions: {
+          '720p': {
+            usd_per_second: 0.06,
+            input_video_usd_per_second: 0,
+            seconds: [5, 10, 15],
+          },
+        },
       },
     })
     await waitFor(() =>
@@ -407,7 +425,13 @@ describe('unified video sales validation and persistence', () => {
     expect(JSON.parse(request.value)).toEqual({
       'new-video': {
         disabled: true,
-        resolutions: { '720p': { usd_per_second: 0.02, seconds: [5, 10, 15] } },
+        resolutions: {
+          '720p': {
+            usd_per_second: 0.02,
+            input_video_usd_per_second: 0,
+            seconds: [5, 10, 15],
+          },
+        },
       },
     })
   })
@@ -518,7 +542,13 @@ describe('unified video sales validation and persistence', () => {
     expect(JSON.parse(request.value)).toEqual({
       'seedance-2.0': {
         disabled: true,
-        resolutions: { '1440p': { usd_per_second: 4, seconds: [8] } },
+        resolutions: {
+          '1440p': {
+            usd_per_second: 4,
+            input_video_usd_per_second: 0,
+            seconds: [8],
+          },
+        },
       },
     })
   })
@@ -559,7 +589,11 @@ describe('unified video sales validation and persistence', () => {
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
     expect(JSON.parse(request.value)['video-main'].resolutions).toEqual({
-      '4k': { usd_per_second: 0.1, seconds: [5, 10] },
+      '4k': {
+        usd_per_second: 0.1,
+        input_video_usd_per_second: 0,
+        seconds: [5, 10],
+      },
     })
   })
 
@@ -609,7 +643,13 @@ describe('unified video sales validation and persistence', () => {
     expect(JSON.parse(request.value)).toEqual({
       'video-other': {
         disabled: false,
-        resolutions: { '1080p': { usd_per_second: 0.09, seconds: [5, 10] } },
+        resolutions: {
+          '1080p': {
+            usd_per_second: 0.09,
+            input_video_usd_per_second: 0,
+            seconds: [5, 10],
+          },
+        },
       },
     })
   })
@@ -642,7 +682,13 @@ describe('unified video sales validation and persistence', () => {
       ...sales,
       'video-main': {
         ...sales['video-main'],
-        resolutions: { '720p': { usd_per_second: 0.04, seconds: [5, 10, 15] } },
+        resolutions: {
+          '720p': {
+            usd_per_second: 0.04,
+            input_video_usd_per_second: 0,
+            seconds: [5, 10, 15],
+          },
+        },
       },
     }
     rerender(<VideoSalesFixture value={JSON.stringify(refreshed)} />)
@@ -664,6 +710,50 @@ describe('unified video sales validation and persistence', () => {
     ).toHaveValue('0.06')
   })
 
+  test('loads a legacy tier as a free input price, blocks a cleared input price and saves a positive one', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { items: [], total: 0 } },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    render(
+      <VideoSalesFixture
+        value={JSON.stringify({
+          'video-main': {
+            resolutions: { '720p': { usd_per_second: 0.56, seconds: [10] } },
+          },
+        })}
+      />
+    )
+    const user = userEvent.setup()
+    const inputPrice = screen.getByRole('textbox', {
+      name: 'Input video price per second (USD)',
+    })
+    expect(inputPrice).toHaveValue('0')
+    expect(screen.getByText('Input video: no extra charge')).toBeVisible()
+
+    fireEvent.change(inputPrice, { target: { value: '' } })
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    expect(
+      await screen.findByText(
+        'Input video price must be 0 or more; 0 means no extra charge'
+      )
+    ).toBeVisible()
+    expect(inputPrice).toHaveAttribute('aria-invalid', 'true')
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(inputPrice, { target: { value: '0.2' } })
+    expect(screen.getByText('720p × 10 seconds = $5.6')).toBeVisible()
+    expect(screen.getByText('Plus input video: $0.2 per second')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const request = put.mock.calls[0][1] as { value: string }
+    expect(JSON.parse(request.value)['video-main'].resolutions['720p']).toEqual(
+      { usd_per_second: 0.56, input_video_usd_per_second: 0.2, seconds: [10] }
+    )
+  })
+
   test('rejects case-folded names, duplicate 4k aliases, unsupported tiers, and duration bounds', () => {
     const schema = createVideoSalesFormSchema((key) => key)
     const values = videoSalesFormValues(sales)
@@ -671,12 +761,12 @@ describe('unified video sales validation and persistence', () => {
     expect(schema.safeParse(values).success).toBe(false)
     values.models[1].name = 'video-other'
     values.models[0].tiers = [
-      { resolution: '2160p', price: '0.1', seconds: '5' },
-      { resolution: '4k', price: '0.2', seconds: '5' },
+      { resolution: '2160p', price: '0.1', inputPrice: '0', seconds: '5' },
+      { resolution: '4k', price: '0.2', inputPrice: '0', seconds: '5' },
     ]
     expect(schema.safeParse(values).success).toBe(false)
     values.models[0].tiers = [
-      { resolution: '720p', price: '0.1', seconds: '5' },
+      { resolution: '720p', price: '0.1', inputPrice: '0', seconds: '5' },
     ]
     for (const duration of ['', '0', '-1', '1.5', '3601', '5, nope']) {
       values.models[0].tiers[0].seconds = duration

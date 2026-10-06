@@ -118,7 +118,11 @@ const unifiedVideo: PricingModel = {
   video_sales: {
     resolutions: {
       '720p': { usd_per_second: 0.06, seconds: [5, 10, 15] },
-      '1080p': { usd_per_second: 0.12, seconds: [5, 10] },
+      '1080p': {
+        usd_per_second: 0.12,
+        input_video_usd_per_second: 0.05,
+        seconds: [5, 10],
+      },
     },
   },
   billing_plugin_variants: [
@@ -160,11 +164,9 @@ it('classifies unified retail models independently of legacy quota and provider 
 
 it('shows unified per-resolution sales prices in cards, lists, and group detail tables', () => {
   const previous = useSystemConfigStore.getState().config.currency
-  useSystemConfigStore
-    .getState()
-    .setConfig({
-      currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
-    })
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -197,22 +199,36 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
         />
       </QueryClientProvider>
     )
-    expect(screen.getAllByText('USD / second')).toHaveLength(2)
+    // Input video is charged on one tier, so the output price is not the full cost.
+    expect(
+      screen.getAllByText('USD / second · plus input video fee')
+    ).toHaveLength(2)
     expect(screen.getAllByText('0.12')).toHaveLength(2)
     expect(screen.getAllByText('0.24')).toHaveLength(2)
     const base = screen.getByRole('table', { name: 'Base Price' })
     expect(
-      within(base).getByRole('row', { name: '720p $0.06 5, 10, 15' })
+      within(base).getByRole('row', {
+        name: '720p $0.06 No extra charge 5, 10, 15',
+      })
     ).toBeVisible()
     expect(
-      within(base).getByRole('row', { name: '1080p $0.12 5, 10' })
+      within(base).getByRole('row', { name: '1080p $0.12 $0.05 5, 10' })
     ).toBeVisible()
     const groups = screen.getByRole('table', { name: 'Pricing by Group' })
     expect(
-      within(groups).getByRole('row', { name: 'premium 720p $0.12 5, 10, 15' })
+      within(groups).getByRole('row', {
+        name: 'premium 720p $0.12 No extra charge 5, 10, 15',
+      })
     ).toBeVisible()
     expect(
-      within(groups).getByRole('row', { name: 'free 720p $0 5, 10, 15' })
+      within(groups).getByRole('row', {
+        name: 'premium 1080p $0.24 $0.1 5, 10',
+      })
+    ).toBeVisible()
+    expect(
+      within(groups).getByRole('row', {
+        name: 'free 720p $0 No extra charge 5, 10, 15',
+      })
     ).toBeVisible()
     expect(screen.queryByText('Legacy provider')).not.toBeInTheDocument()
     expect(screen.queryByText('Raw expression')).not.toBeInTheDocument()
@@ -225,17 +241,41 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
   }
 })
 
+it('omits the input video hint when no tier charges input video', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  try {
+    const free: PricingModel = {
+      ...unifiedVideo,
+      video_sales: {
+        resolutions: {
+          '720p': {
+            usd_per_second: 0.06,
+            input_video_usd_per_second: 0,
+            seconds: [5],
+          },
+        },
+      },
+    }
+    render(<ModelPriceCell model={free} options={{}} />)
+    expect(screen.getByText('USD / second')).toBeVisible()
+    expect(screen.queryByText(/plus input video fee/)).not.toBeInTheDocument()
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
+
 it('keeps video prices in sync with recharge, currency, free groups, and paused sales', async () => {
   const previous = useSystemConfigStore.getState().config.currency
-  useSystemConfigStore
-    .getState()
-    .setConfig({
-      currency: {
-        ...DEFAULT_CURRENCY_CONFIG,
-        quotaDisplayType: 'CNY',
-        usdExchangeRate: 7,
-      },
-    })
+  useSystemConfigStore.getState().setConfig({
+    currency: {
+      ...DEFAULT_CURRENCY_CONFIG,
+      quotaDisplayType: 'CNY',
+      usdExchangeRate: 7,
+    },
+  })
   try {
     const { rerender } = render(
       <ModelPriceCell
@@ -249,7 +289,9 @@ it('keeps video prices in sync with recharge, currency, free groups, and paused 
       />
     )
     expect(screen.getByText('0.42')).toBeVisible()
-    expect(screen.getByText('CNY / second')).toBeVisible()
+    expect(
+      screen.getByText('CNY / second · plus input video fee')
+    ).toBeVisible()
     rerender(
       <ModelPriceCell
         model={unifiedVideo}

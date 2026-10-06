@@ -190,7 +190,12 @@ function VideoSalesSettingsForm(props: {
                 name: '',
                 disabled: true,
                 tiers: [
-                  { resolution: '720p', price: '', seconds: '5, 10, 15' },
+                  {
+                    resolution: '720p',
+                    price: '',
+                    inputPrice: '0',
+                    seconds: '5, 10, 15',
+                  },
                 ],
               })
             }

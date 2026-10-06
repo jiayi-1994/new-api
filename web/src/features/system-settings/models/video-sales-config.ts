@@ -41,6 +41,7 @@ const videoSalesModelSchema = z.object({
     z.string(),
     z.object({
       usd_per_second: z.number().finite().positive(),
+      input_video_usd_per_second: z.number().finite().min(0).optional(),
       seconds: z
         .array(z.number().int().min(1).max(MAX_VIDEO_SALES_SECONDS))
         .min(1),
