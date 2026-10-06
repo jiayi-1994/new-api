@@ -14,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/plugins"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -1082,4 +1084,119 @@ func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, task.ID).Error)
 	assert.Nil(t, stored.PrivateData.StoredArtifact)
 	assert.Equal(t, model.MaxTaskArtifactStoreAttempts, stored.PrivateData.StoreAttempts)
+}
+
+func TestTaskArtifactSyncStoresPluginVideos(t *testing.T) {
+	for _, tc := range []struct {
+		name, plugin, data, path, authorization, googleKey string
+		redirect                                           bool
+	}{
+		{name: "megabyai", plugin: "megabyai", data: `{"video_url":"$MEDIA"}`},
+		{name: "meaicc", plugin: "meaicc", data: `{"object":"$MEDIA"}`},
+		{name: "alibaba", plugin: "alibaba", data: `{"output":{"video_url":"$MEDIA"}}`},
+		{name: "doubao", plugin: "doubao", data: `{"content":{"video_url":"$MEDIA"}}`},
+		{name: "google", plugin: "google", data: `{"response":{"generateVideoResponse":{"generatedVideos":[{"video":{"uri":"$MEDIA"}}]}}}`, googleKey: "key"},
+		{name: "hailuo_file", plugin: "hailuo", data: `{"file_id":"file-123"}`, path: "/v1/files/download?file_id=file-123", authorization: "Bearer key"},
+		{name: "hailuo_h3", plugin: "hailuo", data: `{"task":{"content":{"url":"$MEDIA"}}}`},
+		{name: "jimeng", plugin: "jimeng", data: `{"data":{"video_url":"$MEDIA"}}`},
+		{name: "kling", plugin: "kling", data: `{"data":{"task_result":{"videos":[{"url":"$MEDIA"}]}}}`},
+		{name: "vidu", plugin: "vidu", data: `{"creations":[{"url":"$MEDIA"}]}`},
+		{name: "seedance_hjmie_url", plugin: "seedance-hjmie", data: `{"metadata":{"final_video_url":"$MEDIA"}}`},
+		{name: "seedance_hjmie_content", plugin: "seedance-hjmie", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key"},
+		{name: "paipu_url", plugin: "paipu", data: `{"url":"$MEDIA"}`},
+		{name: "paipu_content", plugin: "paipu", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key"},
+		{name: "pidoi", plugin: "pidoi", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key"},
+		{name: "sora_content", plugin: "sora", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key"},
+		{name: "mega_signed_url", plugin: "megabyai", data: `{"data":{"url":"$MEDIA?signature=test-signature&expires=4102444800"}}`, path: "/video.mp4?signature=test-signature&expires=4102444800"},
+		{name: "mega_content_redirect", plugin: "megabyai", data: `{"video_url":"$BASE/v1/videos/upstream-task/content.mp4"}`, path: "/v1/videos/upstream-task/content.mp4", authorization: "Bearer key", redirect: true},
+		{name: "hjmie_content_redirect", plugin: "seedance-hjmie", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key", redirect: true},
+		{name: "paipu_content_redirect", plugin: "paipu", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key", redirect: true},
+		{name: "pidoi_content_redirect", plugin: "pidoi", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key", redirect: true},
+		{name: "sora_content_redirect", plugin: "sora", data: `{}`, path: "/v1/videos/upstream-task/content", authorization: "Bearer key", redirect: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := setupGenericTaskTest(t)
+			allowPrivateTaskMediaTest(t)
+			previousMemoryCache, previousRegistry := common.MemoryCacheEnabled, pluginruntime.DefaultRegistry
+			common.MemoryCacheEnabled = false
+			pluginruntime.DefaultRegistry = pluginruntime.NewRegistry()
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled, pluginruntime.DefaultRegistry = previousMemoryCache, previousRegistry
+			})
+			source, err := plugins.Source(tc.plugin)
+			require.NoError(t, err)
+			plugin, err := pluginruntime.DefaultRegistry.RegisterFactory(source, pluginruntime.Options{})
+			require.NoError(t, err)
+
+			var redirectURL string
+			if tc.redirect {
+				storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					assert.Empty(t, r.Header.Get("Authorization"), "channel credentials must not reach redirected storage")
+					assert.Empty(t, r.Header.Get("x-goog-api-key"))
+					w.Header().Set("Content-Type", "video/mp4")
+					_, _ = w.Write([]byte("plugin-video-bytes"))
+				}))
+				defer storage.Close()
+				redirectURL = storage.URL + "/video.mp4?signature=test-signature"
+			}
+			var upstreamHits int
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				upstreamHits++
+				path := tc.path
+				if path == "" {
+					path = "/video.mp4"
+				}
+				assert.Equal(t, path, r.URL.RequestURI())
+				assert.Equal(t, tc.authorization, r.Header.Get("Authorization"))
+				assert.Equal(t, tc.googleKey, r.Header.Get("x-goog-api-key"))
+				if tc.redirect {
+					http.Redirect(w, r, redirectURL, http.StatusFound)
+					return
+				}
+				w.Header().Set("Content-Type", "video/mp4")
+				_, _ = w.Write([]byte("plugin-video-bytes"))
+			}))
+			defer upstream.Close()
+			var storedKey, storedBody string
+			bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPut, r.Method)
+				body, readErr := io.ReadAll(r.Body)
+				assert.NoError(t, readErr)
+				storedKey, storedBody = r.URL.Path, string(body)
+				w.Header().Set("ETag", `"etag"`)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer bucket.Close()
+			t.Cleanup(service.ConfigureTaskArtifactStore(system_setting.TaskArtifactStoreConfig{
+				Mode: system_setting.TaskArtifactStoreModeS3, S3Endpoint: bucket.URL, S3Bucket: "artifacts",
+				S3Region: "us-east-1", S3AccessKey: "ak", S3SecretKey: "sk", S3PathStyle: true,
+				S3PresignTTLSeconds: 600, RetentionDays: 30, SyncIntervalSeconds: 60,
+			}))
+			require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).
+				Updates(map[string]any{"type": constant.ChannelTypeTaskPlugin, "base_url": upstream.URL}).Error)
+			task.Platform = constant.TaskPlatform(tc.plugin)
+			task.FinishTime = time.Now().Unix()
+			task.Data = []byte(strings.NewReplacer("$MEDIA", upstream.URL+"/video.mp4", "$BASE", upstream.URL).Replace(tc.data))
+			task.PrivateData = model.TaskPrivateData{
+				UpstreamTaskID: "upstream-task",
+				ResultURL:      "https://gateway.example/v1/videos/" + task.TaskID + "/content",
+				Execution: &model.TaskExecutionSnapshot{TaskPlugin: &model.TaskPluginSnapshot{
+					Key: tc.plugin, Version: plugin.Meta.Version,
+				}},
+			}
+			require.NoError(t, model.DB.Save(task).Error)
+
+			assert.Equal(t, taskArtifactSyncSummary{Scanned: 1, Stored: 1}, runTaskArtifactSyncOnce(t.Context()))
+			assert.Equal(t, "/artifacts/"+task.TaskID+"/video.mp4", storedKey)
+			assert.Equal(t, "plugin-video-bytes", storedBody)
+			var stored model.Task
+			require.NoError(t, model.DB.First(&stored, task.ID).Error)
+			require.NotNil(t, stored.PrivateData.StoredArtifact)
+			assert.Equal(t, int64(len("plugin-video-bytes")), stored.PrivateData.StoredArtifact.Size)
+			assert.Zero(t, stored.PrivateData.StoreAttempts)
+			assert.JSONEq(t, string(task.Data), string(stored.Data))
+			assert.Equal(t, taskArtifactSyncSummary{Scanned: 1}, runTaskArtifactSyncOnce(t.Context()))
+			assert.Equal(t, 1, upstreamHits, "a stored task must not be downloaded again")
+		})
+	}
 }

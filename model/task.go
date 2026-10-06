@@ -470,11 +470,11 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 
 // GetSuccessTasksFinishedAfter pages successful tasks by id for the artifact
 // sync job. Rows with id <= lastID are skipped so callers can walk the window
-// without re-reading earlier pages.
+// without re-reading earlier pages. Keep Data: artifact plugins need the
+// persisted provider response to resolve download URLs or file IDs.
 func GetSuccessTasksFinishedAfter(finishedAfterUnix int64, lastID int64, limit int) ([]*Task, error) {
 	var tasks []*Task
-	err := DB.Omit("data").
-		Where("status = ?", TaskStatusSuccess).
+	err := DB.Where("status = ?", TaskStatusSuccess).
 		Where("finish_time >= ?", finishedAfterUnix).
 		Where("id > ?", lastID).
 		Order("id asc").
