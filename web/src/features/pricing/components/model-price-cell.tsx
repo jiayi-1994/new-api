@@ -131,7 +131,10 @@ export function ModelPriceCell(props: {
     caption = `${currencyLabel} / ${t('second')}`
     // The output price alone is not the full cost when input video is charged.
     if (tiers.some((tier) => (tier.input_video_usd_per_second ?? 0) > 0)) {
-      caption = `${caption} · ${t('plus input video fee')}`
+      const inputNote = props.model.video_sales?.official_reference_billing
+        ? t('whole order repriced with reference video')
+        : t('plus input video fee')
+      caption = `${caption} · ${inputNote}`
     }
   } else if (dynamic) {
     if (dynamic.isSpecialExpression) {

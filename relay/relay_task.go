@@ -296,14 +296,24 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			taskErr.NoRetry = true
 			return nil, taskErr
 		}
-		exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s)`, sales.Resolution, strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64))
+		outPrice, inPrice := strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64), strconv.FormatFloat(sales.InputVideoUSDPerSecond, 'f', -1, 64)
+		exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s)`, sales.Resolution, outPrice)
 		exists, salesSource = true, billingexpr.SalesSourceVideoRequest
 		facts = map[string]any{"seconds": float64(sales.Seconds), "resolution": sales.Resolution}
 		if sales.ChargesInputVideo() {
-			// Input video is an added fee, never a ratio on the output price.
-			exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s + u("input_video_seconds") * %s)`, sales.Resolution,
-				strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64), strconv.FormatFloat(sales.InputVideoUSDPerSecond, 'f', -1, 64))
+			// The measured seconds are logged; the billable seconds (after the
+			// official minimum) are charged, the same number the sale quotes.
 			facts["input_video_seconds"] = *sales.InputVideoSeconds
+			if billable := sales.BillableInputVideoSeconds(); billable > 0 {
+				facts["input_video_billable_seconds"] = billable
+				if sales.OfficialReferenceBilling {
+					// Official shape: the whole order is priced at the with-video rate.
+					exprStr = fmt.Sprintf(`tier(%q, (u("seconds") + u("input_video_billable_seconds")) * %s)`, sales.Resolution, inPrice)
+				} else {
+					// Input video is an added fee, never a ratio on the output price.
+					exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s + u("input_video_billable_seconds") * %s)`, sales.Resolution, outPrice, inPrice)
+				}
+			}
 		}
 	} else if _, _, configured := billing_setting.GetVideoSales(modelName); configured {
 		// The price table appeared after this request's entry; it must not

@@ -7223,6 +7223,24 @@
     "per 1M tokens": "每百萬 Token",
     "Plus reference video: {{price}} / 1M tokens": "另加參考影片：{{price}} / 百萬 Token",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "參考影片 Token = 秒數 × 寬 × 高 × 24 / 1024（按輸出解析度）",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "參考影片價格依官方 Token 口徑：Token = 秒數 × 寬 × 高 × 24 / 1024（按輸出解析度）。填 0 表示不額外收費；480p、720p、1080p、4k 以每百萬 Token 輸入，其他解析度以每秒輸入。"
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "參考影片價格依官方 Token 口徑：Token = 秒數 × 寬 × 高 × 24 / 1024（按輸出解析度）。填 0 表示不額外收費；480p、720p、1080p、4k 以每百萬 Token 輸入，其他解析度以每秒輸入。",
+    "Bill orders with reference video the official way": "有參考影片時按官方口徑計費",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "有參考影片時，整單按含參考單價計費，計費秒數為輸出 + max(參考, ⌈輸出 × 2/3⌉)。",
+    "With-reference order price": "含參考影片整單單價",
+    "With-reference order price (USD)": "含參考影片整單單價 (USD)",
+    "With-reference order price per 1M tokens (USD)": "含參考影片整單單價（每百萬 Token，USD）",
+    "With-reference order price per second (USD)": "含參考影片整單單價（每秒，USD）",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "有參考：(輸出 + max(參考, ⌈輸出 × 2/3⌉)) 秒 × {{price}} / 秒",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "有參考：(輸出 + max(參考, ⌈輸出 × 2/3⌉)) 秒 × {{price}} / 百萬 Token",
+    "Official reference billing needs a positive with-reference price": "按官方口徑計費時，含參考單價必須大於 0",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "無參考影片：輸出秒數 × 輸出單價。有參考影片：(輸出 + max(參考, ⌈輸出 × 2/3⌉)) 秒 × 含參考單價。",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "輸出秒數 × 輸出單價，另加參考影片秒數 × 參考影片單價。",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "有參考影片時，整單（輸出 + 參考秒數）按含參考單價計費。參考影片不足輸出時長 2/3 時按 2/3 計，無條件進位到整秒。",
+    "With-reference order": "含參考整單",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "輸出 {{output}} 秒 + 參考計費 {{billed}} 秒（實測 {{measured}} 秒）= {{total}} 秒 × {{price}} / 秒",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "輸出 {{output}} 秒 + 參考計費 {{billed}} 秒（實測 {{measured}} 秒）= {{total}} Token × {{price}} / 百萬 Token",
+    "Reference video minimum": "參考影片最低計費",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "參考影片不足輸出時長 2/3，按 {{billed}} 秒計",
+    "whole order repriced with reference video": "有參考影片時整單另計價"
   }
 }

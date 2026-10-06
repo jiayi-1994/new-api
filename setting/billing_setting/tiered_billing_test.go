@@ -148,6 +148,16 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 	encoded, err := common.Marshal(legacy)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"input_video_usd_per_second":0`)
+	assert.NotContains(t, string(encoded), "official_reference_billing", "unset official billing is omitted")
+	official, err := ParseVideoSales(`{"m":{"official_reference_billing":true,"resolutions":{"720p":{"usd_per_second":1,"input_video_usd_per_second":0.6048,"seconds":[5]}}}}`)
+	require.NoError(t, err)
+	assert.True(t, official["m"].OfficialReferenceBilling)
+	encoded, err = common.Marshal(official)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"official_reference_billing":true`)
+	// The with-video price prices the whole order, so it can never be free.
+	_, err = ParseVideoSales(`{"m":{"official_reference_billing":true,"resolutions":{"720p":{"usd_per_second":1,"input_video_usd_per_second":0.6048,"seconds":[5]},"1080p":{"usd_per_second":2,"seconds":[5]}}}}`)
+	assert.ErrorContains(t, err, "official reference billing needs a positive input_video_usd_per_second")
 	for _, price := range []float64{-1, math.NaN(), math.Inf(1)} {
 		assert.False(t, ValidVideoInputPrice(price), price)
 	}

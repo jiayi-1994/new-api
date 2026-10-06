@@ -55,6 +55,7 @@ export function VideoSalesPriceTable(props: {
   const rows = (props.groups ?? ['']).flatMap((group) =>
     tiers.map((tier) => ({ ...tier, group }))
   )
+  const official = !!props.model.video_sales?.official_reference_billing
   const chargesTokens = tiers.some(
     (tier) =>
       !!tier.input_video_usd_per_second &&
@@ -101,7 +102,9 @@ export function VideoSalesPriceTable(props: {
           },
           {
             id: 'input-price',
-            header: t('Reference video price'),
+            header: official
+              ? t('With-reference order price')
+              : t('Reference video price'),
             cellClassName: 'font-mono tabular-nums',
             cell: (row) => {
               if (!row.input_video_usd_per_second) return t('No extra charge')
@@ -157,6 +160,13 @@ export function VideoSalesPriceTable(props: {
         <p className='text-muted-foreground mt-2 text-xs'>
           {t(
             'Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)'
+          )}
+        </p>
+      )}
+      {official && tiers.some((tier) => !!tier.input_video_usd_per_second) && (
+        <p className='text-muted-foreground mt-2 text-xs'>
+          {t(
+            'With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.'
           )}
         </p>
       )}

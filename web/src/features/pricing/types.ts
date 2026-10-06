@@ -57,13 +57,16 @@ export type BillingPluginVariant = {
 
 export type VideoSalesTier = {
   usd_per_second: number
-  /** Added per second of input video; absent on older servers means free. */
+  /** Added per second of input video (the whole order's with-video price under
+   * official reference billing); absent on older servers means free. */
   input_video_usd_per_second?: number
   seconds: number[]
 }
 
 export type VideoSalesModel = {
   disabled?: boolean
+  /** With reference video, bills the whole order at the with-video price and reference at no less than ceil(2/3) of the output. */
+  official_reference_billing?: boolean
   resolutions: Record<string, VideoSalesTier>
 }
 

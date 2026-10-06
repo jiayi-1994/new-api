@@ -126,6 +126,22 @@ export function VideoSalesModelEditor(props: {
             />
           )}
         />
+        <FormField
+          control={props.form.control}
+          name={`${path}.officialReferenceBilling`}
+          render={({ field }) => (
+            <SettingsSwitchField
+              controlId={`video-sales-official-billing-${props.index}`}
+              checked={field.value}
+              onCheckedChange={field.onChange}
+              disabled={props.pending}
+              label={t('Bill orders with reference video the official way')}
+              description={t(
+                'With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.'
+              )}
+            />
+          )}
+        />
         <StaticDataTable
           data={tiers.fields.map((tier, index) => ({ ...tier, index }))}
           getRowKey={(row) => row.id}
@@ -246,16 +262,23 @@ export function VideoSalesModelEditor(props: {
             },
             {
               id: 'input-price',
-              header: t('Reference video price (USD)'),
+              header: model.officialReferenceBilling
+                ? t('With-reference order price (USD)')
+                : t('Reference video price (USD)'),
               className: 'min-w-44',
               cell: (row) => {
                 const tokenPriced =
                   videoSalesInputTokensPerSecond(
                     model.tiers[row.index].resolution
                   ) !== null
-                const label = tokenPriced
+                let label = tokenPriced
                   ? t('Reference video price per 1M tokens (USD)')
                   : t('Input video price per second (USD)')
+                if (model.officialReferenceBilling) {
+                  label = tokenPriced
+                    ? t('With-reference order price per 1M tokens (USD)')
+                    : t('With-reference order price per second (USD)')
+                }
                 return (
                   <FormField
                     // Remount so the input binds to the field this tier prices by.
@@ -356,6 +379,31 @@ export function VideoSalesModelEditor(props: {
                     <div className='text-muted-foreground font-sans'>
                       {inputPrice === 0 && t('Input video: no extra charge')}
                       {inputPrice > 0 &&
+                        model.officialReferenceBilling &&
+                        tokensPerSecond === null &&
+                        t(
+                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second',
+                          {
+                            price: formatBillingCurrencyFromUSD(
+                              inputPrice,
+                              currency
+                            ),
+                          }
+                        )}
+                      {inputPrice > 0 &&
+                        model.officialReferenceBilling &&
+                        tokensPerSecond !== null &&
+                        t(
+                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens',
+                          {
+                            price: formatBillingCurrencyFromUSD(
+                              inputPrice,
+                              currency
+                            ),
+                          }
+                        )}
+                      {inputPrice > 0 &&
+                        !model.officialReferenceBilling &&
                         tokensPerSecond === null &&
                         t('Plus input video: {{price}} per second', {
                           price: formatBillingCurrencyFromUSD(
@@ -363,14 +411,18 @@ export function VideoSalesModelEditor(props: {
                             currency
                           ),
                         })}
+                      {inputPrice > 0 &&
+                        !model.officialReferenceBilling &&
+                        tokensPerSecond !== null &&
+                        t('Plus reference video: {{price}} / 1M tokens', {
+                          price: formatBillingCurrencyFromUSD(
+                            inputPrice,
+                            currency
+                          ),
+                        })}
                       {inputPrice > 0 && tokensPerSecond !== null && (
                         <>
-                          {t('Plus reference video: {{price}} / 1M tokens', {
-                            price: formatBillingCurrencyFromUSD(
-                              inputPrice,
-                              currency
-                            ),
-                          })}{' '}
+                          {' '}
                           <span>
                             {t('({{tokens}} tokens per second)', {
                               tokens: formatNumber(tokensPerSecond, locale),

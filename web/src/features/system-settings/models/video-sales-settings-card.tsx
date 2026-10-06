@@ -189,6 +189,7 @@ function VideoSalesSettingsForm(props: {
               models.append({
                 name: '',
                 disabled: true,
+                officialReferenceBilling: false,
                 tiers: [
                   {
                     resolution: '720p',

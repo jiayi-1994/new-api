@@ -280,6 +280,58 @@ it('prices reference video per second on tiers without an official token rate', 
     expect(
       screen.queryByText(/Reference video tokens =/)
     ).not.toBeInTheDocument()
+    expect(screen.queryByText(/2\/3 of the output/)).not.toBeInTheDocument()
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
+
+it('labels the with-reference order price when the model bills the official way', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  try {
+    const official = {
+      ...unifiedVideo,
+      video_sales: {
+        official_reference_billing: true,
+        resolutions: {
+          '720p': {
+            usd_per_second: 1,
+            input_video_usd_per_second: 0.6048,
+            seconds: [5, 10, 15],
+          },
+        },
+      },
+    }
+    render(
+      <>
+        <VideoSalesPriceTable model={official} options={{}} />
+        <ModelPriceCell model={official} options={{}} />
+      </>
+    )
+    expect(
+      screen.getByText(
+        'USD / second · whole order repriced with reference video'
+      )
+    ).toBeVisible()
+    expect(
+      screen.getByRole('columnheader', { name: 'With-reference order price' })
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Reference video price' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('row', {
+        name: '720p $1 $28 / 1M tokens 21,600 tokens per second 5, 10, 15',
+      })
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.'
+      )
+    ).toBeVisible()
   } finally {
     useSystemConfigStore.getState().setConfig({ currency: previous })
   }

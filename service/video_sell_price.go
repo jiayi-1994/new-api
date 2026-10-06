@@ -45,7 +45,10 @@ type VideoSalesFacts struct {
 	USDPerSecond           float64
 	InputVideoUSDPerSecond float64
 	InputVideoSeconds      *float64 // nil until measured; never client-supplied
-	inputVideoURLs         []string // request-scoped, never persisted or logged
+	// OfficialReferenceBilling raises billed input video to ceil(O*2/3) and
+	// prices the whole order at InputVideoUSDPerSecond when input is billed.
+	OfficialReferenceBilling bool
+	inputVideoURLs           []string // request-scoped, never persisted or logged
 }
 
 // ChargesInputVideo reports whether the sale prices input video seconds.
@@ -58,13 +61,28 @@ func (f VideoSalesFacts) Ready() bool {
 	return !f.ChargesInputVideo() || f.InputVideoSeconds != nil
 }
 
-// USD is the sale before the group ratio. Callers check Ready first.
-func (f VideoSalesFacts) USD() float64 {
-	usd := float64(f.Seconds) * f.USDPerSecond
-	if f.ChargesInputVideo() && f.InputVideoSeconds != nil {
-		usd += *f.InputVideoSeconds * f.InputVideoUSDPerSecond
+// BillableInputVideoSeconds is the input video duration the sale charges:
+// the measured seconds, raised to the official minimum ceil(O*2/3) under
+// official reference billing. Zero input never triggers the minimum.
+func (f VideoSalesFacts) BillableInputVideoSeconds() float64 {
+	if !f.ChargesInputVideo() || f.InputVideoSeconds == nil || *f.InputVideoSeconds <= 0 {
+		return 0
 	}
-	return usd
+	if !f.OfficialReferenceBilling {
+		return *f.InputVideoSeconds
+	}
+	return max(*f.InputVideoSeconds, float64((f.Seconds*2+2)/3))
+}
+
+// USD is the sale before the group ratio. Callers check Ready first. It must
+// match the submission expression (relay.RelayTaskSubmit).
+func (f VideoSalesFacts) USD() float64 {
+	billable := f.BillableInputVideoSeconds()
+	if f.OfficialReferenceBilling && billable > 0 {
+		// Official shape: the whole order is priced at the with-video rate.
+		return (float64(f.Seconds) + billable) * f.InputVideoUSDPerSecond
+	}
+	return float64(f.Seconds)*f.USDPerSecond + billable*f.InputVideoUSDPerSecond
 }
 
 func SetVideoSalesFacts(c *gin.Context, facts VideoSalesFacts) {
@@ -175,7 +193,7 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 	if !billing_setting.ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
 		return VideoSalesFacts{}, fmt.Errorf("%w: model %s", ErrVideoSalesPriceInvalid, model)
 	}
-	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond, InputVideoUSDPerSecond: price.InputVideoUSDPerSecond}, nil
+	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond, InputVideoUSDPerSecond: price.InputVideoUSDPerSecond, OfficialReferenceBilling: sales.OfficialReferenceBilling}, nil
 }
 
 // EstimateVideoSell estimates the USD sale of one candidate: plugin executes

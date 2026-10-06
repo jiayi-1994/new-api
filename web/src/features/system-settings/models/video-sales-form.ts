@@ -76,6 +76,7 @@ export function createVideoSalesFormSchema(t: Translate) {
               t('Model name must not contain surrounding spaces')
             ),
           disabled: z.boolean(),
+          officialReferenceBilling: z.boolean(),
           tiers: z
             .array(
               z.object({
@@ -138,6 +139,18 @@ export function createVideoSalesFormSchema(t: Translate) {
                 'Input video price must be 0 or more; 0 means no extra charge'
               ),
             })
+          } else if (
+            model.officialReferenceBilling &&
+            Number(tier[priceField]) === 0
+          ) {
+            // The with-reference price bills the whole order; 0 would make it free.
+            context.addIssue({
+              code: 'custom',
+              path: ['models', index, 'tiers', tierIndex, priceField],
+              message: t(
+                'Official reference billing needs a positive with-reference price'
+              ),
+            })
           }
           const canonical = canonicalVideoSalesTier(tier.resolution)
           if (!canonical) return
@@ -167,6 +180,7 @@ export function videoSalesFormValues(
     models: Object.entries(sales).map(([name, model]) => ({
       name,
       disabled: model.disabled ?? false,
+      officialReferenceBilling: model.official_reference_billing ?? false,
       tiers: Object.entries(model.resolutions).map(([resolution, tier]) => {
         const inputPrice = tier.input_video_usd_per_second ?? 0
         const tokensPerSecond = videoSalesInputTokensPerSecond(resolution)
@@ -194,6 +208,10 @@ export function videoSalesFromForm(
       model.name,
       {
         disabled: model.disabled,
+        // Omitted when off, like the server's omitempty.
+        ...(model.officialReferenceBilling && {
+          official_reference_billing: true,
+        }),
         resolutions: Object.fromEntries(
           model.tiers.map((tier) => {
             const tokensPerSecond = videoSalesInputTokensPerSecond(

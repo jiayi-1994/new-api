@@ -208,6 +208,116 @@ describe('unified video sales validation and persistence', () => {
     )
   })
 
+  test('keeps loaded official reference billing when another field is saved', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { items: [], total: 0 } },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    render(
+      <VideoSalesFixture
+        value={JSON.stringify({
+          'video-main': {
+            official_reference_billing: true,
+            resolutions: {
+              '720p': {
+                usd_per_second: 1,
+                input_video_usd_per_second: 0.6048,
+                seconds: [10],
+              },
+            },
+          },
+        })}
+      />
+    )
+    const user = userEvent.setup()
+    expect(
+      screen.getByRole('switch', {
+        name: 'Bill orders with reference video the official way',
+      })
+    ).toBeChecked()
+    expect(
+      screen.getByRole('textbox', {
+        name: 'With-reference order price per 1M tokens (USD)',
+      })
+    ).toHaveValue('28')
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === 'DIV' &&
+          element.textContent ===
+            'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × $28 / 1M tokens (21,600 tokens per second)'
+      )
+    ).toBeVisible()
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Price per second (USD)' }),
+      { target: { value: '0.9' } }
+    )
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const request = put.mock.calls[0][1] as { value: string }
+    expect(JSON.parse(request.value)['video-main']).toEqual({
+      disabled: false,
+      official_reference_billing: true,
+      resolutions: {
+        '720p': {
+          usd_per_second: 0.9,
+          input_video_usd_per_second: 0.6048,
+          seconds: [10],
+        },
+      },
+    })
+  })
+
+  test('requires a positive with-reference price after switching official billing on', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { items: [], total: 0 } },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    render(
+      <VideoSalesFixture
+        value={JSON.stringify({ 'video-main': sales['video-main'] })}
+      />
+    )
+    const user = userEvent.setup()
+    const toggle = screen.getByRole('switch', {
+      name: 'Bill orders with reference video the official way',
+    })
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    const tokenPrice = screen.getByRole('textbox', {
+      name: 'With-reference order price per 1M tokens (USD)',
+    })
+    expect(
+      await screen.findByText(
+        'Official reference billing needs a positive with-reference price'
+      )
+    ).toBeVisible()
+    expect(tokenPrice).toHaveAttribute('aria-invalid', 'true')
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(tokenPrice, { target: { value: '28' } })
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const request = put.mock.calls[0][1] as { value: string }
+    expect(JSON.parse(request.value)).toEqual({
+      'video-main': {
+        ...sales['video-main'],
+        official_reference_billing: true,
+        resolutions: {
+          '720p': {
+            ...sales['video-main'].resolutions['720p'],
+            input_video_usd_per_second: 0.6048,
+          },
+        },
+      },
+    })
+  })
+
   test('requires a fresh delete confirmation after a clean table is refreshed', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
       data: { success: true, data: { items: [], total: 0 } },

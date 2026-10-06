@@ -15,7 +15,9 @@ const VideoSalesOption = "billing_setting.video_sales"
 
 // VideoSalesTier is one resolution's public price and sellable output seconds.
 // InputVideoUSDPerSecond is added per second of input video; 0 or absent sells
-// input video for free. It is serialized even at 0 so clients read a number.
+// input video for free. Under official reference billing it is instead the
+// with-video price of the whole order: output plus billable input seconds.
+// It is serialized even at 0 so clients read a number.
 type VideoSalesTier struct {
 	USDPerSecond           float64 `json:"usd_per_second"`
 	InputVideoUSDPerSecond float64 `json:"input_video_usd_per_second"`
@@ -26,9 +28,13 @@ type VideoSalesTier struct {
 // requested output seconds at the requested resolution, whichever channel or
 // plugin executes it. A disabled entry stays unified so new requests are
 // refused rather than priced by the executing plugin.
+// OfficialReferenceBilling prices an order with input video the official
+// Seedance way: input billed at no less than ceil(2/3) of the output seconds,
+// and the whole order at the with-video price.
 type VideoSalesModel struct {
-	Disabled    bool                      `json:"disabled,omitempty"`
-	Resolutions map[string]VideoSalesTier `json:"resolutions"`
+	Disabled                 bool                      `json:"disabled,omitempty"`
+	OfficialReferenceBilling bool                      `json:"official_reference_billing,omitempty"`
+	Resolutions              map[string]VideoSalesTier `json:"resolutions"`
 }
 
 // GetVideoSales finds a unified model by ASCII-folded name and returns its
@@ -107,6 +113,9 @@ func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
 			}
 			if !ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
 				return nil, fmt.Errorf("video_sales: model %s %s: input_video_usd_per_second must be a finite number >= 0", model, tier)
+			}
+			if entry.OfficialReferenceBilling && price.InputVideoUSDPerSecond <= 0 {
+				return nil, fmt.Errorf("video_sales: model %s %s: official reference billing needs a positive input_video_usd_per_second", model, tier)
 			}
 			if len(price.Seconds) == 0 {
 				return nil, fmt.Errorf("video_sales: model %s %s needs at least one sellable duration", model, tier)

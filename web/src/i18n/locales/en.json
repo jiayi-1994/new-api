@@ -7223,6 +7223,24 @@
     "per 1M tokens": "per 1M tokens",
     "Plus reference video: {{price}} / 1M tokens": "Plus reference video: {{price}} / 1M tokens",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second."
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.",
+    "Bill orders with reference video the official way": "Bill orders with reference video the official way",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.",
+    "With-reference order price": "With-reference order price",
+    "With-reference order price (USD)": "With-reference order price (USD)",
+    "With-reference order price per 1M tokens (USD)": "With-reference order price per 1M tokens (USD)",
+    "With-reference order price per second (USD)": "With-reference order price per second (USD)",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens",
+    "Official reference billing needs a positive with-reference price": "Official reference billing needs a positive with-reference price",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "Output seconds × output price, plus reference video seconds × reference video price.",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.",
+    "With-reference order": "With-reference order",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens",
+    "Reference video minimum": "Reference video minimum",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds",
+    "whole order repriced with reference video": "whole order repriced with reference video"
   }
 }

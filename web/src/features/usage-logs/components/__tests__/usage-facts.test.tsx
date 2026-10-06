@@ -227,6 +227,76 @@ describe('usage facts billing details', () => {
     expect(rowValue('Reference video cost')).toBe('$0.7128')
   })
 
+  test('prices the billable reference seconds of an added-fee expression', () => {
+    queryClients.push(
+      renderDetails({
+        billing_mode: 'tiered_expr',
+        expr_b64: btoa(
+          'tier("720p", u("seconds") * 0.56 + u("input_video_billable_seconds") * 0.0864)'
+        ),
+        matched_tier: '720p',
+        usage_facts: {
+          seconds: 10,
+          resolution: '720p',
+          input_video_seconds: 8.25,
+          input_video_billable_seconds: 8.25,
+        },
+      })
+    )
+
+    expect(rowValue('Reference video tokens')).toBe('178,200')
+    expect(rowValue('Reference video price')).toBe('$4 / 1M tokens')
+    expect(rowValue('Reference video cost')).toBe('$0.7128')
+    expect(screen.queryByText('With-reference order')).toBeNull()
+  })
+
+  test.each([
+    {
+      measured: 2,
+      billed: 10,
+      details:
+        'Output 15 s + reference billed 10 s (measured 2 s) = 540,000 tokens × $28 / 1M tokens',
+      minimum:
+        'Reference video is shorter than 2/3 of the output; billed as 10 seconds',
+    },
+    {
+      measured: 15,
+      billed: 15,
+      details:
+        'Output 15 s + reference billed 15 s (measured 15 s) = 648,000 tokens × $28 / 1M tokens',
+      minimum: null,
+    },
+  ])(
+    'bills the whole order at the with-reference price for $measured s of reference',
+    (row) => {
+      queryClients.push(
+        renderDetails({
+          billing_mode: 'tiered_expr',
+          expr_b64: btoa(
+            'tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)'
+          ),
+          matched_tier: '720p',
+          usage_facts: {
+            seconds: 15,
+            resolution: '720p',
+            input_video_seconds: row.measured,
+            input_video_billable_seconds: row.billed,
+          },
+        })
+      )
+
+      // The generic tier parser does not read this shape; only the tier shows.
+      expect(rowValue('Matched Tier')).toBe('720p')
+      expect(rowValue('With-reference order')).toBe(row.details)
+      if (row.minimum) {
+        expect(rowValue('Reference video minimum')).toBe(row.minimum)
+      } else {
+        expect(screen.queryByText('Reference video minimum')).toBeNull()
+      }
+      expect(screen.queryByText('Reference video cost')).toBeNull()
+    }
+  )
+
   test('shows only the reference video tokens when the expression has no input price', () => {
     queryClients.push(
       renderDetails({

@@ -7223,6 +7223,24 @@
     "per 1M tokens": "mỗi 1 triệu token",
     "Plus reference video: {{price}} / 1M tokens": "Cộng video tham chiếu: {{price}} / 1 triệu token",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Token video tham chiếu = số giây × rộng × cao × 24 / 1024 (độ phân giải đầu ra)",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Giá video tham chiếu theo quy tắc token chính thức: token = số giây × rộng × cao × 24 / 1024 ở độ phân giải đầu ra. 0 nghĩa là không tính thêm; 480p, 720p, 1080p và 4k tính theo mỗi 1 triệu token, các độ phân giải khác theo giây."
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Giá video tham chiếu theo quy tắc token chính thức: token = số giây × rộng × cao × 24 / 1024 ở độ phân giải đầu ra. 0 nghĩa là không tính thêm; 480p, 720p, 1080p và 4k tính theo mỗi 1 triệu token, các độ phân giải khác theo giây.",
+    "Bill orders with reference video the official way": "Tính phí đơn có video tham chiếu theo quy tắc chính thức",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "Khi có video tham chiếu, toàn bộ đơn được tính theo giá có tham chiếu cho đầu ra cộng max(tham chiếu, ⌈đầu ra × 2/3⌉) giây.",
+    "With-reference order price": "Giá đơn có tham chiếu",
+    "With-reference order price (USD)": "Giá đơn có tham chiếu (USD)",
+    "With-reference order price per 1M tokens (USD)": "Giá đơn có tham chiếu mỗi 1 triệu token (USD)",
+    "With-reference order price per second (USD)": "Giá đơn có tham chiếu mỗi giây (USD)",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "Có tham chiếu: (đầu ra + max(tham chiếu, ⌈đầu ra × 2/3⌉)) giây × {{price}} / giây",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "Có tham chiếu: (đầu ra + max(tham chiếu, ⌈đầu ra × 2/3⌉)) giây × {{price}} / 1 triệu token",
+    "Official reference billing needs a positive with-reference price": "Tính phí theo quy tắc chính thức cần giá có tham chiếu lớn hơn 0",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "Không có video tham chiếu: số giây đầu ra × giá đầu ra. Có video tham chiếu: (đầu ra + max(tham chiếu, ⌈đầu ra × 2/3⌉)) giây × giá có tham chiếu.",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "Số giây đầu ra × giá đầu ra, cộng số giây video tham chiếu × giá video tham chiếu.",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "Khi có video tham chiếu, toàn bộ đơn (giây đầu ra cộng giây tham chiếu) được tính theo giá có tham chiếu. Video tham chiếu ngắn hơn 2/3 thời lượng đầu ra được tính bằng 2/3 thời lượng đó, làm tròn lên đến giây.",
+    "With-reference order": "Đơn có tham chiếu",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "Đầu ra {{output}} giây + tham chiếu tính phí {{billed}} giây (đo được {{measured}} giây) = {{total}} giây × {{price}} / giây",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Đầu ra {{output}} giây + tham chiếu tính phí {{billed}} giây (đo được {{measured}} giây) = {{total}} token × {{price}} / 1 triệu token",
+    "Reference video minimum": "Mức tối thiểu video tham chiếu",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Video tham chiếu ngắn hơn 2/3 đầu ra; tính phí {{billed}} giây",
+    "whole order repriced with reference video": "có video tham chiếu thì cả đơn tính giá khác"
   }
 }

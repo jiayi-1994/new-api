@@ -7223,6 +7223,24 @@
     "per 1M tokens": "par million de tokens",
     "Plus reference video: {{price}} / 1M tokens": "Plus vidéo de référence : {{price}} / 1M tokens",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Tokens de la vidéo de référence = secondes × largeur × hauteur × 24 / 1024 (résolution de sortie)",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Le prix de la vidéo de référence suit la règle officielle des tokens : tokens = secondes × largeur × hauteur × 24 / 1024 à la résolution de sortie. 0 signifie aucun supplément ; 480p, 720p, 1080p et 4k sont tarifés par million de tokens, les autres résolutions par seconde."
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Le prix de la vidéo de référence suit la règle officielle des tokens : tokens = secondes × largeur × hauteur × 24 / 1024 à la résolution de sortie. 0 signifie aucun supplément ; 480p, 720p, 1080p et 4k sont tarifés par million de tokens, les autres résolutions par seconde.",
+    "Bill orders with reference video the official way": "Facturer les commandes avec vidéo de référence selon la règle officielle",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "Avec une vidéo de référence, toute la commande est facturée au prix avec référence pour la sortie plus max(référence, ⌈sortie × 2/3⌉) secondes.",
+    "With-reference order price": "Prix de la commande avec référence",
+    "With-reference order price (USD)": "Prix de la commande avec référence (USD)",
+    "With-reference order price per 1M tokens (USD)": "Prix de la commande avec référence par million de tokens (USD)",
+    "With-reference order price per second (USD)": "Prix de la commande avec référence par seconde (USD)",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "Avec référence : (sortie + max(référence, ⌈sortie × 2/3⌉)) secondes × {{price}} / seconde",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "Avec référence : (sortie + max(référence, ⌈sortie × 2/3⌉)) secondes × {{price}} / 1M tokens",
+    "Official reference billing needs a positive with-reference price": "La facturation officielle exige un prix avec référence positif",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "Sans vidéo de référence : secondes de sortie × prix de sortie. Avec vidéo de référence : (sortie + max(référence, ⌈sortie × 2/3⌉)) secondes × prix avec référence.",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "Secondes de sortie × prix de sortie, plus secondes de vidéo de référence × prix de la vidéo de référence.",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "Avec une vidéo de référence, toute la commande (secondes de sortie plus de référence) est facturée au prix avec référence. Une vidéo de référence plus courte que 2/3 de la durée de sortie est facturée à 2/3 de celle-ci, arrondi à la seconde supérieure.",
+    "With-reference order": "Commande avec référence",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "Sortie {{output}} s + référence facturée {{billed}} s (mesurée {{measured}} s) = {{total}} s × {{price}} / seconde",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Sortie {{output}} s + référence facturée {{billed}} s (mesurée {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens",
+    "Reference video minimum": "Minimum de vidéo de référence",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "La vidéo de référence est plus courte que 2/3 de la sortie ; facturée {{billed}} secondes",
+    "whole order repriced with reference video": "commande entière refacturée avec vidéo de référence"
   }
 }

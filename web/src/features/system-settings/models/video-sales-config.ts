@@ -37,6 +37,7 @@ export function canonicalVideoSalesTier(tier: string): string | null {
 
 const videoSalesModelSchema = z.object({
   disabled: z.boolean().optional(),
+  official_reference_billing: z.boolean().optional(),
   resolutions: z.record(
     z.string(),
     z.object({

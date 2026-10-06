@@ -215,23 +215,74 @@ function BillingBreakdown(props: {
       })
     }
     // Unified video bills reference video per second; show the official
-    // token equivalent (before the group ratio).
-    const inputVideoSeconds = Number(other.usage_facts?.input_video_seconds)
+    // token equivalent (before the group ratio). Older logs have no billable
+    // fact and were charged the measured seconds.
+    const measuredSeconds = Number(other.usage_facts?.input_video_seconds)
+    const inputVideoSeconds = Number(
+      other.usage_facts?.input_video_billable_seconds ?? measuredSeconds
+    )
     const resolution = other.usage_facts?.resolution
     const tokensPerSecond =
       typeof resolution === 'string'
         ? videoInputTokensPerSecond(resolution)
         : null
-    if (inputVideoSeconds > 0 && tokensPerSecond !== null) {
+    // ponytail: relies on the host-generated expression formats
+    // (relay/relay_task.go); log input_video_usd_per_second to drop the regex.
+    const videoExpr = decodeBillingExprB64(other.expr_b64)
+    const wholeOrderPrice = Number(
+      videoExpr.match(
+        /\(u\("seconds"\) \+ u\("input_video_billable_seconds"\)\) \* (\d+(?:\.\d+)?)/
+      )?.[1]
+    )
+    if (wholeOrderPrice > 0 && inputVideoSeconds > 0) {
+      // Official reference billing prices the whole order at the with-video rate.
+      const orderSeconds =
+        Number(other.usage_facts?.seconds) + inputVideoSeconds
+      const seconds = {
+        output: formatNumber(Number(other.usage_facts?.seconds), locale),
+        billed: formatNumber(inputVideoSeconds, locale),
+        measured: formatNumber(measuredSeconds, locale),
+      }
+      rows.push({
+        label: t('With-reference order'),
+        value:
+          tokensPerSecond === null
+            ? t(
+                'Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second',
+                {
+                  ...seconds,
+                  total: formatNumber(orderSeconds, locale),
+                  price: fmtPrice(wholeOrderPrice),
+                }
+              )
+            : t(
+                'Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens',
+                {
+                  ...seconds,
+                  total: formatNumber(orderSeconds * tokensPerSecond, locale),
+                  price: fmtPrice(
+                    videoInputTokenPrice(wholeOrderPrice, tokensPerSecond)
+                  ),
+                }
+              ),
+      })
+      if (inputVideoSeconds > measuredSeconds) {
+        rows.push({
+          label: t('Reference video minimum'),
+          value: t(
+            'Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds',
+            { billed: seconds.billed }
+          ),
+        })
+      }
+    } else if (inputVideoSeconds > 0 && tokensPerSecond !== null) {
       rows.push({
         label: t('Reference video tokens'),
         value: formatNumber(inputVideoSeconds * tokensPerSecond, locale),
       })
-      // ponytail: relies on the host-generated expression format
-      // (relay/relay_task.go); log input_video_usd_per_second to drop the regex.
       const secondPrice = Number(
-        decodeBillingExprB64(other.expr_b64).match(
-          /u\("input_video_seconds"\) \* (\d+(?:\.\d+)?)/
+        videoExpr.match(
+          /u\("input_video_(?:billable_)?seconds"\) \* (\d+(?:\.\d+)?)/
         )?.[1]
       )
       if (secondPrice > 0) {

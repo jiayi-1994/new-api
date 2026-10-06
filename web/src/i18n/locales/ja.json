@@ -7223,6 +7223,24 @@
     "per 1M tokens": "100 万トークンあたり",
     "Plus reference video: {{price}} / 1M tokens": "参照動画を追加：{{price}} / 100 万トークン",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "参照動画のトークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "参照動画の価格は公式のトークン規則に従います：トークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）。0 は追加料金なし。480p、720p、1080p、4k は 100 万トークンあたり、その他の解像度は秒あたりで入力します。"
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "参照動画の価格は公式のトークン規則に従います：トークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）。0 は追加料金なし。480p、720p、1080p、4k は 100 万トークンあたり、その他の解像度は秒あたりで入力します。",
+    "Bill orders with reference video the official way": "参照動画付きの注文を公式ルールで課金",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "参照動画がある場合、注文全体を参照付き単価で課金します。課金秒数は出力 + max(参照, ⌈出力 × 2/3⌉) です。",
+    "With-reference order price": "参照付き注文単価",
+    "With-reference order price (USD)": "参照付き注文単価 (USD)",
+    "With-reference order price per 1M tokens (USD)": "参照付き注文単価（100 万トークンあたり、USD）",
+    "With-reference order price per second (USD)": "参照付き注文単価（1 秒あたり、USD）",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "参照あり：(出力 + max(参照, ⌈出力 × 2/3⌉)) 秒 × {{price}} / 秒",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "参照あり：(出力 + max(参照, ⌈出力 × 2/3⌉)) 秒 × {{price}} / 100 万トークン",
+    "Official reference billing needs a positive with-reference price": "公式ルールで課金する場合、参照付き単価は 0 より大きくする必要があります",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "参照動画なし：出力秒数 × 出力単価。参照動画あり：(出力 + max(参照, ⌈出力 × 2/3⌉)) 秒 × 参照付き単価。",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "出力秒数 × 出力単価、加えて参照動画秒数 × 参照動画単価。",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "参照動画がある場合、注文全体（出力 + 参照の秒数）を参照付き単価で課金します。参照動画が出力時間の 2/3 未満の場合は 2/3 として課金し、秒単位で切り上げます。",
+    "With-reference order": "参照付き注文",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "出力 {{output}} 秒 + 参照課金 {{billed}} 秒（実測 {{measured}} 秒）= {{total}} 秒 × {{price}} / 秒",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "出力 {{output}} 秒 + 参照課金 {{billed}} 秒（実測 {{measured}} 秒）= {{total}} トークン × {{price}} / 100 万トークン",
+    "Reference video minimum": "参照動画の最低課金",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "参照動画が出力の 2/3 未満のため、{{billed}} 秒として課金",
+    "whole order repriced with reference video": "参照動画ありは注文全体を別単価"
   }
 }

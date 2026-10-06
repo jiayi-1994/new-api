@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -426,8 +428,15 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		billing_setting.VideoSalesOption:        `{"video-unified":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
 		billing_setting.PluginBillingExprOption: `{"bill-fallback::video-unified":"tier(\"plugin\", u(\"requests\") * 9)"}`,
 	}))
+	savedGroups, savedGroupGroups := ratio_setting.GroupRatio2JSONString(), ratio_setting.GroupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroups))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(savedGroupGroups))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"discount":0.63}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
 
-	measured := 8.25
+	seconds := func(v float64) *float64 { return &v }
 	for _, tc := range []struct {
 		name, tokenGroup, wantCode string
 		frozen                     bool
@@ -435,9 +444,26 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		guard                      string
 		inputPrice                 float64
 		inputSeconds               *float64
+		// Unified sale variations; zero values are a 15-second $0.02/s sale in "default".
+		outputSeconds int
+		outputPrice   float64
+		official      bool
+		usingGroup    string
+		wantBillable  float64 // charged input seconds; 0 = no input term
+		wantUSD       float64 // before the group ratio
 	}{
-		{name: "frozen sale", tokenGroup: "default", frozen: true},
-		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: &measured},
+		{name: "frozen sale", tokenGroup: "default", frozen: true, wantUSD: 0.3},
+		// 15 × 0.02 + 8.25 × 0.2: the input fee is added, not a ratio.
+		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(8.25), wantBillable: 8.25, wantUSD: 1.95},
+		{name: "short input without official billing bills measured seconds", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(2), wantBillable: 2, wantUSD: 0.7},
+		// Official billing at $1/s output and $0.6048/s with video (28 per 1M tokens at 720p):
+		// the whole order is (O + max(R, ceil(O×2/3))) × 0.6048.
+		{name: "official: input equal to output", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(5), outputSeconds: 5, official: true, wantBillable: 5, wantUSD: 6.048},
+		{name: "official: 2s of 10s bills ceil(20/3) = 7", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(2), outputSeconds: 10, official: true, wantBillable: 7, wantUSD: 10.2816},
+		{name: "official: fractional input above the minimum is kept", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(8.25), outputSeconds: 10, official: true, wantBillable: 8.25, wantUSD: 11.0376},
+		{name: "official: 2s of 15s bills 10", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(2), official: true, wantBillable: 10, wantUSD: 15.12},
+		{name: "official: zero input keeps the output price", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(0), outputSeconds: 10, official: true, wantUSD: 10},
+		{name: "official: one group ratio discounts the whole order", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(15), official: true, usingGroup: "discount", wantBillable: 15, wantUSD: 18.144},
 		{name: "unmeasured input video is refused", tokenGroup: "default", frozen: true, inputPrice: 0.2, wantCode: "video_sales_input_unmeasured", wantStatus: http.StatusServiceUnavailable},
 		{name: "auto group is refused", tokenGroup: "auto", frozen: true, wantCode: "video_sales_auto_group", wantStatus: http.StatusBadRequest},
 		{name: "table appearing after entry never falls back to plugin pricing", tokenGroup: "default", wantCode: "video_sales_unavailable", wantStatus: http.StatusServiceUnavailable},
@@ -453,7 +479,8 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, info := newTaskSubmitContext(t, "video-unified", `{"video-unified":"declared-model"}`)
 			c.Set("group", "default")
-			info.UserGroup, info.UsingGroup, info.TokenGroup = "default", "default", tc.tokenGroup
+			usingGroup := cmp.Or(tc.usingGroup, "default")
+			info.UserGroup, info.UsingGroup, info.TokenGroup = "default", usingGroup, tc.tokenGroup
 			info.OriginModelName = "video-unified"
 			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
 			endpoint := pluginruntime.PinnedEndpoint{Generation: registry.Generation(), Plugin: plugin, Protocol: "openai_video", Operation: pluginruntime.HostProtocolOperation{Name: "create"}, Model: "video-unified"}
@@ -479,8 +506,8 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			c.Set(pluginruntime.ContextKeyPinnedEndpoint, endpoint)
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
 			if tc.frozen {
-				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02,
-					InputVideoUSDPerSecond: tc.inputPrice, InputVideoSeconds: tc.inputSeconds})
+				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: cmp.Or(tc.outputSeconds, 15), Resolution: "720p", USDPerSecond: cmp.Or(tc.outputPrice, 0.02),
+					InputVideoUSDPerSecond: tc.inputPrice, InputVideoSeconds: tc.inputSeconds, OfficialReferenceBilling: tc.official})
 			}
 
 			_, taskErr := RelayTaskSubmit(c, info)
@@ -496,17 +523,26 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			snap := info.TieredBillingSnapshot
 			require.NotNil(t, snap, "submission error: %+v", taskErr)
 			assert.Equal(t, billingexpr.SalesSourceVideoRequest, snap.SalesSource)
-			wantExpr, wantFacts, wantUSD := `tier("720p", u("seconds") * 0.02)`, map[string]any{"seconds": float64(15), "resolution": "720p"}, 0.3
+			outputPrice := cmp.Or(tc.outputPrice, 0.02)
+			wantExpr, wantFacts := fmt.Sprintf(`tier("720p", u("seconds") * %v)`, outputPrice), map[string]any{"seconds": float64(cmp.Or(tc.outputSeconds, 15)), "resolution": "720p"}
 			if tc.inputSeconds != nil {
-				// 15 × 0.02 + 8.25 × 0.2: the input fee is added, not a ratio.
-				wantExpr = `tier("720p", u("seconds") * 0.02 + u("input_video_seconds") * 0.2)`
-				wantFacts["input_video_seconds"], wantUSD = 8.25, 1.95
+				// The measured seconds are always logged next to the billed ones.
+				wantFacts["input_video_seconds"] = *tc.inputSeconds
 			}
+			if tc.wantBillable > 0 {
+				wantExpr = fmt.Sprintf(`tier("720p", u("seconds") * %v + u("input_video_billable_seconds") * %v)`, outputPrice, tc.inputPrice)
+				if tc.official {
+					wantExpr = fmt.Sprintf(`tier("720p", (u("seconds") + u("input_video_billable_seconds")) * %v)`, tc.inputPrice)
+				}
+				wantFacts["input_video_billable_seconds"] = tc.wantBillable
+			}
+			groupRatio := ratio_setting.GetGroupRatio(usingGroup)
 			assert.Equal(t, wantExpr, snap.ExprString)
 			assert.Equal(t, wantFacts, snap.UsageFacts)
 			assert.True(t, snap.TaskUsageBilling)
-			assert.Equal(t, float64(1), snap.GroupRatio)
-			assert.Equal(t, common.QuotaRound(wantUSD*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
+			assert.Equal(t, groupRatio, snap.GroupRatio)
+			// One group ratio discounts the whole sale, reference fee included.
+			assert.Equal(t, common.QuotaRound(tc.wantUSD*groupRatio*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
 			assert.Equal(t, snap.EstimatedQuotaAfterGroup, info.PriceData.Quota)
 
 			// Completion usage reported by the executing plugin never changes a frozen sale.

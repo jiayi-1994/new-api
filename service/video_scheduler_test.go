@@ -1720,6 +1720,22 @@ func TestUnifiedVideoSaleFreezesMeasuredInputVideo(t *testing.T) {
 		assert.Equal(t, before+1, mediaRequests())
 	})
 
+	t.Run("official reference billing prices the scheduler sale like the charge", func(t *testing.T) {
+		c := request(t, 0.6048, "/three.mp4")
+		sales, _ := GetVideoSalesFacts(c)
+		sales.OfficialReferenceBilling = true
+		SetVideoSalesFacts(c, sales)
+		_, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		sales, _ = GetVideoSalesFacts(c)
+		assert.Equal(t, 3.0, *sales.InputVideoSeconds, "the measured duration is kept")
+		assert.Equal(t, 7.0, sales.BillableInputVideoSeconds(), "3s of a 10s output bills ceil(10×2/3)")
+		// (10 + 7) × 0.6048: the whole order at the with-video price, the same
+		// number the submission expression charges.
+		assertSells(t, c, 10.2816)
+		assert.InDelta(t, 20.5632, unifiedVideoSell(c, "vip", sales).USD, 1e-9, "the group ratio applies once to the whole order")
+	})
+
 	t.Run("no input video freezes zero without reading media", func(t *testing.T) {
 		before := mediaRequests()
 		c := request(t, 0.2)
@@ -2723,4 +2739,9 @@ func TestParseVideoSalesFactsAcceptsOnlyTheSoldSpec(t *testing.T) {
 			assert.Equal(t, tc.want, facts)
 		})
 	}
+
+	sales.OfficialReferenceBilling = true
+	facts, err := ParseVideoSalesFacts("video-unified", sales, jsonBody(map[string]any{"seconds": float64(15), "size": "1280x720"}))
+	require.NoError(t, err)
+	assert.True(t, facts.OfficialReferenceBilling, "the model's official reference billing is frozen into the sale")
 }

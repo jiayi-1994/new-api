@@ -7223,6 +7223,24 @@
     "per 1M tokens": "за 1 млн токенов",
     "Plus reference video: {{price}} / 1M tokens": "Плюс референсное видео: {{price}} / 1 млн токенов",
     "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Токены референсного видео = секунды × ширина × высота × 24 / 1024 (выходное разрешение)",
-    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Цена референсного видео следует официальному правилу токенов: токены = секунды × ширина × высота × 24 / 1024 при выходном разрешении. 0 — без доплаты; 480p, 720p, 1080p и 4k оцениваются за 1 млн токенов, остальные разрешения — за секунду."
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Цена референсного видео следует официальному правилу токенов: токены = секунды × ширина × высота × 24 / 1024 при выходном разрешении. 0 — без доплаты; 480p, 720p, 1080p и 4k оцениваются за 1 млн токенов, остальные разрешения — за секунду.",
+    "Bill orders with reference video the official way": "Тарифицировать заказы с референсным видео по официальному правилу",
+    "With reference video, the whole order is billed at the with-reference price for the output plus max(reference, ⌈output × 2/3⌉) seconds.": "При наличии референсного видео весь заказ тарифицируется по цене с референсом за вывод плюс max(референс, ⌈вывод × 2/3⌉) секунд.",
+    "With-reference order price": "Цена заказа с референсом",
+    "With-reference order price (USD)": "Цена заказа с референсом (USD)",
+    "With-reference order price per 1M tokens (USD)": "Цена заказа с референсом за 1 млн токенов (USD)",
+    "With-reference order price per second (USD)": "Цена заказа с референсом за секунду (USD)",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second": "С референсом: (вывод + max(референс, ⌈вывод × 2/3⌉)) с × {{price}} / секунда",
+    "With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens": "С референсом: (вывод + max(референс, ⌈вывод × 2/3⌉)) с × {{price}} / 1 млн токенов",
+    "Official reference billing needs a positive with-reference price": "Для официальной тарификации цена с референсом должна быть больше 0",
+    "Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.": "Без референсного видео: секунды вывода × цена вывода. С референсным видео: (вывод + max(референс, ⌈вывод × 2/3⌉)) с × цена с референсом.",
+    "Output seconds × output price, plus reference video seconds × reference video price.": "Секунды вывода × цена вывода плюс секунды референсного видео × цена референсного видео.",
+    "With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.": "При наличии референсного видео весь заказ (секунды вывода плюс референса) тарифицируется по цене с референсом. Референсное видео короче 2/3 длительности вывода тарифицируется как 2/3 от неё с округлением вверх до целых секунд.",
+    "With-reference order": "Заказ с референсом",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second": "Вывод {{output}} с + референс к оплате {{billed}} с (измерено {{measured}} с) = {{total}} с × {{price}} / секунда",
+    "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Вывод {{output}} с + референс к оплате {{billed}} с (измерено {{measured}} с) = {{total}} токенов × {{price}} / 1 млн токенов",
+    "Reference video minimum": "Минимум референсного видео",
+    "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Референсное видео короче 2/3 вывода; тарифицируется как {{billed}} с",
+    "whole order repriced with reference video": "с референсным видео весь заказ по другой цене"
   }
 }
