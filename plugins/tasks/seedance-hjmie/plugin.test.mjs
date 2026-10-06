@@ -130,6 +130,138 @@ test("a public alias decodes before channel selection and submits the selected r
 const REQUEST = { model: "videos-fast", prompt: "a cat", duration: 8, resolution: "720p" };
 const BASE_URL = "https://poxiaoapi001.com";
 
+test("the Po Xiao public model submits all three public reference types without a legacy mapping", () => {
+  const value = {
+    model: "seedance-2.0", prompt: "一只猫在海边奔跑", seconds: 5, resolution: "720p", ratio: "16:9",
+    images: ["https://cdn.example/image.png"], videos: ["https://cdn.example/video.mp4"],
+    audios: ["https://cdn.example/audio.mp3"],
+  };
+  const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel: value.model, body: { kind: "json", value } });
+  assert.equal(intent.model, value.model);
+  assert.equal(intent.action, "reference_to_video");
+  const ctx = { model: value.model, upstreamModel: value.model, requestBody: intent.requestBody };
+  const request = plugin.buildSubmitRequest({ ...ctx, baseUrl: BASE_URL, apiKey: "fixture-only-key" });
+  assert.deepEqual(request, {
+    url: BASE_URL + "/v1/videos", method: "POST",
+    headers: { Authorization: "Bearer fixture-only-key", "Content-Type": "application/json" },
+    body: {
+      model: value.model, prompt: value.prompt, duration: 5, resolution: "720p", ratio: "16:9",
+      images: value.images, videos: value.videos, audios: value.audios,
+    },
+  });
+  assert.deepEqual(plugin.describeSpec(ctx), {
+    spec_version: 2, reference_video_urls: value.videos, output_seconds: 5, seconds_kind: "exact", resolution: "720p",
+    references: { video: 1, image: 1, audio: 1 },
+  });
+  assert.deepEqual(plugin.extractUsage(ctx), { seconds: 5, resolution: "720p" });
+});
+
+test("a unified gateway response retains public output facts and uses authenticated canonical content", () => {
+  const accepted = {
+    id: "task_poxiao", object: "video", model: "seedance-2.0", status: "queued", progress: 0,
+    seconds: "5", metadata: { resolution: "720p" },
+  };
+  assert.deepEqual(plugin.parseSubmitResponse({}, { statusCode: 200, body: accepted }), {
+    taskId: "task_poxiao", taskData: accepted,
+  });
+  const completed = {
+    ...accepted, status: "completed", progress: 100,
+    metadata: { resolution: "720p", url: "/v1/videos/task_poxiao/content" },
+  };
+  const result = plugin.parseTaskResult({}, completed);
+  assert.deepEqual(result, { status: "SUCCESS", progress: "100%" });
+  assert.deepEqual(plugin.extractUsageOnComplete({}, result, completed), { seconds: 5, resolution: "720p" });
+  const task = { task_id: "task_downstream", status: "SUCCESS", data: completed };
+  assert.deepEqual(plugin.protocols.openai_video.render({}, task), { seconds: "5", resolution: "720p" });
+  assert.deepEqual(plugin.listArtifacts(task), [{ key: "video", type: "video", mimeType: "video/mp4" }]);
+  for (const method of ["GET", "HEAD"]) {
+    for (const url of ["/v1/videos/task_poxiao/content", "https://untrusted.example/content"]) {
+      assert.deepEqual(plugin.buildContentRequest({
+        baseUrl: BASE_URL, apiKey: "fixture-only-key", upstreamTaskId: accepted.id, artifactKey: "video",
+        clientRequest: { method, headers: {} }, data: { ...completed, metadata: { ...completed.metadata, url } },
+      }), {
+        url: BASE_URL + "/v1/videos/task_poxiao/content", method,
+        headers: { Authorization: "Bearer fixture-only-key" },
+      });
+    }
+  }
+});
+
+test("terminal create responses retain their task identity and complete immediately", () => {
+  for (const [body, immediate] of [
+    [{ id: "task_failed", status: "failed", progress: 100, error: { code: "video_generation_failed", message: "Video generation failed" } },
+      { status: "FAILURE", progress: "100%", reason: "Video generation failed" }],
+    [{ task_id: "task_rejected", status: "failed", error: { code: "video_request_rejected", message: "Video generation failed" } },
+      { status: "FAILURE", reason: "video request rejected" }],
+    [{ id: "task_cancelled", status: "failed", error: { code: "video_generation_cancelled", message: "Video generation failed" } },
+      { status: "FAILURE", reason: "cancelled: video generation cancelled" }],
+    [{ id: "task_completed", status: "completed", progress: 100, seconds: "5", metadata: { resolution: "720p" } },
+      { status: "SUCCESS", progress: "100%" }],
+  ]) {
+    assert.deepEqual(plugin.parseSubmitResponse({}, { statusCode: 200, body }), {
+      taskId: body.task_id || body.id, taskData: body, immediate,
+    });
+    assert.deepEqual(plugin.parseTaskResult({}, body), immediate);
+  }
+});
+
+test("a definite failure without a task id is rejected while ambiguous creates still throw", () => {
+  for (const [body, reason] of [
+    [{ status: "failed", fail_reason: "content policy violation" }, "content policy violation"],
+    [{ status: "failed", error: { code: "video_request_rejected", message: "Video generation failed" } }, "video request rejected"],
+    [{ status: "cancelled" }, "cancelled: video generation cancelled"],
+  ]) {
+    assert.deepEqual(plugin.parseSubmitResponse({}, { statusCode: 200, body }), { rejected: { reason } });
+  }
+  for (const body of [
+    { status: "completed" },
+    { id: "task_unknown", status: "unknown", error: { message: "Video generation failed" } },
+    { id: "task_completed", status: "completed", error: { code: "video_request_rejected", message: "Video generation failed" } },
+    { id: "task_processing", status: "processing", success: false },
+    { status: "processing", error: { code: "video_request_rejected", message: "Video generation failed" } },
+    { id: 42, status: "failed", error: { message: "Video generation failed" } },
+  ]) assert.throws(() => plugin.parseSubmitResponse({}, { statusCode: 200, body }), JSON.stringify(body));
+});
+
+test("public failure codes preserve safe attribution in both creation and polling", () => {
+  for (const [code, message, reason, classification] of [
+    ["video_request_rejected", "upstream quota exhausted: private detail", "video request rejected", "user"],
+    ["video_generation_cancelled", "upstream internal error: private detail", "cancelled: video generation cancelled", "cancelled"],
+    ["video_generation_failed", "Video generation failed", "Video generation failed", "upstream"],
+    ["unknown_code", "Video generation failed", "Video generation failed", "upstream"],
+    ["VIDEO_REQUEST_REJECTED", "Video generation failed", "Video generation failed", "upstream"],
+    [["video_request_rejected"], "Video generation failed", "Video generation failed", "upstream"],
+  ]) {
+    const body = { id: "task_failed", status: "failed", error: { code, message } };
+    const expected = { status: "FAILURE", reason };
+    assert.deepEqual(plugin.parseTaskResult({}, body), expected);
+    assert.deepEqual(plugin.parseSubmitResponse({}, { statusCode: 200, body }).immediate, expected);
+    assert.equal(plugin.classifyFailure(reason), classification);
+  }
+  for (const [status, expected] of [["processing", "IN_PROGRESS"], ["completed", "SUCCESS"]]) {
+    for (const code of ["video_request_rejected", "video_generation_cancelled"]) {
+      assert.deepEqual(plugin.parseTaskResult({}, { status, error: { code, message: "Video generation failed" } }), { status: expected });
+    }
+  }
+});
+
+test("completion resolution metadata is bounded and does not replace explicit legacy facts", () => {
+  for (const [data, expected] of [
+    [{ seconds: "5", metadata: { resolution: "2160p" } }, { seconds: 5, resolution: "4k" }],
+    [{ seconds: "5", metadata: { resolution: "1440p" } }, { seconds: 5 }],
+    [{ seconds: "999999999999999999999", metadata: { resolution: "720p" } }, { resolution: "720p" }],
+    [{ resolution: "1080p", metadata: { resolution: "720p" } }, { resolution: "1080p" }],
+    [{ size: "1920x1080", metadata: { resolution: "720p" } }, { resolution: "1080p" }],
+    [{ resolution: "invalid", metadata: { resolution: "720p" } }, {}],
+    [{ metadata: ["720p"] }, {}],
+  ]) {
+    assert.deepEqual(plugin.extractUsageOnComplete({}, { status: "SUCCESS" }, data), expected);
+  }
+  assert.deepEqual(plugin.protocols.openai_video.render({}, {
+    status: "SUCCESS", data: { seconds: "5", metadata: { resolution: "1440p", url: "/private-upstream-path" } },
+  }), { seconds: "5" });
+});
+
 test("A raw channel key and a resolved Bearer header both reach upstream as one Bearer header", () => {
   const intent = plugin.protocols.openai_video.decodeRequest({ model: REQUEST.model, body: { kind: "json", value: REQUEST } });
   const ctx = { model: REQUEST.model, upstreamModel: REQUEST.model, baseUrl: BASE_URL, requestBody: intent.requestBody, taskId: "task-1" };

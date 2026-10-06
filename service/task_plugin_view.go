@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -50,8 +51,30 @@ func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
 	if task.Status == model.TaskStatusSuccess {
 		video.SetMetadata("url", "/v1/videos/"+url.PathEscape(task.TaskID)+"/content")
 	}
-	if task.Status == model.TaskStatusFailure {
-		video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: "Video generation failed"}
+	if task.Status != model.TaskStatusFailure {
+		return video
+	}
+	video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: "Video generation failed"}
+	// Publish only a stable category, never the provider's failure details.
+	// Older untracked tasks lack the host marker, but retain these poll reasons.
+	if task.VideoHealthAttribution == "host" || task.VideoHealthAttribution == taskAttributionHostLag ||
+		strings.HasPrefix(task.FailReason, "poll failed:") || strings.HasPrefix(task.FailReason, "upstream task not found (HTTP ") ||
+		GetTaskAdaptorFunc == nil {
+		return video
+	}
+	classifier, ok := GetTaskAdaptorFunc(task.Platform).(VideoFailureClassifier)
+	if !ok {
+		return video
+	}
+	class, valid := classifier.ClassifyFailure(task.FailReason)
+	if !valid {
+		return video
+	}
+	switch class {
+	case VideoFailureUser:
+		video.Error.Code = "video_request_rejected"
+	case VideoFailureCancelled:
+		video.Error.Code = "video_generation_cancelled"
 	}
 	return video
 }

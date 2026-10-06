@@ -1,6 +1,6 @@
-// Task Plugin API v1 adapter for the public /v1/videos API documented at
-// https://api.hjmie.cc.cd/api-docs. The upstream accepts JSON and public media URLs.
-const MODELS = ["videos-mini", "videos-fast", "videos-standard"];
+// Task Plugin API v1 adapter for the Po Xiao public /v1/videos API.
+// The upstream accepts JSON and public media URLs; legacy model names remain supported.
+const MODELS = ["seedance-2.0", "videos-mini", "videos-fast", "videos-standard"];
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
 const RATIOS = ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"];
 const ALLOWED_FIELDS = [
@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.4",
+  version: "1.0.6",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -245,17 +245,23 @@ export function buildSubmitRequest(ctx) {
 export function parseSubmitResponse(_ctx, response) {
   const body = response.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("upstream create response must be an object");
+  const result = parseTaskResult(_ctx, body);
   const ids = [body.task_id, body.id];
   if (ids.some(value => value != null && typeof value !== "string")) throw new Error("upstream create response has an invalid task id");
   const taskId = ids.find(value => typeof value === "string" && value.trim());
-  if (body.error || body.success === false) {
+  if ((body.error || body.success === false) && result.status !== "FAILURE") {
     const acceptedStatus = [body.status].some(value => value != null && String(value).trim() !== "" && !/^(failed|failure|cancelled|canceled)(?:[:：].*)?$/i.test(String(value).trim()));
     if (taskId || acceptedStatus) throw new Error("upstream create response has conflicting acceptance and rejection signals");
     const reason = body.error && typeof body.error === "object" ? body.error.message || body.message : body.error || body.message;
     return { rejected: { reason: typeof reason === "string" && reason ? reason : "upstream rejected video creation" } };
   }
-  if (typeof taskId !== "string" || !taskId.trim()) throw new Error("upstream create response has no task id");
-  return { taskId: taskId.trim(), taskData: body };
+  if (typeof taskId !== "string" || !taskId.trim()) {
+    if (result.status === "FAILURE") return { rejected: { reason: result.reason } };
+    throw new Error("upstream create response has no task id");
+  }
+  const output = { taskId: taskId.trim(), taskData: body };
+  if (result.status === "SUCCESS" || result.status === "FAILURE") output.immediate = result;
+  return output;
 }
 
 export function extractUsage(ctx) {
@@ -266,6 +272,15 @@ export function extractUsage(ctx) {
   };
 }
 
+function reportedResolution(data) {
+  if (data.resolution !== undefined) return resolution(data.resolution, "resolution");
+  if (data.size !== undefined) return size(data.size, "size").resolution;
+  const metadata = data.metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.resolution !== undefined) {
+    return resolution(metadata.resolution, "metadata.resolution");
+  }
+}
+
 export function extractUsageOnComplete(_task, _result, data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return {};
   const facts = {};
@@ -273,11 +288,10 @@ export function extractUsageOnComplete(_task, _result, data) {
   if (duration !== undefined) {
     try { facts.seconds = seconds(duration, "duration"); } catch (_error) { /* retain reserved seconds */ }
   }
-  const selected = data.resolution === undefined ? data.size : data.resolution;
-  if (selected !== undefined) {
-    try { facts.resolution = data.resolution === undefined ? size(selected, "size").resolution : resolution(selected, "resolution"); }
-    catch (_error) { /* retain reserved resolution */ }
-  }
+  try {
+    const selected = reportedResolution(data);
+    if (selected !== undefined) facts.resolution = selected;
+  } catch (_error) { /* retain reserved resolution */ }
   return facts;
 }
 
@@ -308,6 +322,16 @@ export function parseTaskResult(_ctx, body) {
   }
   if (mapped === "FAILURE") {
     const error = body.error;
+    const code = error && typeof error === "object" ? error.code : undefined;
+    // Unified gateways redact provider messages but preserve this public attribution.
+    if (code === "video_request_rejected") {
+      result.reason = "video request rejected";
+      return result;
+    }
+    if (code === "video_generation_cancelled") {
+      result.reason = "cancelled: video generation cancelled";
+      return result;
+    }
     const text = (error && typeof error === "object" && error.message) ||
       (typeof error === "string" && error) || body.fail_reason ||
       (status.startsWith("failed:") && raw.slice(raw.indexOf(":") + 1).trim()) || "";
@@ -327,14 +351,17 @@ export function buildContentRequest(ctx) {
   if (!ctx.upstreamTaskId) throw new Error("upstream task id is missing");
   const data = ctx.data && typeof ctx.data === "object" && !Array.isArray(ctx.data) ? ctx.data : {};
   const metadata = data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata) ? data.metadata : {};
-  // The upstream /content endpoint may redirect to object storage. The host
-  // rejects cross-origin redirects carrying Authorization, so use a result URL
-  // without credentials when the upstream supplies one.
+  // Use a public result URL without credentials when one is supplied. Otherwise
+  // the canonical /content endpoint needs channel authentication. A compatible
+  // host relays recognized object-storage redirects without sending credentials
+  // to storage; other credentialed cross-origin redirects remain rejected.
   for (const candidate of [metadata.final_video_url, data.video_url, data.url]) {
     if (typeof candidate === "string" && /^https?:\/\/[^\s/?#@]+(?:[/?#][^\s]*)?$/i.test(candidate.trim())) {
       return { url: candidate.trim(), method: ctx.clientRequest.method, credentialless: true };
     }
   }
+  // Unified responses contain metadata.url with a relative gateway content path.
+  // Build that path from the persisted upstream ID rather than trusting metadata.
   return {
     url: ctx.baseUrl.replace(/\/+$/, "") + "/v1/videos/" + encodeURIComponent(ctx.upstreamTaskId) + "/content",
     method: ctx.clientRequest.method,
@@ -366,6 +393,7 @@ export function describeSpec(ctx) {
 // anything else counts against the upstream channel.
 export function classifyFailure(reason) {
   const text = String(reason || "").toLowerCase();
+  if (text === "video request rejected") return "user";
   // Only the marker this plugin writes for a cancelled status, or an explicit
   // user cancellation, is neutral; a provider-side cancellation is upstream.
   if (/^cancelled: |cancell?ed by (the )?user\b/.test(text)) return "cancelled";
@@ -385,6 +413,12 @@ export const protocols = {
       const output = {};
       for (const name of ["seconds", "duration", "size", "resolution", "ratio", "error", "fail_reason"]) {
         if (has(data, name)) output[name] = data[name];
+      }
+      if (!has(output, "resolution")) {
+        try {
+          const selected = reportedResolution(data);
+          if (selected !== undefined) output.resolution = selected;
+        } catch (_error) { /* omit unrecognized upstream resolution */ }
       }
       if (task.status === "SUCCESS") {
         if (typeof data.url === "string") output.url = data.url;
