@@ -290,9 +290,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			taskErr.NoRetry = true
 			return nil, taskErr
 		}
+		if !sales.Ready() {
+			// Scheduling freezes the measured input before any channel is chosen.
+			taskErr := service.TaskErrorWrapperLocal(errors.New("unified video input usage is not measured"), "video_sales_input_unmeasured", http.StatusServiceUnavailable)
+			taskErr.NoRetry = true
+			return nil, taskErr
+		}
 		exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s)`, sales.Resolution, strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64))
 		exists, salesSource = true, billingexpr.SalesSourceVideoRequest
 		facts = map[string]any{"seconds": float64(sales.Seconds), "resolution": sales.Resolution}
+		if sales.ChargesInputVideo() {
+			// Input video is an added fee, never a ratio on the output price.
+			exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s + u("input_video_seconds") * %s)`, sales.Resolution,
+				strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64), strconv.FormatFloat(sales.InputVideoUSDPerSecond, 'f', -1, 64))
+			facts["input_video_seconds"] = *sales.InputVideoSeconds
+		}
 	} else if _, _, configured := billing_setting.GetVideoSales(modelName); configured {
 		// The price table appeared after this request's entry; it must not
 		// fall back to plugin pricing.

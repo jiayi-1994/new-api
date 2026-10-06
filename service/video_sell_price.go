@@ -34,15 +34,37 @@ const (
 // VideoSalesFacts is a unified model's sale, frozen once at the request
 // entry. Every candidate quote and the submission charge read this value, so
 // the profit floor and the bill always use the same price.
+//
+// A positive input video price leaves the sale unready until scheduling
+// measures the candidates' agreed input videos once and freezes the total;
+// retries reuse that measurement and its URL list.
 type VideoSalesFacts struct {
-	Model        string // configured video_sales name
-	Seconds      int
-	Resolution   string // canonical tier
-	USDPerSecond float64
+	Model                  string // configured video_sales name
+	Seconds                int
+	Resolution             string // canonical tier
+	USDPerSecond           float64
+	InputVideoUSDPerSecond float64
+	InputVideoSeconds      *float64 // nil until measured; never client-supplied
+	inputVideoURLs         []string // request-scoped, never persisted or logged
 }
 
+// ChargesInputVideo reports whether the sale prices input video seconds.
+func (f VideoSalesFacts) ChargesInputVideo() bool {
+	return f.InputVideoUSDPerSecond > 0
+}
+
+// Ready reports whether every quantity the sale prices is frozen.
+func (f VideoSalesFacts) Ready() bool {
+	return !f.ChargesInputVideo() || f.InputVideoSeconds != nil
+}
+
+// USD is the sale before the group ratio. Callers check Ready first.
 func (f VideoSalesFacts) USD() float64 {
-	return float64(f.Seconds) * f.USDPerSecond
+	usd := float64(f.Seconds) * f.USDPerSecond
+	if f.ChargesInputVideo() && f.InputVideoSeconds != nil {
+		usd += *f.InputVideoSeconds * f.InputVideoUSDPerSecond
+	}
+	return usd
 }
 
 func SetVideoSalesFacts(c *gin.Context, facts VideoSalesFacts) {
@@ -53,6 +75,10 @@ func GetVideoSalesFacts(c *gin.Context) (VideoSalesFacts, bool) {
 	facts, ok := c.Value(contextKeyVideoSalesFacts).(VideoSalesFacts)
 	return facts, ok
 }
+
+// ErrVideoSalesPriceInvalid is a stored price that bypassed the option
+// validation. It is a server fault, never the client's request.
+var ErrVideoSalesPriceInvalid = errors.New("unified video price is misconfigured")
 
 // ParseVideoSalesFacts reads the requested output seconds and resolution from
 // the host-parsed request body. Aliases must agree, seconds must be an exact
@@ -146,7 +172,10 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 	if !slices.Contains(price.Seconds, seconds) {
 		return VideoSalesFacts{}, fmt.Errorf("%d seconds is not sold at %s for model %s", seconds, tier, model)
 	}
-	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond}, nil
+	if !billing_setting.ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
+		return VideoSalesFacts{}, fmt.Errorf("%w: model %s", ErrVideoSalesPriceInvalid, model)
+	}
+	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond, InputVideoUSDPerSecond: price.InputVideoUSDPerSecond}, nil
 }
 
 // EstimateVideoSell estimates the USD sale of one candidate: plugin executes
@@ -162,12 +191,7 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 // every call because auto groups change it between attempts.
 func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlugin, clientModel, mappedModel string, body any, action string) videosched.SellPrice {
 	if sales, unified := GetVideoSalesFacts(c); unified {
-		// A unified sale is the same for every candidate.
-		usd := sales.USD() * VideoEffectiveGroupRatio(c, group)
-		if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
-			return videosched.SellPrice{Kind: videosched.SellUnknown}
-		}
-		return videoSellFromUSD(usd, false)
+		return unifiedVideoSell(c, group, sales)
 	}
 	cache, _ := c.Value(contextKeyVideoSellCache).(map[string]videosched.SellPrice)
 	if cache == nil {
@@ -193,6 +217,19 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 		return videosched.SellPrice{Kind: videosched.SellUnknown, Estimated: sell.Estimated}
 	}
 	return videoSellFromUSD(usd, sell.Estimated)
+}
+
+// unifiedVideoSell is a unified sale in group, the same for every candidate.
+// A sale whose input video is not measured yet has no price.
+func unifiedVideoSell(c *gin.Context, group string, sales VideoSalesFacts) videosched.SellPrice {
+	if !sales.Ready() {
+		return videosched.SellPrice{Kind: videosched.SellUnknown}
+	}
+	usd := sales.USD() * VideoEffectiveGroupRatio(c, group)
+	if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
+		return videosched.SellPrice{Kind: videosched.SellUnknown}
+	}
+	return videoSellFromUSD(usd, false)
 }
 
 // videoSellBeforeGroup is the sell price before the group ratio: the task

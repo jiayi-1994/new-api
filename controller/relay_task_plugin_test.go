@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -29,7 +31,9 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/abema/go-mp4"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -724,6 +728,7 @@ func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
 	billingConfig := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
 	oldSetting, oldSales := *operation_setting.GetVideoSchedulingSetting(), billingConfig.VideoSales
 	oldRatios := ratio_setting.GroupRatio2JSONString()
+	oldFetch := *system_setting.GetFetchSetting()
 	model.DB, model.LOG_DB = database, database
 	common.SetDatabaseTypes(dialect, dialect)
 	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled = false, true, false
@@ -735,7 +740,27 @@ func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
 		common.LogConsumeEnabled, common.DataExportEnabled, constant.ErrorLogEnabled, common.RetryTimes = oldConsume, oldExport, oldErrors, oldRetry
 		*operation_setting.GetVideoSchedulingSetting(), billingConfig.VideoSales = oldSetting, oldSales
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldRatios))
+		*system_setting.GetFetchSetting() = oldFetch
 	})
+	// Input video metadata is read from a loopback fixture server.
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	inputVideo := func(seconds float64) []byte {
+		var header bytes.Buffer
+		_, err := mp4.Marshal(&header, &mp4.Mvhd{Timescale: 1000, DurationV0: uint32(seconds * 1000)}, mp4.Context{})
+		require.NoError(t, err)
+		var movie bytes.Buffer
+		require.NoError(t, binary.Write(&movie, binary.BigEndian, uint32(header.Len()+16)))
+		movie.WriteString("moov")
+		require.NoError(t, binary.Write(&movie, binary.BigEndian, uint32(header.Len()+8)))
+		movie.WriteString("mvhd")
+		movie.Write(header.Bytes())
+		return movie.Bytes()
+	}
+	media := map[string][]byte{"/three.mp4": inputVideo(3), "/fraction.mp4": inputVideo(5.25), "/not-video": []byte("not a media container")}
+	mediaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "video.mp4", time.Unix(1, 0), bytes.NewReader(media[r.URL.Path]))
+	}))
+	t.Cleanup(mediaServer.Close)
 	scheduling := operation_setting.GetVideoSchedulingSetting()
 	scheduling.Mode, scheduling.SelectionPolicy = operation_setting.VideoSchedulingModeShadow, videosched.PolicyWeightedV1
 	scheduling.Models, scheduling.CapacityGroups = nil, nil
@@ -752,10 +777,10 @@ func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
 		plugin, err := pluginruntime.DefaultRegistry.Register(fmt.Sprintf(`
 export const meta = {apiVersion:1,key:%q,name:"Unified submission fixture",version:"1.0.0",author:{name:"Test"},models:[%q,%q],fetchMode:"per_task",protocols:["openai_video"],usageSchema:{requests:{type:"number",unit:"count",description:"Video generation unit price"}}};
 export const protocols = {openai_video:{
-  decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size,decodedBy:meta.key}};},
+  decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size,videos:ctx.body.value.videos||[],decodedBy:meta.key}};},
   render(ctx,task) {return task.data;}
 }};
-export function describeSpec(ctx) {return {spec_version:1,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.size,references:{video:0,image:0,audio:0}};}
+export function describeSpec(ctx) {return {spec_version:2,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.size,reference_video_urls:ctx.requestBody.videos,references:{video:ctx.requestBody.videos.length,image:0,audio:0}};}
 export function buildSubmitRequest(ctx) {
   if (ctx.requestBody.decodedBy !== meta.key) throw new Error("wrong plugin decoder");
   return {url:ctx.baseUrl+"/"+meta.key,body:{model:ctx.upstreamModel,seconds:ctx.requestBody.seconds,size:ctx.requestBody.size,decodedBy:ctx.requestBody.decodedBy}};
@@ -781,17 +806,35 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 		wantPlugins  []string
 		wantStatus   int
 		samePlugin   bool
+		inputVideos  []string // priced at $0.2 per input second when present
 	}{
-		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false},
-		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK, false},
-		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK, false},
-		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway, false},
-		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable, false},
-		{"same plugin retries a different upstream model", "rejected", []string{"unified-controller-a", "unified-controller-a"}, http.StatusOK, true},
+		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, nil},
+		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK, false, nil},
+		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK, false, nil},
+		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway, false, nil},
+		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable, false, nil},
+		{"same plugin retries a different upstream model", "rejected", []string{"unified-controller-a", "unified-controller-a"}, http.StatusOK, true, nil},
+		{"input video is charged once across a retry", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, []string{"/three.mp4", "/fraction.mp4"}},
+		{"unmeasurable input video is the client error", "success", nil, http.StatusBadRequest, false, []string{"/not-video"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initialQuota := common.QuotaRound(20 * common.QuotaPerUnit)
 			wantQuota := common.QuotaRound(.30 * common.QuotaPerUnit)
+			inputPrice, body := 0.0, `{"model":"unified-controller-video","seconds":15,"size":"1280x720"}`
+			if tc.inputVideos != nil {
+				// 15 x 0.02 output + (3 + 5.25) x 0.2 input, added before the group ratio.
+				inputPrice, wantQuota = 0.2, common.QuotaRound(1.95*common.QuotaPerUnit)
+				urls := make([]string, len(tc.inputVideos))
+				for i, path := range tc.inputVideos {
+					urls[i] = fmt.Sprintf("%q", mediaServer.URL+path)
+				}
+				body = fmt.Sprintf(`{"model":"unified-controller-video","seconds":15,"size":"1280x720","videos":[%s]}`, strings.Join(urls, ","))
+			}
+			billingConfig.VideoSales = map[string]billing_setting.VideoSalesModel{
+				"unified-controller-video": {Resolutions: map[string]billing_setting.VideoSalesTier{
+					"720p": {USDPerSecond: .02, InputVideoUSDPerSecond: inputPrice, Seconds: []int{15}},
+				}},
+			}
 			user := model.User{Username: fmt.Sprintf("unified_%d", caseIndex), AffCode: fmt.Sprintf("unified_%d", caseIndex), Quota: initialQuota}
 			require.NoError(t, database.Create(&user).Error)
 			token := model.Token{UserId: user.Id, Name: "unified fixture", Key: fmt.Sprintf("unified-fixture-%d", caseIndex), RemainQuota: initialQuota}
@@ -855,7 +898,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 					Status: common.ChannelStatusEnabled, Models: "unified-controller-video", Group: "default", Key: "fixture",
 					BaseURL: &server.URL, Setting: &binding, ModelMapping: &mapping, AutoBan: common.GetPointer(0),
 					Priority: common.GetPointer(int64(2 - i)), Weight: common.GetPointer(uint(100)),
-					OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{"unified-controller-video":{"mode":%q,"prices":{%s}}}}}`, mode, prices)}
+					OtherSettings: fmt.Sprintf(`{"video_scheduling":{"models":{"unified-controller-video":{"mode":%q,"prices":{%s},"references":{"video":{"*":{"mode":"included"}}}}}}}`, mode, prices)}
 				require.NoError(t, database.Create(&channel).Error)
 				require.NoError(t, channel.AddAbilities(database))
 			}
@@ -872,6 +915,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 			defer func() { require.NoError(t, database.Callback().Update().Remove(callback)) }()
 			var outcome *taskSubmissionOutcome
 			var taskErr *dto.TaskError
+			var selectFailure *service.ChannelSelectError
 			var requestContext *gin.Context
 			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key,
 				OriginModelName: "unified-controller-video", TokenGroup: "default", UsingGroup: "default", UserGroup: "default",
@@ -889,6 +933,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, service.VideoSchedDecision{Takeover: true})
 				first, _, selectErr := service.SelectChannelForRequest(c, info.OriginModelName, &service.RetryParam{Ctx: c, TokenGroup: "default", ModelName: info.OriginModelName, Retry: common.GetPointer(0)})
 				if selectErr != nil {
+					selectFailure = selectErr
 					c.Status(selectErr.StatusCode)
 					return
 				}
@@ -899,7 +944,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				}
 			})
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"unified-controller-video","seconds":15,"size":"1280x720"}`))
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(recorder, request)
 			require.NotNil(t, requestContext, recorder.Body.String())
@@ -958,7 +1003,12 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				require.NotNil(t, stored[0].PrivateData.BillingContext)
 				snapshot := stored[0].PrivateData.BillingContext.TieredSnapshot
 				require.NotNil(t, snapshot)
-				assert.Equal(t, map[string]any{"seconds": float64(15), "resolution": "720p"}, snapshot.UsageFacts)
+				wantFacts := map[string]any{"seconds": float64(15), "resolution": "720p"}
+				if tc.inputVideos != nil {
+					wantFacts["input_video_seconds"] = 8.25
+					assert.Equal(t, `tier("720p", u("seconds") * 0.02 + u("input_video_seconds") * 0.2)`, snapshot.ExprString)
+				}
+				assert.Equal(t, wantFacts, snapshot.UsageFacts)
 				assert.Equal(t, wantQuota, info.Billing.GetPreConsumedQuota())
 				require.NoError(t, info.Billing.Reserve(wantQuota), "same-price final reserve does not charge again")
 				var other map[string]any
@@ -968,6 +1018,16 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				assert.Nil(t, outcome)
 				assert.Empty(t, stored)
 				assert.Empty(t, logs)
+				if tc.wantStatus == http.StatusBadRequest {
+					require.NotNil(t, selectFailure)
+					assert.Equal(t, "video_input_unmeasurable", string(selectFailure.Code))
+					assert.Nil(t, info.Billing, "no reservation for an unmeasurable input")
+					records := service.VideoScheduleRecords(requestContext)
+					require.Len(t, records, 1, "the refused selection is audited")
+					for _, candidate := range records[0].Candidates {
+						assert.Contains(t, candidate.Excluded, "input video metadata unavailable")
+					}
+				}
 				if tc.firstOutcome == "all_excluded" {
 					assert.Nil(t, info.Billing, "no reservation before candidate admission")
 					records := service.VideoScheduleRecords(requestContext)

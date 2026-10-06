@@ -784,6 +784,11 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 				return
 			}
 			facts, salesErr := service.ParseVideoSalesFacts(salesModel, sales, requestContext.Body)
+			if errors.Is(salesErr, service.ErrVideoSalesPriceInvalid) {
+				logger.LogError(c, salesErr.Error())
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("model %s is temporarily unavailable", pinned.Model))
+				return
+			}
 			if salesErr != nil {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, salesErr.Error())
 				return

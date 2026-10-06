@@ -430,6 +430,13 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	if channel == nil {
 		var err error
 		channel, selectGroup, err = CacheGetRandomSatisfiedChannel(retry)
+		if errors.Is(err, ErrVideoInputUnmeasurable) {
+			// The client's input videos, not the channels, are the problem.
+			// The fixed public message names no URL, channel or upstream.
+			return nil, selectGroup, &ChannelSelectError{
+				StatusCode: http.StatusBadRequest, Code: types.ErrorCode("video_input_unmeasurable"), MessageID: i18n.MsgVideoInputUnmeasurable,
+			}
+		}
 		if err != nil {
 			showGroup := usingGroup
 			if usingGroup == "auto" {

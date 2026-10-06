@@ -431,6 +431,9 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 		record.Fingerprint, _, _ = VideoDecisionFingerprint(input)
 		if choice.Best == nil {
 			appendVideoScheduleRecord(c, record, choice.Board)
+			if c.GetBool(contextKeyVideoSalesInputUnmeasurable) {
+				return nil, ErrVideoInputUnmeasurable
+			}
 			stashVideoSchedNoChannel(c, group, len(input.Candidates), choice)
 			return nil, model.ErrTierSelectorNoCandidate
 		}
@@ -584,23 +587,95 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		candidate, probe := assembleVideoCandidate(c, group, modelName, channel, tried[channel.Id], setting)
 		input.Candidates = append(input.Candidates, candidate)
 		input.Probe[channel.Id] = probe
+	}
+	freezeUnifiedVideoInput(c, group, input.Candidates)
+	for _, candidate := range input.Candidates {
 		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 && setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
 			continue
 		}
-		held, err := VideoProbeSlotsHeld(channel.Id, setting.ProbeMaxInFlight)
+		held, err := VideoProbeSlotsHeld(candidate.ID, setting.ProbeMaxInFlight)
 		if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
-			held, err = videoHealthStore().held(videoValidationKeys(channel.Id))
+			held, err = videoHealthStore().held(videoValidationKeys(candidate.ID))
 		}
 		if err != nil {
 			// An unreadable slot is treated as held: never probe blind.
-			logger.LogWarn(c, "video scheduling probe slot read failed: channel=%d error=%v", channel.Id, err)
+			logger.LogWarn(c, "video scheduling probe slot read failed: channel=%d error=%v", candidate.ID, err)
 			held = 16
 		}
 		if held > 0 {
-			input.SlotOccupancy[channel.Id] = held
+			input.SlotOccupancy[candidate.ID] = held
 		}
 	}
 	return input
+}
+
+// ErrVideoInputUnmeasurable is returned by unified video selection when the
+// sale prices input video and the client's input videos cannot be measured.
+// It is the client's input, not a missing channel.
+var ErrVideoInputUnmeasurable = errors.New("input video duration could not be measured")
+
+const contextKeyVideoSalesInputUnmeasurable = "video_sales_input_unmeasurable"
+
+// freezeUnifiedVideoInput completes a unified sale that prices input video.
+// Every candidate whose spec matched the sale must report the same complete,
+// ordered input video list; that list is measured once and frozen with the
+// sale, so the price never depends on which channel is scored, tried or
+// retried. Candidates that cannot be priced are excluded rather than left
+// with an unknown sell, which a permissive UnknownSellPolicy could admit.
+func freezeUnifiedVideoInput(c *gin.Context, group string, candidates []videosched.Candidate) {
+	sales, unified := GetVideoSalesFacts(c)
+	if !unified || !sales.ChargesInputVideo() {
+		return
+	}
+	var matched []int
+	for i := range candidates {
+		spec := candidates[i].Spec
+		// A unified candidate gets its spec only once it matches the sale.
+		if spec.OutputSeconds == nil {
+			continue
+		}
+		if len(spec.ReferenceVideoURLs) != spec.References["video"] {
+			candidates[i].Excluded = "input video URLs unavailable"
+			continue
+		}
+		matched = append(matched, i)
+	}
+	if len(matched) == 0 {
+		return
+	}
+	if !sales.Ready() {
+		urls := candidates[matched[0]].Spec.ReferenceVideoURLs
+		for _, i := range matched[1:] {
+			if !slices.Equal(candidates[i].Spec.ReferenceVideoURLs, urls) {
+				logger.LogWarn(c, "video scheduling: candidate plugins disagree on the unified sale's input videos")
+				for _, j := range matched {
+					candidates[j].Excluded = "unified input videos conflict"
+				}
+				return
+			}
+		}
+		seconds := 0.0
+		if len(urls) > 0 {
+			measured, err := measureVideoInputSeconds(c, urls)
+			if err != nil {
+				for _, j := range matched {
+					candidates[j].Excluded = "input video metadata unavailable: " + err.Error()
+				}
+				c.Set(contextKeyVideoSalesInputUnmeasurable, true)
+				return
+			}
+			seconds = measured
+		}
+		sales.InputVideoSeconds, sales.inputVideoURLs = &seconds, slices.Clone(urls)
+		SetVideoSalesFacts(c, sales)
+	}
+	for _, i := range matched {
+		if !slices.Equal(candidates[i].Spec.ReferenceVideoURLs, sales.inputVideoURLs) {
+			candidates[i].Excluded = "spec does not match unified sale"
+			continue
+		}
+		candidates[i].Sell = unifiedVideoSell(c, group, sales)
+	}
 }
 
 // assembleVideoCandidate snapshots one channel: its execution plugin and

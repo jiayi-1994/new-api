@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	taskdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
@@ -1613,6 +1614,203 @@ export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requ
 			assert.InDelta(t, 0.3, candidate.Sell.USD, 1e-12)
 		})
 	}
+}
+
+// A unified sale with an input video price measures the input videos every
+// candidate plugin agrees on, once, and freezes them before any channel is
+// scored; the customer pays the same total whichever channel executes.
+func TestUnifiedVideoSaleFreezesMeasuredInputVideo(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	useVideoHealthBackend(t, "memory")
+	scheduling := operation_setting.GetVideoSchedulingSetting()
+	savedScheduling := *scheduling
+	t.Cleanup(func() { *scheduling = savedScheduling })
+	scheduling.MaxCostToSellRatio = 1
+	scheduling.UnknownSellPolicy = videosched.UnknownSellRelative
+	previousFetch := *system_setting.GetFetchSetting()
+	previousClient := ssrfProtectedHTTPClient
+	t.Cleanup(func() {
+		*system_setting.GetFetchSetting() = previousFetch
+		ssrfProtectedHTTPClient = previousClient
+	})
+	*system_setting.GetFetchSetting() = system_setting.FetchSetting{EnableSSRFProtection: true, AllowPrivateIp: true, AllowedPorts: []string{"1-65535"}}
+	ssrfProtectedHTTPClient = newProtectedFetchHTTPClientWithProxy(nil, nil, nil, func(*http.Request) (*url.URL, error) { return nil, nil })
+	media := map[string][]byte{
+		"/three.mp4":    referenceVideoFixture(t, 3, false),
+		"/fraction.mp4": referenceVideoFixture(t, 5.25, true),
+		"/not-video":    []byte("not a media container"),
+	}
+	var requestMu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMu.Lock()
+		requests++
+		requestMu.Unlock()
+		http.ServeContent(w, r, "video.mp4", time.Unix(1, 0), bytes.NewReader(media[r.URL.Path]))
+	}))
+	t.Cleanup(server.Close)
+	mediaRequests := func() int {
+		requestMu.Lock()
+		defer requestMu.Unlock()
+		return requests
+	}
+	// megabyai pays for input seconds; seedance-hjmie's price includes them.
+	createVideoSchedChannel(t, db, 3201, "default", "megabyai", 0,
+		`{"video_scheduling":{"models":{"videos-fast":{"mode":"per_second","prices":{"720p":0.3},"references":{"video":{"*":{"mode":"per_input_second","value":0.01}}}}}}}`, "")
+	createVideoSchedChannel(t, db, 3202, "default", "seedance-hjmie", 0,
+		`{"video_scheduling":{"models":{"videos-fast":{"mode":"per_second","prices":{"720p":0.4},"references":{"video":{"*":{"mode":"included"}}}}}}}`, "")
+	model.InitChannelCache()
+
+	request := func(t *testing.T, inputPrice float64, videos ...string) *gin.Context {
+		body := map[string]any{"prompt": "cat", "duration": 10, "resolution": "720p"}
+		if len(videos) > 0 {
+			urls := make([]any, len(videos))
+			for i, path := range videos {
+				urls[i] = server.URL + path + "?signature=secret"
+			}
+			body["videos"] = urls
+		}
+		c := videoSchedProtocolRequest(t, body, VideoSchedDecision{Takeover: true})
+		SetVideoSalesFacts(c, VideoSalesFacts{Model: "videos-fast", Seconds: 10, Resolution: "720p", USDPerSecond: 0.56, InputVideoUSDPerSecond: inputPrice})
+		return c
+	}
+	assertSells := func(t *testing.T, c *gin.Context, usd float64) {
+		t.Helper()
+		records := VideoScheduleRecords(c)
+		require.NotEmpty(t, records)
+		require.Len(t, records[len(records)-1].Candidates, 2)
+		for _, row := range records[len(records)-1].Candidates {
+			assert.Empty(t, row.Excluded, "channel %d", row.ID)
+			assert.Equal(t, videosched.SellKnown, row.SellKind)
+			assert.InDelta(t, usd, row.SellUSD, 1e-9, "every channel sells at the same price")
+		}
+	}
+
+	t.Run("agreed input videos are measured once and priced on every channel", func(t *testing.T) {
+		c := request(t, 0.2, "/three.mp4", "/fraction.mp4")
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		require.NotNil(t, channel)
+		sales, _ := GetVideoSalesFacts(c)
+		require.True(t, sales.Ready())
+		assert.Equal(t, 8.25, *sales.InputVideoSeconds)
+		// 10 × 0.56 + 8.25 × 0.20; the purchase quote and the sale share one read.
+		assertSells(t, c, 7.25)
+		fetched := mediaRequests()
+		assert.InDelta(t, 14.5, unifiedVideoSell(c, "vip", sales).USD, 1e-9, "the group ratio applies once to the total")
+
+		AssembleVideoDecision(c, scheduling, "default", "videos-fast", []*model.Channel{channel}, 1)
+		assert.Equal(t, fetched, mediaRequests(), "a retry reuses the frozen input")
+		retried, _ := GetVideoSalesFacts(c)
+		assert.Equal(t, sales, retried)
+
+		encoded, err := common.Marshal(VideoScheduleRecords(c))
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "signature")
+	})
+
+	t.Run("a repeated URL is charged per occurrence and read once", func(t *testing.T) {
+		before := mediaRequests()
+		c := request(t, 0.2, "/three.mp4", "/three.mp4")
+		_, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		sales, _ := GetVideoSalesFacts(c)
+		assert.Equal(t, 6.0, *sales.InputVideoSeconds)
+		assertSells(t, c, 6.8)
+		assert.Equal(t, before+1, mediaRequests())
+	})
+
+	t.Run("no input video freezes zero without reading media", func(t *testing.T) {
+		before := mediaRequests()
+		c := request(t, 0.2)
+		_, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		sales, _ := GetVideoSalesFacts(c)
+		require.NotNil(t, sales.InputVideoSeconds)
+		assert.Zero(t, *sales.InputVideoSeconds)
+		assertSells(t, c, 5.6)
+		assert.Equal(t, before, mediaRequests())
+	})
+
+	t.Run("a free input price leaves the sale and its media untouched", func(t *testing.T) {
+		before := mediaRequests()
+		// Only the purchase side reads the input: megabyai buys input seconds.
+		c := request(t, 0, "/three.mp4")
+		_, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		sales, _ := GetVideoSalesFacts(c)
+		assert.Nil(t, sales.InputVideoSeconds, "an unpriced input is never reported as measured")
+		assertSells(t, c, 5.6)
+		assert.Equal(t, before+1, mediaRequests())
+	})
+
+	t.Run("unmeasurable input is the client's 400", func(t *testing.T) {
+		c := request(t, 0.2, "/not-video")
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.ErrorIs(t, err, ErrVideoInputUnmeasurable)
+		assert.Nil(t, channel)
+		records := VideoScheduleRecords(c)
+		require.Len(t, records, 1, "the failed selection stays visible in the audit")
+		for _, row := range records[0].Candidates {
+			assert.Contains(t, row.Excluded, "input video metadata unavailable")
+		}
+
+		c = request(t, 0.2, "/not-video")
+		_, _, selectErr := SelectChannelForRequest(c, "videos-fast", &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "videos-fast", Retry: common.GetPointer(0)})
+		require.NotNil(t, selectErr)
+		assert.Equal(t, http.StatusBadRequest, selectErr.StatusCode)
+		assert.Equal(t, "video_input_unmeasurable", string(selectErr.Code))
+		assert.Equal(t, i18n.MsgVideoInputUnmeasurable, selectErr.MessageID)
+		assert.False(t, selectErr.NoAvailableChannel)
+		require.NoError(t, i18n.Init())
+		message := i18n.Translate("en", selectErr.MessageID, selectErr.Params)
+		assert.Contains(t, message, "MP4/MOV")
+		assert.NotContains(t, message, server.URL)
+		assert.Contains(t, i18n.Translate("zh-CN", selectErr.MessageID, selectErr.Params), "输入视频")
+	})
+
+	t.Run("plugins disagreeing on the input refuse the request despite a relative unknown-sell policy", func(t *testing.T) {
+		before := mediaRequests()
+		c := request(t, 0.2, "/three.mp4")
+		endpointValue, _ := c.Get(jsplugin.ContextKeyPinnedEndpoint)
+		endpoint := endpointValue.(jsplugin.PinnedEndpoint)
+		endpoint.Candidates[1].DecodedBody = map[string]any{"prompt": "cat", "duration": 10, "resolution": "720p"}
+		c.Set(jsplugin.ContextKeyPinnedEndpoint, endpoint)
+		channel, err := model.GetRandomSatisfiedChannelWithContext(c, "default", "videos-fast", 0, nil)
+		require.NoError(t, err)
+		assert.Nil(t, channel)
+		sales, _ := GetVideoSalesFacts(c)
+		assert.False(t, sales.Ready())
+		for _, row := range VideoScheduleRecords(c)[0].Candidates {
+			assert.Equal(t, "unified input videos conflict", row.Excluded)
+		}
+		assert.LessOrEqual(t, mediaRequests()-before, 1, "only the purchase side may have read the input")
+	})
+
+	t.Run("a frozen sale excludes candidates reporting other input videos", func(t *testing.T) {
+		c := newVideoSchedTestContext(t)
+		seconds := 3.0
+		SetVideoSalesFacts(c, VideoSalesFacts{Model: "videos-fast", Seconds: 10, Resolution: "720p", USDPerSecond: 0.56, InputVideoUSDPerSecond: 0.2,
+			InputVideoSeconds: &seconds, inputVideoURLs: []string{"https://media.example/a.mp4"}})
+		output := 10.0
+		spec := func(urls ...string) videosched.Spec {
+			return videosched.Spec{OutputSeconds: &output, Tier: "720p", References: map[string]int{"video": len(urls)}, ReferenceVideoURLs: urls}
+		}
+		incomplete := spec()
+		incomplete.References["video"] = 1
+		candidates := []videosched.Candidate{
+			{ID: 1, Spec: spec("https://media.example/a.mp4")},
+			{ID: 2, Spec: spec("https://media.example/b.mp4")},
+			{ID: 3, Spec: incomplete},
+			{ID: 4, Excluded: "disabled"},
+		}
+		freezeUnifiedVideoInput(c, "default", candidates)
+		assert.Empty(t, candidates[0].Excluded)
+		assert.InDelta(t, 6.2, candidates[0].Sell.USD, 1e-9)
+		assert.Equal(t, "spec does not match unified sale", candidates[1].Excluded)
+		assert.Equal(t, "input video URLs unavailable", candidates[2].Excluded)
+		assert.Equal(t, "disabled", candidates[3].Excluded)
+	})
 }
 
 func TestUnifiedVideoNewAPIChannelChoosesTheMappedTargetsPlugin(t *testing.T) {

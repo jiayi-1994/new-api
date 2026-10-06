@@ -67,23 +67,33 @@ func TestVideoSalesSaveNormalizesResolutionAliases(t *testing.T) {
 		require.NoError(t, config.GlobalConfig.LoadFromDB(previousSales))
 		DB.Where(&Option{Key: billing_setting.VideoSalesOption}).Delete(&Option{})
 	})
-	const input = `{"normalized-video":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`
-	const expected = `{"normalized-video":{"resolutions":{"4k":{"usd_per_second":0.1,"seconds":[5]}}}}`
-	for _, bulk := range []bool{false, true} {
-		var err error
-		if bulk {
-			err = UpdateOptionsBulk(map[string]string{billing_setting.VideoSalesOption: input})
-		} else {
-			err = UpdateOption(billing_setting.VideoSalesOption, input)
+	// An absent input video price is stored as an explicit free price; a
+	// positive one survives the save unchanged.
+	for _, tc := range []struct{ input, expected string }{
+		{`{"normalized-video":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]}}}}`,
+			`{"normalized-video":{"resolutions":{"4k":{"usd_per_second":0.1,"input_video_usd_per_second":0,"seconds":[5]}}}}`},
+		{`{"normalized-video":{"resolutions":{"2160p":{"usd_per_second":0.1,"input_video_usd_per_second":0.25,"seconds":[5]}}}}`,
+			`{"normalized-video":{"resolutions":{"4k":{"usd_per_second":0.1,"input_video_usd_per_second":0.25,"seconds":[5]}}}}`},
+	} {
+		for _, bulk := range []bool{false, true} {
+			var err error
+			if bulk {
+				err = UpdateOptionsBulk(map[string]string{billing_setting.VideoSalesOption: tc.input})
+			} else {
+				err = UpdateOption(billing_setting.VideoSalesOption, tc.input)
+			}
+			require.NoError(t, err)
+			var stored Option
+			require.NoError(t, DB.Where(&Option{Key: billing_setting.VideoSalesOption}).First(&stored).Error)
+			assert.JSONEq(t, tc.expected, stored.Value)
+			assert.JSONEq(t, tc.expected, common.OptionMap[billing_setting.VideoSalesOption])
+			_, sale, ok := billing_setting.GetVideoSales("normalized-video")
+			require.True(t, ok)
+			assert.Contains(t, sale.Resolutions, "4k")
+			assert.NotContains(t, sale.Resolutions, "2160p")
 		}
-		require.NoError(t, err)
-		var stored Option
-		require.NoError(t, DB.Where(&Option{Key: billing_setting.VideoSalesOption}).First(&stored).Error)
-		assert.JSONEq(t, expected, stored.Value)
-		assert.JSONEq(t, expected, common.OptionMap[billing_setting.VideoSalesOption])
-		_, sale, ok := billing_setting.GetVideoSales("normalized-video")
-		require.True(t, ok)
-		assert.Contains(t, sale.Resolutions, "4k")
-		assert.NotContains(t, sale.Resolutions, "2160p")
 	}
+	require.Error(t, UpdateOption(billing_setting.VideoSalesOption, `{"normalized-video":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":-1,"seconds":[5]}}}}`))
+	_, sale, _ := billing_setting.GetVideoSales("normalized-video")
+	assert.Equal(t, 0.25, sale.Resolutions["4k"].InputVideoUSDPerSecond, "a rejected save keeps the previous price")
 }

@@ -2,6 +2,7 @@ package billing_setting
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -119,6 +120,11 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 		{name: "duplicate canonical tier", value: `{"m":{"resolutions":{"2160p":{"usd_per_second":0.1,"seconds":[5]},"4k":{"usd_per_second":0.2,"seconds":[10]}}}}`, wantErr: "duplicate resolution"},
 		{name: "unknown tier", value: `{"m":{"resolutions":{"hd":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "<height>p or 4k"},
 		{name: "zero price", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0,"seconds":[5]}}}}`, wantErr: "positive number"},
+		{name: "free input video", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":0,"seconds":[5]}}}}`},
+		{name: "priced input video", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":0.2,"seconds":[5]}}}}`},
+		{name: "negative input video price", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":-0.01,"seconds":[5]}}}}`, wantErr: "input_video_usd_per_second must be a finite number >= 0"},
+		{name: "huge input video price overflows", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":1e400,"seconds":[5]}}}}`, wantErr: "invalid video_sales"},
+		{name: "text input video price", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"input_video_usd_per_second":"0.2","seconds":[5]}}}}`, wantErr: "invalid video_sales"},
 		{name: "no seconds", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[]}}}}`, wantErr: "sellable duration"},
 		{name: "seconds above cap", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[3601]}}}}`, wantErr: "seconds must be within"},
 		{name: "no resolutions", value: `{"m":{"resolutions":{}}}`, wantErr: "at least one resolution"},
@@ -133,6 +139,17 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+
+	// An absent input price is free, and the parsed table always carries it.
+	legacy, err := ParseVideoSales(`{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`)
+	require.NoError(t, err)
+	assert.Zero(t, legacy["m"].Resolutions["720p"].InputVideoUSDPerSecond)
+	encoded, err := common.Marshal(legacy)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"input_video_usd_per_second":0`)
+	for _, price := range []float64{-1, math.NaN(), math.Inf(1)} {
+		assert.False(t, ValidVideoInputPrice(price), price)
 	}
 
 	for input, want := range map[string]string{"720P": "720p", " 1080p ": "1080p", "2160p": "4k", "4K": "4k"} {

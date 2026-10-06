@@ -282,6 +282,7 @@ distributor.no_available_channel: "No available channel for model {{.Model}} und
 distributor.no_available_channel_task_plugin: "No available channel for model {{.Model}} under group {{.Group}}: the model is claimed by a task plugin, which has no enabled channel serving it (distributor)"
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 distributor.invalid_request_parse_model: "Invalid request, unable to parse model"
+distributor.video_input_unmeasurable: "The input video duration could not be read. Use publicly accessible MP4/MOV http(s) URLs"
 
 # Custom OAuth provider messages
 custom_oauth.not_found: "Custom OAuth provider not found"

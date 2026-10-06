@@ -14,9 +14,12 @@ import (
 const VideoSalesOption = "billing_setting.video_sales"
 
 // VideoSalesTier is one resolution's public price and sellable output seconds.
+// InputVideoUSDPerSecond is added per second of input video; 0 or absent sells
+// input video for free. It is serialized even at 0 so clients read a number.
 type VideoSalesTier struct {
-	USDPerSecond float64 `json:"usd_per_second"`
-	Seconds      []int   `json:"seconds"`
+	USDPerSecond           float64 `json:"usd_per_second"`
+	InputVideoUSDPerSecond float64 `json:"input_video_usd_per_second"`
+	Seconds                []int   `json:"seconds"`
 }
 
 // VideoSalesModel is a unified public video model. The client pays for the
@@ -63,6 +66,13 @@ func VideoTierForHeight(height int) string {
 	return strconv.Itoa(height) + "p"
 }
 
+// ValidVideoInputPrice reports whether an input video price per second is
+// finite and non-negative. Both the saved document and every request entry
+// check it, so a price edited around the option API can never become a credit.
+func ValidVideoInputPrice(usd float64) bool {
+	return usd >= 0 && !math.IsInf(usd, 1)
+}
+
 // ParseVideoSales validates and normalizes a complete video_sales document.
 // A lookup must never match two entries with different prices.
 func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
@@ -94,6 +104,9 @@ func ParseVideoSales(value string) (map[string]VideoSalesModel, error) {
 			}
 			if math.IsNaN(price.USDPerSecond) || math.IsInf(price.USDPerSecond, 0) || price.USDPerSecond <= 0 {
 				return nil, fmt.Errorf("video_sales: model %s %s: usd_per_second must be a positive number", model, tier)
+			}
+			if !ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
+				return nil, fmt.Errorf("video_sales: model %s %s: input_video_usd_per_second must be a finite number >= 0", model, tier)
 			}
 			if len(price.Seconds) == 0 {
 				return nil, fmt.Errorf("video_sales: model %s %s needs at least one sellable duration", model, tier)

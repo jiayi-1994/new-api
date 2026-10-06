@@ -331,6 +331,7 @@ const (
 	MsgDistributorNoAvailableChannelTaskPlugin = "distributor.no_available_channel_task_plugin"
 	MsgDistributorInvalidMidjourney            = "distributor.invalid_midjourney_request"
 	MsgDistributorInvalidParseModel            = "distributor.invalid_request_parse_model"
+	MsgVideoInputUnmeasurable                  = "distributor.video_input_unmeasurable"
 )
 
 // Custom OAuth provider related messages

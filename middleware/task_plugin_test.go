@@ -938,6 +938,7 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 	const sales = `{"video-sales-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]},"1080p":{"usd_per_second":0.04,"seconds":[5]}}}}`
 	for _, tc := range []struct {
 		name, sales string
+		corrupt     bool
 		request     *http.Request
 		wantStatus  int
 		want        *service.VideoSalesFacts
@@ -951,9 +952,23 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 		{name: "disabled model", sales: `{"video-sales-model":{"disabled":true,"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]}}}}`,
 			request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720"}`), wantStatus: http.StatusServiceUnavailable},
 		{name: "not unified", sales: `{}`, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat"}`), wantStatus: http.StatusNoContent},
+		{name: "priced input video stays unmeasured at the entry", sales: `{"video-sales-model":{"resolutions":{"720p":{"usd_per_second":0.02,"input_video_usd_per_second":0.2,"seconds":[15]}}}}`,
+			request:    jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720","input_video_seconds":1}`),
+			wantStatus: http.StatusNoContent, want: &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02, InputVideoUSDPerSecond: 0.2}},
+		// A stored price that bypassed option validation is the server's fault.
+		{name: "corrupted input video price", corrupt: true, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720"}`), wantStatus: http.StatusServiceUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: tc.sales}))
+			if tc.corrupt {
+				billingConfig := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+				previous := billingConfig.VideoSales
+				t.Cleanup(func() { billingConfig.VideoSales = previous })
+				billingConfig.VideoSales = map[string]billing_setting.VideoSalesModel{"video-sales-model": {Resolutions: map[string]billing_setting.VideoSalesTier{
+					"720p": {USDPerSecond: 0.02, InputVideoUSDPerSecond: -1, Seconds: []int{15}},
+				}}}
+			} else {
+				require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.VideoSalesOption: tc.sales}))
+			}
 			var frozen *service.VideoSalesFacts
 			router := gin.New()
 			router.POST("/v1/videos", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
@@ -967,6 +982,9 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
 			assert.Equal(t, tc.want, frozen)
+			if tc.corrupt {
+				assert.NotContains(t, recorder.Body.String(), "misconfigured")
+			}
 		})
 	}
 }

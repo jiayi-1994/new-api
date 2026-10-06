@@ -427,13 +427,18 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		billing_setting.PluginBillingExprOption: `{"bill-fallback::video-unified":"tier(\"plugin\", u(\"requests\") * 9)"}`,
 	}))
 
+	measured := 8.25
 	for _, tc := range []struct {
 		name, tokenGroup, wantCode string
 		frozen                     bool
 		wantStatus                 int
 		guard                      string
+		inputPrice                 float64
+		inputSeconds               *float64
 	}{
 		{name: "frozen sale", tokenGroup: "default", frozen: true},
+		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: &measured},
+		{name: "unmeasured input video is refused", tokenGroup: "default", frozen: true, inputPrice: 0.2, wantCode: "video_sales_input_unmeasured", wantStatus: http.StatusServiceUnavailable},
 		{name: "auto group is refused", tokenGroup: "auto", frozen: true, wantCode: "video_sales_auto_group", wantStatus: http.StatusBadRequest},
 		{name: "table appearing after entry never falls back to plugin pricing", tokenGroup: "default", wantCode: "video_sales_unavailable", wantStatus: http.StatusServiceUnavailable},
 		{name: "scheduler off", frozen: true, guard: "off", wantCode: "video_sales_scheduler_unavailable", wantStatus: http.StatusServiceUnavailable},
@@ -474,7 +479,8 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			c.Set(pluginruntime.ContextKeyPinnedEndpoint, endpoint)
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
 			if tc.frozen {
-				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02})
+				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02,
+					InputVideoUSDPerSecond: tc.inputPrice, InputVideoSeconds: tc.inputSeconds})
 			}
 
 			_, taskErr := RelayTaskSubmit(c, info)
@@ -490,14 +496,21 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			snap := info.TieredBillingSnapshot
 			require.NotNil(t, snap, "submission error: %+v", taskErr)
 			assert.Equal(t, billingexpr.SalesSourceVideoRequest, snap.SalesSource)
-			assert.Equal(t, `tier("720p", u("seconds") * 0.02)`, snap.ExprString)
-			assert.Equal(t, map[string]any{"seconds": float64(15), "resolution": "720p"}, snap.UsageFacts)
+			wantExpr, wantFacts, wantUSD := `tier("720p", u("seconds") * 0.02)`, map[string]any{"seconds": float64(15), "resolution": "720p"}, 0.3
+			if tc.inputSeconds != nil {
+				// 15 × 0.02 + 8.25 × 0.2: the input fee is added, not a ratio.
+				wantExpr = `tier("720p", u("seconds") * 0.02 + u("input_video_seconds") * 0.2)`
+				wantFacts["input_video_seconds"], wantUSD = 8.25, 1.95
+			}
+			assert.Equal(t, wantExpr, snap.ExprString)
+			assert.Equal(t, wantFacts, snap.UsageFacts)
 			assert.True(t, snap.TaskUsageBilling)
 			assert.Equal(t, float64(1), snap.GroupRatio)
-			assert.Equal(t, common.QuotaRound(0.3*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
+			assert.Equal(t, common.QuotaRound(wantUSD*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
 			assert.Equal(t, snap.EstimatedQuotaAfterGroup, info.PriceData.Quota)
 
-			result, usage, err := service.EvaluateTaskCompletionUsage(snap, map[string]any{"requests": float64(1), "seconds": float64(5)})
+			// Completion usage reported by the executing plugin never changes a frozen sale.
+			result, usage, err := service.EvaluateTaskCompletionUsage(snap, map[string]any{"requests": float64(1), "seconds": float64(5), "input_video_seconds": float64(99)})
 			require.NoError(t, err)
 			assert.Equal(t, snap.EstimatedQuotaAfterGroup, result.ActualQuotaAfterGroup)
 			assert.Equal(t, "720p", result.MatchedTier)

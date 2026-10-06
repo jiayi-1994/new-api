@@ -47,6 +47,18 @@ func resolveVideoInputSeconds(c *gin.Context, spec *videosched.Spec, cost videos
 	if len(spec.ReferenceVideoURLs) != spec.References["video"] {
 		return errors.New("plugin does not expose every input video URL")
 	}
+	total, err := measureVideoInputSeconds(c, spec.ReferenceVideoURLs)
+	if err != nil {
+		return err
+	}
+	spec.InputVideoSeconds = &total
+	return nil
+}
+
+// measureVideoInputSeconds totals the movie-header durations of urls, each
+// occurrence counted. Purchase quotes and unified sales share its per-URL
+// cache and request budget, so no URL is read twice in one request.
+func measureVideoInputSeconds(c *gin.Context, urls []string) (float64, error) {
 	cache, _ := c.Value(videoReferenceMetadataKey).(*videoReferenceMetadata)
 	if cache == nil {
 		cache = &videoReferenceMetadata{
@@ -58,22 +70,21 @@ func resolveVideoInputSeconds(c *gin.Context, spec *videosched.Spec, cost videos
 	ctx, cancel := context.WithDeadline(c.Request.Context(), cache.deadline)
 	defer cancel()
 	total := 0.0
-	for i, address := range spec.ReferenceVideoURLs {
+	for i, address := range urls {
 		result, ok := cache.results[address]
 		if !ok {
 			result.seconds, result.err = readReferenceVideoDuration(ctx, address, cache)
 			cache.results[address] = result
 		}
 		if result.err != nil {
-			return fmt.Errorf("reference video %d: %w", i+1, result.err)
+			return 0, fmt.Errorf("reference video %d: %w", i+1, result.err)
 		}
 		total += result.seconds
 		if !(total > 0) || total > relaycommon.MaxTaskDurationSeconds || math.IsInf(total, 0) {
-			return errors.New("total input video duration exceeds the supported bound")
+			return 0, errors.New("total input video duration exceeds the supported bound")
 		}
 	}
-	spec.InputVideoSeconds = &total
-	return nil
+	return total, nil
 }
 
 // videoMetadataReader fetches small ranges, so a moov box after a large mdat
