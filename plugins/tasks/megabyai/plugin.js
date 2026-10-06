@@ -16,12 +16,20 @@ const FIELDS = [
   "model", "prompt", "seconds", "duration", "size", "video_size", "n",
   "resolution", "video_resolution", "ratio", "aspect_ratio", "aspectRatio",
 ].concat(MEDIA_FIELDS);
+// Per reference kind: the aliases videoParams reads (the first is Mega's field), and the
+// copies multi-gateway clients add: a `*_urls` mirror and a metadata.content entry type.
+const REFERENCE_KINDS = [
+  { name: "image", aliases: ["referenceImages", "reference_images", "images", "image", "input_reference"], mirror: "image_urls", content: "image_url" },
+  { name: "video", aliases: ["referenceVideos", "reference_videos", "videos"], mirror: "video_urls", content: "video_url" },
+  { name: "audio", aliases: ["referenceAudios", "reference_audios", "audios"], mirror: "audio_urls", content: "audio_url" },
+];
+const METADATA_SCALARS = ["duration", "seconds", "resolution", "ratio", "aspect_ratio"];
 
 export const meta = {
   apiVersion: 1,
   key: "megabyai",
   name: "Mega Video",
-  version: "2.1.4",
+  version: "2.1.5",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Mega API", zh: "通过 Mega API 生成视频" },
   icon: "text:M",
@@ -147,15 +155,77 @@ function bodyFields(body) {
   }
   if ((body.files || []).length) throw new Error("Mega accepts public reference URLs; upload files to storage first, then send referenceImages or input_reference.image_url");
   const input = {};
+  const listFields = MEDIA_FIELDS.concat(REFERENCE_KINDS.map(function (kind) { return kind.mirror; }));
   for (const rawName of Object.keys(body.fields || {})) {
     const name = rawName.endsWith("[]") ? rawName.slice(0, -2) : rawName;
     if (has(input, name)) throw new Error("duplicate field: " + name);
     const values = body.fields[rawName];
     if (!Array.isArray(values) || !values.length) throw new Error(name + " requires a value");
-    if (!MEDIA_FIELDS.includes(name) && values.length !== 1) throw new Error(name + " must be provided once");
-    input[name] = MEDIA_FIELDS.includes(name) ? values : values[0];
+    if (!listFields.includes(name) && values.length !== 1) throw new Error(name + " must be provided once");
+    input[name] = listFields.includes(name) ? values : values[0];
   }
   return input;
+}
+
+// Multi-gateway clients such as the infinite canvas send one request shape everywhere:
+// every reference list again under `*_urls` and as volcengine-style metadata.content
+// entries, the knobs repeated inside metadata, plus generate_audio. Fold those copies into
+// the fields videoParams reads and fail when they disagree. Other unknown fields stay
+// rejected, so a misspelt reference field never silently drops a paid reference.
+// Decode-only: usage, spec and submission still validate the canonical body strictly, and
+// metadata scalars go through the same duration/resolution/ratio parsers as the top level.
+function canonicalClientInput(input) {
+  if (!isObject(input)) return input;
+  const output = Object.assign({}, input);
+  if (has(output, "generate_audio")) {
+    // Mega's create body has no audio switch, so the flag is checked and not forwarded.
+    if (![true, false, "true", "false"].includes(output.generate_audio)) throw new Error("generate_audio must be true or false");
+    delete output.generate_audio;
+  }
+  let metadata = {};
+  if (has(output, "metadata")) {
+    metadata = output.metadata;
+    delete output.metadata;
+    if (typeof metadata === "string") {
+      try { metadata = JSON.parse(metadata); } catch (_error) { throw new Error("metadata contains invalid JSON"); }
+    }
+    if (!isObject(metadata)) throw new Error("metadata must be an object");
+  }
+  for (const name of Object.keys(metadata)) {
+    if (name === "content") continue;
+    if (!METADATA_SCALARS.includes(name)) throw new Error("unsupported metadata parameter: " + name);
+    if (!has(output, name)) output[name] = metadata[name];
+    else if (String(output[name]) !== String(metadata[name])) throw new Error("metadata." + name + " conflicts with " + name);
+  }
+  const content = has(metadata, "content") ? metadata.content : [];
+  if (!Array.isArray(content)) throw new Error("metadata.content must be an array");
+  for (const item of content) {
+    if (!isObject(item) || !REFERENCE_KINDS.some(function (kind) { return item.type === kind.content; })) throw new Error("metadata.content supports only image_url, video_url and audio_url entries");
+  }
+  for (const kind of REFERENCE_KINDS) {
+    const copies = [];
+    if (has(output, kind.mirror)) {
+      copies.push(mediaURLs(output, [kind.mirror]));
+      delete output[kind.mirror];
+    }
+    const entries = content.filter(function (item) { return item.type === kind.content; });
+    if (entries.length) {
+      copies.push(entries.map(function (item) {
+        // first_frame/last_frame condition output frames; only references map onto Mega's lists.
+        if (has(item, "role") && item.role !== "reference_" + kind.name) throw new Error("metadata.content role " + item.role + " is not supported; only reference media can be sent");
+        if (!isObject(item[kind.content]) || !httpURL(item[kind.content].url)) throw new Error("metadata.content " + kind.content + " entries must carry a public http(s) url");
+        return item[kind.content].url.trim();
+      }));
+    }
+    if (!copies.length) continue;
+    const primary = mediaURLs(output, kind.aliases);
+    const urls = primary.length ? primary : copies[0];
+    for (const copy of copies) {
+      if (copy.join("\n") !== urls.join("\n")) throw new Error("mirrored " + kind.name + " references disagree; send one list of reference URLs");
+    }
+    if (!primary.length) output[kind.aliases[0]] = urls;
+  }
+  return output;
 }
 
 // Decode, forwarding and usage extraction share the exact same validated values.
@@ -179,9 +249,7 @@ function videoParams(input) {
     if (size.ratio) selectedRatio = size.ratio;
   }
   if (selectedResolution === undefined) throw new Error("resolution or size is required; no implicit 720p default");
-  const images = mediaURLs(input, ["referenceImages", "reference_images", "images", "image", "input_reference"]);
-  const videos = mediaURLs(input, ["referenceVideos", "reference_videos", "videos"]);
-  const audios = mediaURLs(input, ["referenceAudios", "reference_audios", "audios"]);
+  const [images, videos, audios] = REFERENCE_KINDS.map(function (kind) { return mediaURLs(input, kind.aliases); });
   if (images.length + videos.length + audios.length > MAX_REFERENCES) throw new Error("at most " + MAX_REFERENCES + " reference URLs are allowed");
   const output = { prompt: input.prompt, duration: seconds, resolution: selectedResolution };
   if (selectedRatio !== undefined) output.ratio = selectedRatio;
@@ -385,7 +453,7 @@ export const protocols = {
       if (typeof input.model !== "string" || !input.model.trim()) throw new Error("model is required");
       const model = input.model.trim();
       if (ctx.model && model !== ctx.model) throw new Error("model does not match the selected channel model");
-      const requestBody = videoParams(input);
+      const requestBody = videoParams(canonicalClientInput(input));
       const hasReferences = requestBody.referenceImages || requestBody.referenceVideos || requestBody.referenceAudios;
       return { kind: "submit", model, action: hasReferences ? "reference_to_video" : "text_to_video", requestBody };
     },

@@ -979,7 +979,7 @@
           }
         }
       ],
-      "expectedError": "unsupported video parameter: metadata"
+      "expectedError": "metadata.duration conflicts with duration"
     },
     {
       "name": "OpenAI file_id cannot be resolved",
@@ -2018,6 +2018,150 @@
         }
       ],
       "expectedError": "unsupported video parameter: surcharge_seconds"
+    },
+    {
+      "name": "Infinite canvas mirrored payload folds into Mega fields",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "图片1 小猫倒立跳舞",
+              "seconds": "4",
+              "duration": 4,
+              "resolution": "480p",
+              "aspect_ratio": "9:16",
+              "images": ["https://assets.example/cat.png"],
+              "image_urls": ["https://assets.example/cat.png"],
+              "generate_audio": true,
+              "metadata": {
+                "content": [{"type": "image_url", "image_url": {"url": "https://assets.example/cat.png"}, "role": "reference_image"}],
+                "ratio": "9:16",
+                "resolution": "480p"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "图片1 小猫倒立跳舞",
+          "duration": 4,
+          "resolution": "480p",
+          "ratio": "9:16",
+          "referenceImages": ["https://assets.example/cat.png"]
+        }
+      }
+    },
+    {
+      "name": "Metadata-only references and knobs map onto Mega fields",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "videos-standard",
+              "prompt": "A dog",
+              "duration": 5,
+              "metadata": {
+                "content": [{"type": "video_url", "video_url": {"url": "https://assets.example/dog.mp4"}}],
+                "resolution": "720p",
+                "ratio": "16:9"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "ratio": "16:9",
+          "referenceVideos": ["https://assets.example/dog.mp4"]
+        }
+      }
+    },
+    {
+      "name": "Multipart repeated image_urls mirror",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [
+        {
+          "model": "videos-standard",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": ["videos-standard"],
+              "prompt": ["A dog"],
+              "duration": ["5"],
+              "resolution": ["720p"],
+              "images[]": ["https://assets.example/a.png", "https://assets.example/b.png"],
+              "image_urls[]": ["https://assets.example/a.png", "https://assets.example/b.png"]
+            },
+            "files": []
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "videos-standard",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "A dog",
+          "duration": 5,
+          "resolution": "720p",
+          "referenceImages": ["https://assets.example/a.png", "https://assets.example/b.png"]
+        }
+      }
+    },
+    {
+      "name": "Mirrored reference lists must agree",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {"model": "videos-standard", "prompt": "A dog", "duration": 5, "resolution": "720p", "images": ["https://assets.example/a.png"], "image_urls": ["https://assets.example/b.png"]}}}],
+      "expectedError": "mirrored image references disagree"
+    },
+    {
+      "name": "Metadata frame roles are not references",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {"model": "videos-standard", "prompt": "A dog", "duration": 5, "resolution": "720p", "metadata": {"content": [{"type": "image_url", "image_url": {"url": "https://assets.example/a.png"}, "role": "first_frame"}]}}}}],
+      "expectedError": "metadata.content role first_frame is not supported"
+    },
+    {
+      "name": "Metadata cannot bypass the duration bound",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {"model": "videos-standard", "prompt": "A dog", "resolution": "720p", "metadata": {"duration": 999999}}}}],
+      "expectedError": "between 1 and 3600"
+    },
+    {
+      "name": "Unknown metadata parameter",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {"model": "videos-standard", "prompt": "A dog", "duration": 5, "resolution": "720p", "metadata": {"watermark": false}}}}],
+      "expectedError": "unsupported metadata parameter: watermark"
+    },
+    {
+      "name": "generate_audio must be a boolean",
+      "hook": "protocols",
+      "path": ["openai_video", "decodeRequest"],
+      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {"model": "videos-standard", "prompt": "A dog", "duration": 5, "resolution": "720p", "generate_audio": "yes"}}}],
+      "expectedError": "generate_audio must be true or false"
     }
   ]
 }
