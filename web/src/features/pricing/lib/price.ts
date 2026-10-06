@@ -291,6 +291,37 @@ export function formatRequestPrice(
   })
 }
 
+// Ark bills reference video as seconds × W × H × 24 / 1024 at the 16:9 output
+// size, so each canonical tier has a fixed token rate. Billing still stores the
+// per-second price; the token price is the customer-facing equivalent.
+export const VIDEO_INPUT_TOKENS_PER_SECOND = new Map([
+  ['480p', 10_044],
+  ['720p', 21_600],
+  ['1080p', 48_600],
+  ['4k', 194_400],
+])
+
+/** Token rate for a canonical tier, or null when the tier has no official rate. */
+export function videoInputTokensPerSecond(tier: string): number | null {
+  return VIDEO_INPUT_TOKENS_PER_SECOND.get(tier) ?? null
+}
+
+export function videoInputSecondPrice(
+  usdPerMillionTokens: number,
+  tokensPerSecond: number
+): number {
+  return Number(
+    ((usdPerMillionTokens * tokensPerSecond) / 1_000_000).toPrecision(12)
+  )
+}
+
+export function videoInputTokenPrice(
+  usdPerSecond: number,
+  tokensPerSecond: number
+): number {
+  return Number(((usdPerSecond * 1_000_000) / tokensPerSecond).toPrecision(12))
+}
+
 /** Format a unified retail tier, using the same group and recharge semantics as other prices. */
 export function formatVideoSalesPrice(
   usdPerSecond: number,

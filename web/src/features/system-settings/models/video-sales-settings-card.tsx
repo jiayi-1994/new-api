@@ -194,6 +194,7 @@ function VideoSalesSettingsForm(props: {
                     resolution: '720p',
                     price: '',
                     inputPrice: '0',
+                    inputTokenPrice: '0',
                     seconds: '5, 10, 15',
                   },
                 ],

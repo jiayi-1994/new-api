@@ -3145,9 +3145,7 @@
     "Input tokens": "Token đầu vào",
     "Input Tokens": "Token đầu vào",
     "Input video price must be 0 or more; 0 means no extra charge": "Phụ phí video đầu vào phải từ 0 trở lên; 0 nghĩa là không tính thêm",
-    "Input video price per second": "Phụ phí mỗi giây video đầu vào",
     "Input video price per second (USD)": "Phụ phí mỗi giây video đầu vào (USD)",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "Phụ phí video đầu vào: 0 nghĩa là không tính thêm; video đầu vào được tính theo tổng thời lượng.",
     "Input video: no extra charge": "Video đầu vào: không tính thêm",
     "Inset": "Khung trong",
     "Inspect requests, errors, and billing details": "Kiểm tra yêu cầu, lỗi và chi tiết thanh toán",
@@ -7211,6 +7209,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Reference video price": "Giá video tham chiếu",
+    "Reference video price (USD)": "Giá video tham chiếu (USD)",
+    "Reference video price per 1M tokens (USD)": "Giá video tham chiếu mỗi 1 triệu token (USD)",
+    "Reference video tokens": "Token video tham chiếu",
+    "Reference video cost": "Chi phí video tham chiếu",
+    "{{price}} / second": "{{price}} / giây",
+    "{{price}} / 1M tokens": "{{price}} / 1 triệu token",
+    "{{tokens}} tokens per second": "{{tokens}} token mỗi giây",
+    "({{tokens}} tokens per second)": "({{tokens}} token mỗi giây)",
+    "per second": "mỗi giây",
+    "per 1M tokens": "mỗi 1 triệu token",
+    "Plus reference video: {{price}} / 1M tokens": "Cộng video tham chiếu: {{price}} / 1 triệu token",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Token video tham chiếu = số giây × rộng × cao × 24 / 1024 (độ phân giải đầu ra)",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Giá video tham chiếu theo quy tắc token chính thức: token = số giây × rộng × cao × 24 / 1024 ở độ phân giải đầu ra. 0 nghĩa là không tính thêm; 480p, 720p, 1080p và 4k tính theo mỗi 1 triệu token, các độ phân giải khác theo giây."
   }
 }

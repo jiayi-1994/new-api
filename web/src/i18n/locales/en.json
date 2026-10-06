@@ -3145,9 +3145,7 @@
     "Input tokens": "Input tokens",
     "Input Tokens": "Input Tokens",
     "Input video price must be 0 or more; 0 means no extra charge": "Input video price must be 0 or more; 0 means no extra charge",
-    "Input video price per second": "Input video price per second",
     "Input video price per second (USD)": "Input video price per second (USD)",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "Input video price: 0 means no extra charge; input videos are charged by their total duration.",
     "Input video: no extra charge": "Input video: no extra charge",
     "Inset": "Inset",
     "Inspect requests, errors, and billing details": "Inspect requests, errors, and billing details",
@@ -7211,6 +7209,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Reference video price": "Reference video price",
+    "Reference video price (USD)": "Reference video price (USD)",
+    "Reference video price per 1M tokens (USD)": "Reference video price per 1M tokens (USD)",
+    "Reference video tokens": "Reference video tokens",
+    "Reference video cost": "Reference video cost",
+    "{{price}} / second": "{{price}} / second",
+    "{{price}} / 1M tokens": "{{price}} / 1M tokens",
+    "{{tokens}} tokens per second": "{{tokens}} tokens per second",
+    "({{tokens}} tokens per second)": "({{tokens}} tokens per second)",
+    "per second": "per second",
+    "per 1M tokens": "per 1M tokens",
+    "Plus reference video: {{price}} / 1M tokens": "Plus reference video: {{price}} / 1M tokens",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second."
   }
 }

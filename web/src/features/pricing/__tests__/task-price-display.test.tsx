@@ -33,11 +33,13 @@ import { DynamicPricingBreakdown } from '../components/dynamic-pricing-breakdown
 import { ModelCard } from '../components/model-card'
 import { ModelDetailsContent } from '../components/model-details'
 import { ModelPriceCell } from '../components/model-price-cell'
+import { VideoSalesPriceTable } from '../components/video-sales-price-table'
 import { QUOTA_TYPES, SORT_OPTIONS } from '../constants'
 import { getBillingModeLabelKey } from '../lib/billing-mode'
 import { getDynamicPricingSummary } from '../lib/dynamic-price'
 import { filterByQuotaType, sortModels } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
+import { videoInputSecondPrice, videoInputTokenPrice } from '../lib/price'
 import { getTaskPricingDisplayTiers } from '../lib/task-matrix-display'
 import {
   hasSimpleTaskPricing,
@@ -120,7 +122,7 @@ const unifiedVideo: PricingModel = {
       '720p': { usd_per_second: 0.06, seconds: [5, 10, 15] },
       '1080p': {
         usd_per_second: 0.12,
-        input_video_usd_per_second: 0.05,
+        input_video_usd_per_second: 0.1944,
         seconds: [5, 10],
       },
     },
@@ -212,7 +214,9 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
       })
     ).toBeVisible()
     expect(
-      within(base).getByRole('row', { name: '1080p $0.12 $0.05 5, 10' })
+      within(base).getByRole('row', {
+        name: '1080p $0.12 $4 / 1M tokens 48,600 tokens per second 5, 10',
+      })
     ).toBeVisible()
     const groups = screen.getByRole('table', { name: 'Pricing by Group' })
     expect(
@@ -222,7 +226,7 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
     ).toBeVisible()
     expect(
       within(groups).getByRole('row', {
-        name: 'premium 1080p $0.24 $0.1 5, 10',
+        name: 'premium 1080p $0.24 $8 / 1M tokens 48,600 tokens per second 5, 10',
       })
     ).toBeVisible()
     expect(
@@ -230,6 +234,11 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
         name: 'free 720p $0 No extra charge 5, 10, 15',
       })
     ).toBeVisible()
+    expect(
+      screen.getAllByText(
+        'Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)'
+      ).length
+    ).toBeGreaterThan(0)
     expect(screen.queryByText('Legacy provider')).not.toBeInTheDocument()
     expect(screen.queryByText('Raw expression')).not.toBeInTheDocument()
     expect(screen.queryByText('Token-based')).not.toBeInTheDocument()
@@ -239,6 +248,48 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
   } finally {
     useSystemConfigStore.getState().setConfig({ currency: previous })
   }
+})
+
+it('prices reference video per second on tiers without an official token rate', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  try {
+    render(
+      <VideoSalesPriceTable
+        model={{
+          ...unifiedVideo,
+          video_sales: {
+            resolutions: {
+              '540p': {
+                usd_per_second: 0.06,
+                input_video_usd_per_second: 0.1,
+                seconds: [5],
+              },
+            },
+          },
+        }}
+        options={{}}
+      />
+    )
+    expect(
+      screen.getByRole('row', { name: '540p $0.06 $0.1 / second 5' })
+    ).toBeVisible()
+    expect(screen.queryByText(/tokens per second/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Reference video tokens =/)
+    ).not.toBeInTheDocument()
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
+
+it('converts a reference video token price to its per-second price and back', () => {
+  expect(videoInputSecondPrice(3, 10_044)).toBe(0.030132)
+  expect(videoInputTokenPrice(0.030132, 10_044)).toBe(3)
+  expect(videoInputSecondPrice(4, 21_600)).toBe(0.0864)
+  expect(videoInputTokenPrice(0.0864, 21_600)).toBe(4)
 })
 
 it('omits the input video hint when no tier charges input video', () => {

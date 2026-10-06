@@ -3145,9 +3145,7 @@
     "Input tokens": "Входные токены",
     "Input Tokens": "Входные токены",
     "Input video price must be 0 or more; 0 means no extra charge": "Доплата за входное видео должна быть не меньше 0; 0 означает без доплаты",
-    "Input video price per second": "Доплата за секунду входного видео",
     "Input video price per second (USD)": "Доплата за секунду входного видео (USD)",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "Доплата за входное видео: 0 означает без доплаты; входные видео оплачиваются по их общей длительности.",
     "Input video: no extra charge": "Входное видео: без доплаты",
     "Inset": "Встроенная",
     "Inspect requests, errors, and billing details": "Проверяйте запросы, ошибки и детали оплаты",
@@ -7211,6 +7209,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Reference video price": "Цена референсного видео",
+    "Reference video price (USD)": "Цена референсного видео (USD)",
+    "Reference video price per 1M tokens (USD)": "Цена референсного видео за 1 млн токенов (USD)",
+    "Reference video tokens": "Токены референсного видео",
+    "Reference video cost": "Стоимость референсного видео",
+    "{{price}} / second": "{{price}} / секунда",
+    "{{price}} / 1M tokens": "{{price}} / 1 млн токенов",
+    "{{tokens}} tokens per second": "{{tokens}} токенов в секунду",
+    "({{tokens}} tokens per second)": "({{tokens}} токенов в секунду)",
+    "per second": "за секунду",
+    "per 1M tokens": "за 1 млн токенов",
+    "Plus reference video: {{price}} / 1M tokens": "Плюс референсное видео: {{price}} / 1 млн токенов",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "Токены референсного видео = секунды × ширина × высота × 24 / 1024 (выходное разрешение)",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Цена референсного видео следует официальному правилу токенов: токены = секунды × ширина × высота × 24 / 1024 при выходном разрешении. 0 — без доплаты; 480p, 720p, 1080p и 4k оцениваются за 1 млн токенов, остальные разрешения — за секунду."
   }
 }

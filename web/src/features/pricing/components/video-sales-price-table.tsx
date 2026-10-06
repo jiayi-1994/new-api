@@ -28,7 +28,11 @@ import {
   getConfiguredGroupRatio,
   getVideoSalesTiers,
 } from '../lib/model-helpers'
-import { formatVideoSalesPrice } from '../lib/price'
+import {
+  formatVideoSalesPrice,
+  videoInputTokenPrice,
+  videoInputTokensPerSecond,
+} from '../lib/price'
 import type { PricingModel } from '../types'
 import type { ModelPriceCellOptions } from './model-price-cell'
 
@@ -51,68 +55,111 @@ export function VideoSalesPriceTable(props: {
   const rows = (props.groups ?? ['']).flatMap((group) =>
     tiers.map((tier) => ({ ...tier, group }))
   )
+  const chargesTokens = tiers.some(
+    (tier) =>
+      !!tier.input_video_usd_per_second &&
+      videoInputTokensPerSecond(tier.resolution) !== null
+  )
   return (
-    <StaticDataTable
-      data={rows}
-      getRowKey={(row) => `${row.group}:${row.resolution}`}
-      emptyContent={t('Not configured')}
-      tableProps={{
-        'aria-label': props.groups ? t('Pricing by Group') : t('Base Price'),
-      }}
-      columns={[
-        ...(props.groups
-          ? [
-              {
-                id: 'group',
-                header: t('Group'),
-                cell: (row: { group: string }) => (
-                  <GroupBadge group={row.group} size='sm' />
+    <>
+      <StaticDataTable
+        data={rows}
+        getRowKey={(row) => `${row.group}:${row.resolution}`}
+        emptyContent={t('Not configured')}
+        tableProps={{
+          'aria-label': props.groups ? t('Pricing by Group') : t('Base Price'),
+        }}
+        columns={[
+          ...(props.groups
+            ? [
+                {
+                  id: 'group',
+                  header: t('Group'),
+                  cell: (row: { group: string }) => (
+                    <GroupBadge group={row.group} size='sm' />
+                  ),
+                },
+              ]
+            : []),
+          {
+            id: 'resolution',
+            header: t('Resolution'),
+            cell: (row) => row.resolution,
+          },
+          {
+            id: 'price',
+            header: t('Price per second'),
+            cellClassName: 'font-mono tabular-nums',
+            cell: (row) =>
+              formatVideoSalesPrice(row.usd_per_second, {
+                ...props.options,
+                groupRatio: getConfiguredGroupRatio(
+                  props.groupRatio ?? {},
+                  row.group
                 ),
-              },
-            ]
-          : []),
-        {
-          id: 'resolution',
-          header: t('Resolution'),
-          cell: (row) => row.resolution,
-        },
-        {
-          id: 'price',
-          header: t('Price per second'),
-          cellClassName: 'font-mono tabular-nums',
-          cell: (row) =>
-            formatVideoSalesPrice(row.usd_per_second, {
-              ...props.options,
-              groupRatio: getConfiguredGroupRatio(
-                props.groupRatio ?? {},
-                row.group
-              ),
-            }),
-        },
-        {
-          id: 'input-price',
-          header: t('Input video price per second'),
-          cellClassName: 'font-mono tabular-nums',
-          cell: (row) =>
-            row.input_video_usd_per_second
-              ? formatVideoSalesPrice(row.input_video_usd_per_second, {
-                  ...props.options,
-                  groupRatio: getConfiguredGroupRatio(
-                    props.groupRatio ?? {},
-                    row.group
+              }),
+          },
+          {
+            id: 'input-price',
+            header: t('Reference video price'),
+            cellClassName: 'font-mono tabular-nums',
+            cell: (row) => {
+              if (!row.input_video_usd_per_second) return t('No extra charge')
+              const priceOptions = {
+                ...props.options,
+                groupRatio: getConfiguredGroupRatio(
+                  props.groupRatio ?? {},
+                  row.group
+                ),
+              }
+              const tokensPerSecond = videoInputTokensPerSecond(row.resolution)
+              if (tokensPerSecond === null) {
+                return t('{{price}} / second', {
+                  price: formatVideoSalesPrice(
+                    row.input_video_usd_per_second,
+                    priceOptions
                   ),
                 })
-              : t('No extra charge'),
-        },
-        {
-          id: 'seconds',
-          header: t('Allowed durations (seconds)'),
-          cell: (row) =>
-            row.seconds
-              .map((seconds) => formatNumber(seconds, locale))
-              .join(', '),
-        },
-      ]}
-    />
+              }
+              return (
+                <div>
+                  <div>
+                    {t('{{price}} / 1M tokens', {
+                      price: formatVideoSalesPrice(
+                        videoInputTokenPrice(
+                          row.input_video_usd_per_second,
+                          tokensPerSecond
+                        ),
+                        priceOptions
+                      ),
+                    })}
+                  </div>
+                  <div className='text-muted-foreground font-sans text-xs'>
+                    {t('{{tokens}} tokens per second', {
+                      tokens: formatNumber(tokensPerSecond, locale),
+                    })}
+                  </div>
+                </div>
+              )
+            },
+          },
+          {
+            id: 'seconds',
+            header: t('Allowed durations (seconds)'),
+            cell: (row) =>
+              row.seconds
+                .map((seconds) => formatNumber(seconds, locale))
+                .join(', '),
+          },
+        ]}
+      />
+      {chargesTokens && (
+        <p className='text-muted-foreground mt-2 text-xs'>
+          {t(
+            'Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)'
+          )}
+        </p>
+      )}
+    </>
   )
 }

@@ -3145,9 +3145,7 @@
     "Input tokens": "入力トークン",
     "Input Tokens": "入力トークン",
     "Input video price must be 0 or more; 0 means no extra charge": "入力動画の追加料金は 0 以上で入力してください。0 は追加料金なしを意味します",
-    "Input video price per second": "入力動画の1秒あたり追加料金",
     "Input video price per second (USD)": "入力動画の1秒あたり追加料金（USD）",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "入力動画の追加料金：0 は追加料金なしを意味します。入力動画は合計時間で課金されます。",
     "Input video: no extra charge": "入力動画：追加料金なし",
     "Inset": "インセット",
     "Inspect requests, errors, and billing details": "リクエスト、エラー、請求詳細を確認",
@@ -7211,6 +7209,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Reference video price": "参照動画の価格",
+    "Reference video price (USD)": "参照動画の価格（USD）",
+    "Reference video price per 1M tokens (USD)": "参照動画の 100 万トークンあたりの価格（USD）",
+    "Reference video tokens": "参照動画の換算トークン",
+    "Reference video cost": "参照動画の料金",
+    "{{price}} / second": "{{price}} / 秒",
+    "{{price}} / 1M tokens": "{{price}} / 100 万トークン",
+    "{{tokens}} tokens per second": "毎秒 {{tokens}} トークン",
+    "({{tokens}} tokens per second)": "（毎秒 {{tokens}} トークン）",
+    "per second": "毎秒",
+    "per 1M tokens": "100 万トークンあたり",
+    "Plus reference video: {{price}} / 1M tokens": "参照動画を追加：{{price}} / 100 万トークン",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "参照動画のトークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "参照動画の価格は公式のトークン規則に従います：トークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）。0 は追加料金なし。480p、720p、1080p、4k は 100 万トークンあたり、その他の解像度は秒あたりで入力します。"
   }
 }

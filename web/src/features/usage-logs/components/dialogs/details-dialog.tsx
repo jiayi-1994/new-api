@@ -60,10 +60,20 @@ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-p
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
+import {
+  videoInputTokenPrice,
+  videoInputTokensPerSecond,
+} from '@/features/pricing/lib/price'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTokens,
+  formatUseTime,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
@@ -167,7 +177,8 @@ function BillingBreakdown(props: {
   other: LogOtherData
   isAdmin: boolean
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const { log, other, isAdmin } = props
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
@@ -202,6 +213,39 @@ function BillingBreakdown(props: {
         label: t('Matched Tier'),
         value: other.matched_tier || t('No matching results'),
       })
+    }
+    // Unified video bills reference video per second; show the official
+    // token equivalent (before the group ratio).
+    const inputVideoSeconds = Number(other.usage_facts?.input_video_seconds)
+    const resolution = other.usage_facts?.resolution
+    const tokensPerSecond =
+      typeof resolution === 'string'
+        ? videoInputTokensPerSecond(resolution)
+        : null
+    if (inputVideoSeconds > 0 && tokensPerSecond !== null) {
+      rows.push({
+        label: t('Reference video tokens'),
+        value: formatNumber(inputVideoSeconds * tokensPerSecond, locale),
+      })
+      // ponytail: relies on the host-generated expression format
+      // (relay/relay_task.go); log input_video_usd_per_second to drop the regex.
+      const secondPrice = Number(
+        decodeBillingExprB64(other.expr_b64).match(
+          /u\("input_video_seconds"\) \* (\d+(?:\.\d+)?)/
+        )?.[1]
+      )
+      if (secondPrice > 0) {
+        rows.push({
+          label: t('Reference video price'),
+          value: t('{{price}} / 1M tokens', {
+            price: fmtPrice(videoInputTokenPrice(secondPrice, tokensPerSecond)),
+          }),
+        })
+        rows.push({
+          label: t('Reference video cost'),
+          value: fmtPrice(inputVideoSeconds * secondPrice),
+        })
+      }
     }
   } else if (isPerCall) {
     rows.push({ label: t('Billing Mode'), value: t('Per-call') })

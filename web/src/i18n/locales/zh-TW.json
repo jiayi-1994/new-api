@@ -3145,9 +3145,7 @@
     "Input tokens": "輸入 token",
     "Input Tokens": "輸入 Token",
     "Input video price must be 0 or more; 0 means no extra charge": "輸入影片附加費須為 0 或正數；0 表示不額外收費",
-    "Input video price per second": "輸入影片每秒附加費",
     "Input video price per second (USD)": "輸入影片每秒附加費（美元）",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "輸入影片附加費：填 0 表示不額外收費；多段輸入影片按總時長計費。",
     "Input video: no extra charge": "輸入影片：不額外收費",
     "Inset": "內嵌",
     "Inspect requests, errors, and billing details": "查看請求、錯誤和收費詳情",
@@ -7211,6 +7209,20 @@
     "Zhipu": "智譜",
     "Zhipu GLM": "智譜GLM",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Reference video price": "參考影片價格",
+    "Reference video price (USD)": "參考影片價格（美元）",
+    "Reference video price per 1M tokens (USD)": "參考影片每百萬 Token 價格（美元）",
+    "Reference video tokens": "參考影片折算 Token",
+    "Reference video cost": "參考影片費用",
+    "{{price}} / second": "{{price}} / 秒",
+    "{{price}} / 1M tokens": "{{price}} / 百萬 Token",
+    "{{tokens}} tokens per second": "每秒 {{tokens}} Token",
+    "({{tokens}} tokens per second)": "（每秒 {{tokens}} Token）",
+    "per second": "每秒",
+    "per 1M tokens": "每百萬 Token",
+    "Plus reference video: {{price}} / 1M tokens": "另加參考影片：{{price}} / 百萬 Token",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "參考影片 Token = 秒數 × 寬 × 高 × 24 / 1024（按輸出解析度）",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "參考影片價格依官方 Token 口徑：Token = 秒數 × 寬 × 高 × 24 / 1024（按輸出解析度）。填 0 表示不額外收費；480p、720p、1080p、4k 以每百萬 Token 輸入，其他解析度以每秒輸入。"
   }
 }

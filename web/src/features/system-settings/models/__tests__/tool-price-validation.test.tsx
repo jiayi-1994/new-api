@@ -710,7 +710,7 @@ describe('unified video sales validation and persistence', () => {
     ).toHaveValue('0.06')
   })
 
-  test('loads a legacy tier as a free input price, blocks a cleared input price and saves a positive one', async () => {
+  test('loads a legacy tier as a free token price, blocks a cleared token price and saves its per-second equivalent', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
       data: { success: true, data: { items: [], total: 0 } },
     })
@@ -727,31 +727,108 @@ describe('unified video sales validation and persistence', () => {
       />
     )
     const user = userEvent.setup()
-    const inputPrice = screen.getByRole('textbox', {
-      name: 'Input video price per second (USD)',
+    const tokenPrice = screen.getByRole('textbox', {
+      name: 'Reference video price per 1M tokens (USD)',
     })
-    expect(inputPrice).toHaveValue('0')
+    expect(tokenPrice).toHaveValue('0')
     expect(screen.getByText('Input video: no extra charge')).toBeVisible()
 
-    fireEvent.change(inputPrice, { target: { value: '' } })
+    fireEvent.change(tokenPrice, { target: { value: '' } })
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     expect(
       await screen.findByText(
         'Input video price must be 0 or more; 0 means no extra charge'
       )
     ).toBeVisible()
-    expect(inputPrice).toHaveAttribute('aria-invalid', 'true')
+    expect(tokenPrice).toHaveAttribute('aria-invalid', 'true')
     expect(put).not.toHaveBeenCalled()
 
-    fireEvent.change(inputPrice, { target: { value: '0.2' } })
+    fireEvent.change(tokenPrice, { target: { value: '4' } })
     expect(screen.getByText('720p × 10 seconds = $5.6')).toBeVisible()
-    expect(screen.getByText('Plus input video: $0.2 per second')).toBeVisible()
+    expect(
+      screen.getByText('Plus reference video: $4 / 1M tokens')
+    ).toBeVisible()
+    expect(screen.getByText('(21,600 tokens per second)')).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
     expect(JSON.parse(request.value)['video-main'].resolutions['720p']).toEqual(
-      { usd_per_second: 0.56, input_video_usd_per_second: 0.2, seconds: [10] }
+      {
+        usd_per_second: 0.56,
+        input_video_usd_per_second: 0.0864,
+        seconds: [10],
+      }
     )
+  })
+
+  test('keeps the token price across token tiers and the per-second price across other tiers', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { items: [], total: 0 } },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    render(
+      <VideoSalesFixture
+        value={JSON.stringify({
+          'video-main': {
+            resolutions: {
+              '720p': {
+                usd_per_second: 0.56,
+                input_video_usd_per_second: 0.0864,
+                seconds: [10],
+              },
+              '540p': {
+                usd_per_second: 0.3,
+                input_video_usd_per_second: 0.1,
+                seconds: [5],
+              },
+            },
+          },
+        })}
+      />
+    )
+    const user = userEvent.setup()
+    const resolutions = screen.getAllByRole('textbox', { name: 'Resolution' })
+    expect(
+      screen.getByRole('textbox', {
+        name: 'Reference video price per 1M tokens (USD)',
+      })
+    ).toHaveValue('4')
+    expect(
+      screen.getByRole('textbox', {
+        name: 'Input video price per second (USD)',
+      })
+    ).toHaveValue('0.1')
+
+    // Typing passes through "1080", which has no token rate.
+    fireEvent.change(resolutions[0], { target: { value: '1080' } })
+    fireEvent.change(resolutions[0], { target: { value: '1080p' } })
+    // 540p → 720p converts the per-second price instead of dropping it.
+    fireEvent.change(resolutions[1], { target: { value: '720p' } })
+    const tokenPrices = screen.getAllByRole('textbox', {
+      name: 'Reference video price per 1M tokens (USD)',
+    })
+    expect(tokenPrices[0]).toHaveValue('4')
+    expect(tokenPrices[1]).toHaveValue('4.62962962963')
+
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const request = put.mock.calls[0][1] as { value: string }
+    const saved = JSON.parse(request.value)['video-main'].resolutions
+    expect(saved['1080p'].input_video_usd_per_second).toBe(0.1944)
+    expect(saved['720p'].input_video_usd_per_second).toBe(0.1)
+    expect(saved['720p']).not.toHaveProperty('inputTokenPrice')
+
+    fireEvent.change(
+      screen.getAllByRole('textbox', { name: 'Resolution' })[0],
+      { target: { value: '540p' } }
+    )
+    expect(
+      screen.getByRole('textbox', {
+        name: 'Input video price per second (USD)',
+      })
+    ).toHaveValue('0.1944')
   })
 
   test('rejects case-folded names, duplicate 4k aliases, unsupported tiers, and duration bounds', () => {
@@ -761,12 +838,30 @@ describe('unified video sales validation and persistence', () => {
     expect(schema.safeParse(values).success).toBe(false)
     values.models[1].name = 'video-other'
     values.models[0].tiers = [
-      { resolution: '2160p', price: '0.1', inputPrice: '0', seconds: '5' },
-      { resolution: '4k', price: '0.2', inputPrice: '0', seconds: '5' },
+      {
+        resolution: '2160p',
+        price: '0.1',
+        inputPrice: '0',
+        inputTokenPrice: '0',
+        seconds: '5',
+      },
+      {
+        resolution: '4k',
+        price: '0.2',
+        inputPrice: '0',
+        inputTokenPrice: '0',
+        seconds: '5',
+      },
     ]
     expect(schema.safeParse(values).success).toBe(false)
     values.models[0].tiers = [
-      { resolution: '720p', price: '0.1', inputPrice: '0', seconds: '5' },
+      {
+        resolution: '720p',
+        price: '0.1',
+        inputPrice: '0',
+        inputTokenPrice: '0',
+        seconds: '5',
+      },
     ]
     for (const duration of ['', '0', '-1', '1.5', '3601', '5, nope']) {
       values.models[0].tiers[0].seconds = duration

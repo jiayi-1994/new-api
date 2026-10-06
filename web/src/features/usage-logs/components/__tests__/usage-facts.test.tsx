@@ -205,6 +205,69 @@ describe('usage facts billing details', () => {
     ).toBeTruthy()
   })
 
+  test('shows reference video tokens, token price and cost for a unified video log', () => {
+    queryClients.push(
+      renderDetails({
+        group_ratio: 2,
+        billing_mode: 'tiered_expr',
+        expr_b64: btoa(
+          'tier("720p", u("seconds") * 0.56 + u("input_video_seconds") * 0.0864)'
+        ),
+        matched_tier: '720p',
+        usage_facts: {
+          seconds: 10,
+          resolution: '720p',
+          input_video_seconds: 8.25,
+        },
+      })
+    )
+
+    expect(rowValue('Reference video tokens')).toBe('178,200')
+    expect(rowValue('Reference video price')).toBe('$4 / 1M tokens')
+    expect(rowValue('Reference video cost')).toBe('$0.7128')
+  })
+
+  test('shows only the reference video tokens when the expression has no input price', () => {
+    queryClients.push(
+      renderDetails({
+        billing_mode: 'tiered_expr',
+        expr_b64: btoa('tier("720p", u("seconds") * 0.56)'),
+        matched_tier: '720p',
+        usage_facts: {
+          seconds: 10,
+          resolution: '720p',
+          input_video_seconds: 8.25,
+        },
+      })
+    )
+
+    expect(rowValue('Reference video tokens')).toBe('178,200')
+    expect(screen.queryByText('Reference video price')).toBeNull()
+    expect(screen.queryByText('Reference video cost')).toBeNull()
+  })
+
+  test.each([
+    [
+      'a tier without a token rate',
+      { resolution: '540p', input_video_seconds: 8 },
+    ],
+    ['no reference video', { resolution: '720p' }],
+  ])('hides reference video rows for %s', (_, facts) => {
+    queryClients.push(
+      renderDetails({
+        billing_mode: 'tiered_expr',
+        expr_b64: btoa(
+          'tier("720p", u("seconds") * 0.56 + u("input_video_seconds") * 0.0864)'
+        ),
+        matched_tier: facts.resolution,
+        usage_facts: { seconds: 10, ...facts },
+      })
+    )
+
+    expect(screen.queryByText('Reference video tokens')).toBeNull()
+    expect(screen.queryByText('Reference video price')).toBeNull()
+  })
+
   test('does not render usage parameter rows when usage_facts is absent', () => {
     queryClients.push(
       renderDetails({

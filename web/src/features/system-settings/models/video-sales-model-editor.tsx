@@ -32,6 +32,11 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { PricingAmountInput } from '@/features/model-pricing/pricing-amount-input'
+import {
+  VIDEO_INPUT_TOKENS_PER_SECOND,
+  videoInputSecondPrice,
+  videoInputTokenPrice,
+} from '@/features/pricing/lib/price'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
@@ -40,8 +45,10 @@ import { useSystemConfigStore } from '@/stores/system-config-store'
 import { SettingsSwitchField } from '../components/settings-form-layout'
 import {
   createVideoSalesFormSchema,
+  isInputVideoPrice,
   parseVideoSalesSeconds,
   videoSalesFromForm,
+  videoSalesInputTokensPerSecond,
   type VideoSalesFormValues,
 } from './video-sales-form'
 import { VideoSalesRoutingPanel } from './video-sales-routing-panel'
@@ -145,6 +152,64 @@ export function VideoSalesModelEditor(props: {
                           {...field}
                           disabled={props.pending}
                           placeholder='720p'
+                          onChange={(event) => {
+                            const tierPath =
+                              `${path}.tiers.${row.index}` as const
+                            const tier = props.form.getValues(tierPath)
+                            const before = videoSalesInputTokensPerSecond(
+                              tier.resolution
+                            )
+                            const after = videoSalesInputTokensPerSecond(
+                              event.target.value
+                            )
+                            field.onChange(event)
+                            // Token-priced tiers keep the token price, so the
+                            // stored per-second price follows the new tier.
+                            if (before !== null && after === null) {
+                              props.form.setValue(
+                                `${tierPath}.inputPrice`,
+                                isInputVideoPrice(tier.inputTokenPrice)
+                                  ? String(
+                                      videoInputSecondPrice(
+                                        Number(tier.inputTokenPrice),
+                                        before
+                                      )
+                                    )
+                                  : tier.inputTokenPrice
+                              )
+                            }
+                            // Typing passes through untiered values such as
+                            // "720"; keep the token price unless the
+                            // per-second price was edited meanwhile.
+                            if (before === null && after !== null) {
+                              const mirrored =
+                                isInputVideoPrice(tier.inputTokenPrice) &&
+                                [
+                                  ...VIDEO_INPUT_TOKENS_PER_SECOND.values(),
+                                ].some(
+                                  (rate) =>
+                                    String(
+                                      videoInputSecondPrice(
+                                        Number(tier.inputTokenPrice),
+                                        rate
+                                      )
+                                    ) === tier.inputPrice
+                                )
+                              if (!mirrored) {
+                                props.form.setValue(
+                                  `${tierPath}.inputTokenPrice`,
+                                  isInputVideoPrice(tier.inputPrice)
+                                    ? String(
+                                        videoInputTokenPrice(
+                                          Number(tier.inputPrice),
+                                          after
+                                        )
+                                      )
+                                    : tier.inputPrice
+                                )
+                              }
+                            }
+                          }}
                         />
                       </FormControl>
                       <FormMessage />
@@ -181,29 +246,41 @@ export function VideoSalesModelEditor(props: {
             },
             {
               id: 'input-price',
-              header: t('Input video price per second (USD)'),
-              className: 'min-w-40',
-              cell: (row) => (
-                <FormField
-                  control={props.form.control}
-                  name={`${path}.tiers.${row.index}.inputPrice`}
-                  render={({ field, fieldState }) => (
-                    <FormItem>
-                      <FormLabel className='sr-only'>
-                        {t('Input video price per second (USD)')}
-                      </FormLabel>
-                      <FormControl>
-                        <PricingAmountInput
-                          {...field}
-                          disabled={props.pending}
-                          aria-invalid={fieldState.invalid}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              ),
+              header: t('Reference video price (USD)'),
+              className: 'min-w-44',
+              cell: (row) => {
+                const tokenPriced =
+                  videoSalesInputTokensPerSecond(
+                    model.tiers[row.index].resolution
+                  ) !== null
+                const label = tokenPriced
+                  ? t('Reference video price per 1M tokens (USD)')
+                  : t('Input video price per second (USD)')
+                return (
+                  <FormField
+                    // Remount so the input binds to the field this tier prices by.
+                    key={tokenPriced ? 'tokens' : 'seconds'}
+                    control={props.form.control}
+                    name={`${path}.tiers.${row.index}.${tokenPriced ? 'inputTokenPrice' : 'inputPrice'}`}
+                    render={({ field, fieldState }) => (
+                      <FormItem>
+                        <FormLabel className='sr-only'>{label}</FormLabel>
+                        <FormControl>
+                          <PricingAmountInput
+                            {...field}
+                            disabled={props.pending}
+                            aria-invalid={fieldState.invalid}
+                          />
+                        </FormControl>
+                        <p className='text-muted-foreground text-xs'>
+                          {tokenPriced ? t('per 1M tokens') : t('per second')}
+                        </p>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )
+              },
             },
             {
               id: 'seconds',
@@ -239,17 +316,22 @@ export function VideoSalesModelEditor(props: {
                 const tier = model.tiers[row.index]
                 const seconds = parseVideoSalesSeconds(tier.seconds)
                 const price = Number(tier.price)
-                const inputPrice = Number(tier.inputPrice)
+                const tokensPerSecond = videoSalesInputTokensPerSecond(
+                  tier.resolution
+                )
+                const inputValue =
+                  tokensPerSecond === null
+                    ? tier.inputPrice
+                    : tier.inputTokenPrice
                 if (
                   !seconds ||
                   !Number.isFinite(price) ||
                   price <= 0 ||
-                  tier.inputPrice.trim() === '' ||
-                  !Number.isFinite(inputPrice) ||
-                  inputPrice < 0
+                  !isInputVideoPrice(inputValue)
                 ) {
                   return '—'
                 }
+                const inputPrice = Number(inputValue)
                 const currency = {
                   locale,
                   digitsLarge: 4,
@@ -272,14 +354,30 @@ export function VideoSalesModelEditor(props: {
                       </div>
                     ))}
                     <div className='text-muted-foreground font-sans'>
-                      {inputPrice > 0
-                        ? t('Plus input video: {{price}} per second', {
+                      {inputPrice === 0 && t('Input video: no extra charge')}
+                      {inputPrice > 0 &&
+                        tokensPerSecond === null &&
+                        t('Plus input video: {{price}} per second', {
+                          price: formatBillingCurrencyFromUSD(
+                            inputPrice,
+                            currency
+                          ),
+                        })}
+                      {inputPrice > 0 && tokensPerSecond !== null && (
+                        <>
+                          {t('Plus reference video: {{price}} / 1M tokens', {
                             price: formatBillingCurrencyFromUSD(
                               inputPrice,
                               currency
                             ),
-                          })
-                        : t('Input video: no extra charge')}
+                          })}{' '}
+                          <span>
+                            {t('({{tokens}} tokens per second)', {
+                              tokens: formatNumber(tokensPerSecond, locale),
+                            })}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
@@ -309,7 +407,7 @@ export function VideoSalesModelEditor(props: {
         />
         <p className='text-muted-foreground text-sm'>
           {t(
-            'Input video price: 0 means no extra charge; input videos are charged by their total duration.'
+            'Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
           )}
         </p>
         {(tierError?.root?.message || tierError?.message) && (
@@ -328,6 +426,7 @@ export function VideoSalesModelEditor(props: {
               resolution: '',
               price: '',
               inputPrice: '0',
+              inputTokenPrice: '0',
               seconds: '',
             })
           }

@@ -3145,9 +3145,7 @@
     "Input tokens": "输入 token",
     "Input Tokens": "输入 Token",
     "Input video price must be 0 or more; 0 means no extra charge": "输入视频附加费须为 0 或正数；0 表示不额外收费",
-    "Input video price per second": "输入视频每秒附加费",
     "Input video price per second (USD)": "输入视频每秒附加费（美元）",
-    "Input video price: 0 means no extra charge; input videos are charged by their total duration.": "输入视频附加费：填 0 表示不额外收费；多段输入视频按总时长计费。",
     "Input video: no extra charge": "输入视频：不额外收费",
     "Inset": "内嵌",
     "Inspect requests, errors, and billing details": "查看请求、错误和计费详情",
@@ -7211,6 +7209,20 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Reference video price": "参考视频价格",
+    "Reference video price (USD)": "参考视频价格（美元）",
+    "Reference video price per 1M tokens (USD)": "参考视频每百万 Token 价格（美元）",
+    "Reference video tokens": "参考视频折算 Token",
+    "Reference video cost": "参考视频费用",
+    "{{price}} / second": "{{price}} / 秒",
+    "{{price}} / 1M tokens": "{{price}} / 百万 Token",
+    "{{tokens}} tokens per second": "每秒 {{tokens}} Token",
+    "({{tokens}} tokens per second)": "（每秒 {{tokens}} Token）",
+    "per second": "每秒",
+    "per 1M tokens": "每百万 Token",
+    "Plus reference video: {{price}} / 1M tokens": "另加参考视频：{{price}} / 百万 Token",
+    "Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)": "参考视频 Token = 秒数 × 宽 × 高 × 24 / 1024（按输出分辨率）",
+    "Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "参考视频价格按官方 Token 口径：Token = 秒数 × 宽 × 高 × 24 / 1024（按输出分辨率）。填 0 表示不额外收费；480p、720p、1080p、4k 按每百万 Token 录入，其他分辨率按每秒录入。"
   }
 }

@@ -18,6 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import {
+  videoInputSecondPrice,
+  videoInputTokenPrice,
+  videoInputTokensPerSecond,
+} from '@/features/pricing/lib/price'
 import type { VideoSalesModel } from '@/features/pricing/types'
 
 import {
@@ -40,6 +45,20 @@ export function parseVideoSalesSeconds(value: string): number[] | null {
   )
     ? [...new Set(seconds)].sort((a, b) => a - b)
     : null
+}
+
+/** Tiers with an official token rate take the reference video price per 1M tokens. */
+export function videoSalesInputTokensPerSecond(
+  resolution: string
+): number | null {
+  const tier = canonicalVideoSalesTier(resolution)
+  return tier ? videoInputTokensPerSecond(tier) : null
+}
+
+export function isInputVideoPrice(value: string): boolean {
+  return (
+    value.trim() !== '' && Number.isFinite(Number(value)) && Number(value) >= 0
+  )
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
@@ -75,18 +94,9 @@ export function createVideoSalesFormSchema(t: Translate) {
                       Number(value) > 0,
                     t('Price per second must be a positive number')
                   ),
-                // A cleared field is an error, never a silent free price.
-                inputPrice: z
-                  .string()
-                  .refine(
-                    (value) =>
-                      value.trim() !== '' &&
-                      Number.isFinite(Number(value)) &&
-                      Number(value) >= 0,
-                    t(
-                      'Input video price must be 0 or more; 0 means no extra charge'
-                    )
-                  ),
+                // Validated in superRefine against the field the tier shows.
+                inputPrice: z.string(),
+                inputTokenPrice: z.string(),
                 seconds: z
                   .string()
                   .refine(
@@ -116,6 +126,19 @@ export function createVideoSalesFormSchema(t: Translate) {
         models.add(folded)
         const tiers = new Set<string>()
         model.tiers.forEach((tier, tierIndex) => {
+          // A cleared field is an error, never a silent free price.
+          const tokenPriced =
+            videoSalesInputTokensPerSecond(tier.resolution) !== null
+          const priceField = tokenPriced ? 'inputTokenPrice' : 'inputPrice'
+          if (!isInputVideoPrice(tier[priceField])) {
+            context.addIssue({
+              code: 'custom',
+              path: ['models', index, 'tiers', tierIndex, priceField],
+              message: t(
+                'Input video price must be 0 or more; 0 means no extra charge'
+              ),
+            })
+          }
           const canonical = canonicalVideoSalesTier(tier.resolution)
           if (!canonical) return
           if (tiers.has(canonical)) {
@@ -144,12 +167,20 @@ export function videoSalesFormValues(
     models: Object.entries(sales).map(([name, model]) => ({
       name,
       disabled: model.disabled ?? false,
-      tiers: Object.entries(model.resolutions).map(([resolution, tier]) => ({
-        resolution,
-        price: String(tier.usd_per_second),
-        inputPrice: String(tier.input_video_usd_per_second ?? 0),
-        seconds: tier.seconds.join(', '),
-      })),
+      tiers: Object.entries(model.resolutions).map(([resolution, tier]) => {
+        const inputPrice = tier.input_video_usd_per_second ?? 0
+        const tokensPerSecond = videoSalesInputTokensPerSecond(resolution)
+        return {
+          resolution,
+          price: String(tier.usd_per_second),
+          inputPrice: String(inputPrice),
+          inputTokenPrice:
+            tokensPerSecond === null
+              ? ''
+              : String(videoInputTokenPrice(inputPrice, tokensPerSecond)),
+          seconds: tier.seconds.join(', '),
+        }
+      }),
     })),
   }
 }
@@ -164,14 +195,25 @@ export function videoSalesFromForm(
       {
         disabled: model.disabled,
         resolutions: Object.fromEntries(
-          model.tiers.map((tier) => [
-            canonicalVideoSalesTier(tier.resolution) ?? tier.resolution,
-            {
-              usd_per_second: Number(tier.price),
-              input_video_usd_per_second: Number(tier.inputPrice),
-              seconds: parseVideoSalesSeconds(tier.seconds) ?? [],
-            },
-          ])
+          model.tiers.map((tier) => {
+            const tokensPerSecond = videoSalesInputTokensPerSecond(
+              tier.resolution
+            )
+            return [
+              canonicalVideoSalesTier(tier.resolution) ?? tier.resolution,
+              {
+                usd_per_second: Number(tier.price),
+                input_video_usd_per_second:
+                  tokensPerSecond === null
+                    ? Number(tier.inputPrice)
+                    : videoInputSecondPrice(
+                        Number(tier.inputTokenPrice),
+                        tokensPerSecond
+                      ),
+                seconds: parseVideoSalesSeconds(tier.seconds) ?? [],
+              },
+            ]
+          })
         ),
       },
     ])
