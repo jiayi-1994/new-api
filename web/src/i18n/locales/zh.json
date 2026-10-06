@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "输出 {{output}} 秒 + 参考计费 {{billed}} 秒（实测 {{measured}} 秒）= {{total}} Token × {{price}} / 百万 Token",
     "Reference video minimum": "参考视频最低计费",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "参考视频不足输出时长 2/3，按 {{billed}} 秒计",
-    "whole order repriced with reference video": "有参考视频时整单另计价"
+    "whole order repriced with reference video": "有参考视频时整单另计价",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "含参考视频整单单价按官方 Token 规则换算：Token = 秒数 × 宽 × 高 × 24 / 1024（按输出分辨率）。必须大于 0；480p、720p、1080p 和 4k 按每百万 Token 计价，其他分辨率按秒计价。"
   }
 }

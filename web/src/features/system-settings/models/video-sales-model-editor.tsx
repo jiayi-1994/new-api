@@ -361,6 +361,32 @@ export function VideoSalesModelEditor(props: {
                   digitsSmall: 6,
                   abbreviate: false,
                 }
+                const inputPriceText = formatBillingCurrencyFromUSD(
+                  inputPrice,
+                  currency
+                )
+                let inputNote = t('Input video: no extra charge')
+                if (inputPrice > 0 && model.officialReferenceBilling) {
+                  inputNote =
+                    tokensPerSecond === null
+                      ? t(
+                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second',
+                          { price: inputPriceText }
+                        )
+                      : t(
+                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens',
+                          { price: inputPriceText }
+                        )
+                } else if (inputPrice > 0) {
+                  inputNote =
+                    tokensPerSecond === null
+                      ? t('Plus input video: {{price}} per second', {
+                          price: inputPriceText,
+                        })
+                      : t('Plus reference video: {{price}} / 1M tokens', {
+                          price: inputPriceText,
+                        })
+                }
                 // Input duration is unknown here, so no total is shown.
                 return (
                   <div className='space-y-1 font-mono text-xs tabular-nums'>
@@ -377,49 +403,7 @@ export function VideoSalesModelEditor(props: {
                       </div>
                     ))}
                     <div className='text-muted-foreground font-sans'>
-                      {inputPrice === 0 && t('Input video: no extra charge')}
-                      {inputPrice > 0 &&
-                        model.officialReferenceBilling &&
-                        tokensPerSecond === null &&
-                        t(
-                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second',
-                          {
-                            price: formatBillingCurrencyFromUSD(
-                              inputPrice,
-                              currency
-                            ),
-                          }
-                        )}
-                      {inputPrice > 0 &&
-                        model.officialReferenceBilling &&
-                        tokensPerSecond !== null &&
-                        t(
-                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens',
-                          {
-                            price: formatBillingCurrencyFromUSD(
-                              inputPrice,
-                              currency
-                            ),
-                          }
-                        )}
-                      {inputPrice > 0 &&
-                        !model.officialReferenceBilling &&
-                        tokensPerSecond === null &&
-                        t('Plus input video: {{price}} per second', {
-                          price: formatBillingCurrencyFromUSD(
-                            inputPrice,
-                            currency
-                          ),
-                        })}
-                      {inputPrice > 0 &&
-                        !model.officialReferenceBilling &&
-                        tokensPerSecond !== null &&
-                        t('Plus reference video: {{price}} / 1M tokens', {
-                          price: formatBillingCurrencyFromUSD(
-                            inputPrice,
-                            currency
-                          ),
-                        })}
+                      {inputNote}
                       {inputPrice > 0 && tokensPerSecond !== null && (
                         <>
                           {' '}
@@ -458,9 +442,13 @@ export function VideoSalesModelEditor(props: {
           ]}
         />
         <p className='text-muted-foreground text-sm'>
-          {t(
-            'Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
-          )}
+          {model.officialReferenceBilling
+            ? t(
+                'With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
+              )
+            : t(
+                'Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
+              )}
         </p>
         {(tierError?.root?.message || tierError?.message) && (
           <p role='alert' className='text-destructive text-sm'>

@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Sortie {{output}} s + référence facturée {{billed}} s (mesurée {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens",
     "Reference video minimum": "Minimum de vidéo de référence",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "La vidéo de référence est plus courte que 2/3 de la sortie ; facturée {{billed}} secondes",
-    "whole order repriced with reference video": "commande entière refacturée avec vidéo de référence"
+    "whole order repriced with reference video": "commande entière refacturée avec vidéo de référence",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Le prix de la commande avec référence suit la règle officielle des tokens : tokens = secondes × largeur × hauteur × 24 / 1024 à la résolution de sortie. Il doit être supérieur à 0 ; 480p, 720p, 1080p et 4k sont facturés par million de tokens, les autres résolutions à la seconde."
   }
 }

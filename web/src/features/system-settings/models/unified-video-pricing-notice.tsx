@@ -32,15 +32,23 @@ export function UnifiedVideoPricingNotice(props: { modelName: string }) {
         {t(
           'Unified video sales controls this model. Prices edited here are stored but do not affect video charges.'
         )}
-        <p>
-          {sales.official_reference_billing
-            ? t(
-                'Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.'
-              )
-            : t(
+        {sales.official_reference_billing && (
+          <p>
+            {t(
+              'Without reference video: output seconds × output price. With reference video: (output + max(reference, ⌈output × 2/3⌉)) seconds × with-reference price.'
+            )}
+          </p>
+        )}
+        {!sales.official_reference_billing &&
+          Object.values(sales.resolutions).some(
+            (tier) => (tier.input_video_usd_per_second ?? 0) > 0
+          ) && (
+            <p>
+              {t(
                 'Output seconds × output price, plus reference video seconds × reference video price.'
               )}
-        </p>
+            </p>
+          )}
         {sales.disabled && <span>{t('Video sales paused')}</span>}
       </AlertDescription>
     </Alert>

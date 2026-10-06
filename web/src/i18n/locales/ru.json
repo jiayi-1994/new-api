@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Вывод {{output}} с + референс к оплате {{billed}} с (измерено {{measured}} с) = {{total}} токенов × {{price}} / 1 млн токенов",
     "Reference video minimum": "Минимум референсного видео",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Референсное видео короче 2/3 вывода; тарифицируется как {{billed}} с",
-    "whole order repriced with reference video": "с референсным видео весь заказ по другой цене"
+    "whole order repriced with reference video": "с референсным видео весь заказ по другой цене",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Цена заказа с референсом следует официальному правилу токенов: токены = секунды × ширина × высота × 24 / 1024 при выходном разрешении. Она должна быть больше 0; 480p, 720p, 1080p и 4k тарифицируются за 1 млн токенов, остальные разрешения — посекундно."
   }
 }

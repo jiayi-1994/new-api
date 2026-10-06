@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "出力 {{output}} 秒 + 参照課金 {{billed}} 秒（実測 {{measured}} 秒）= {{total}} トークン × {{price}} / 100 万トークン",
     "Reference video minimum": "参照動画の最低課金",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "参照動画が出力の 2/3 未満のため、{{billed}} 秒として課金",
-    "whole order repriced with reference video": "参照動画ありは注文全体を別単価"
+    "whole order repriced with reference video": "参照動画ありは注文全体を別単価",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "参照付き注文単価は公式トークン規則に従います：トークン = 秒数 × 幅 × 高さ × 24 / 1024（出力解像度）。0 より大きくする必要があります。480p、720p、1080p、4k は 100 万トークンあたり、その他の解像度は 1 秒あたりで課金します。"
   }
 }

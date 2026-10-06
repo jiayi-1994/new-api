@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Đầu ra {{output}} giây + tham chiếu tính phí {{billed}} giây (đo được {{measured}} giây) = {{total}} token × {{price}} / 1 triệu token",
     "Reference video minimum": "Mức tối thiểu video tham chiếu",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Video tham chiếu ngắn hơn 2/3 đầu ra; tính phí {{billed}} giây",
-    "whole order repriced with reference video": "có video tham chiếu thì cả đơn tính giá khác"
+    "whole order repriced with reference video": "có video tham chiếu thì cả đơn tính giá khác",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "Giá đơn có tham chiếu theo quy tắc token chính thức: token = số giây × rộng × cao × 24 / 1024 ở độ phân giải đầu ra. Giá phải lớn hơn 0; 480p, 720p, 1080p và 4k tính theo mỗi 1 triệu token, các độ phân giải khác tính theo giây."
   }
 }

@@ -250,6 +250,9 @@ describe('unified video sales validation and persistence', () => {
             'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × $28 / 1M tokens (21,600 tokens per second)'
       )
     ).toBeVisible()
+    // Official mode never offers a free with-reference price.
+    expect(screen.queryByText(/0 means no extra charge/)).toBeNull()
+    expect(screen.getByText(/It must be above 0/)).toBeVisible()
     fireEvent.change(
       screen.getByRole('textbox', { name: 'Price per second (USD)' }),
       { target: { value: '0.9' } }

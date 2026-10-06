@@ -449,21 +449,35 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		outputPrice   float64
 		official      bool
 		usingGroup    string
-		wantBillable  float64 // charged input seconds; 0 = no input term
+		wantExpr      string  // empty = output seconds only
+		wantBillable  float64 // charged input seconds; 0 = no billable fact
 		wantUSD       float64 // before the group ratio
 	}{
 		{name: "frozen sale", tokenGroup: "default", frozen: true, wantUSD: 0.3},
 		// 15 × 0.02 + 8.25 × 0.2: the input fee is added, not a ratio.
-		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(8.25), wantBillable: 8.25, wantUSD: 1.95},
-		{name: "short input without official billing bills measured seconds", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(2), wantBillable: 2, wantUSD: 0.7},
-		// Official billing at $1/s output and $0.6048/s with video (28 per 1M tokens at 720p):
-		// the whole order is (O + max(R, ceil(O×2/3))) × 0.6048.
-		{name: "official: input equal to output", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(5), outputSeconds: 5, official: true, wantBillable: 5, wantUSD: 6.048},
-		{name: "official: 2s of 10s bills ceil(20/3) = 7", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(2), outputSeconds: 10, official: true, wantBillable: 7, wantUSD: 10.2816},
-		{name: "official: fractional input above the minimum is kept", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(8.25), outputSeconds: 10, official: true, wantBillable: 8.25, wantUSD: 11.0376},
-		{name: "official: 2s of 15s bills 10", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(2), official: true, wantBillable: 10, wantUSD: 15.12},
-		{name: "official: zero input keeps the output price", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(0), outputSeconds: 10, official: true, wantUSD: 10},
-		{name: "official: one group ratio discounts the whole order", tokenGroup: "default", frozen: true, outputPrice: 1, inputPrice: 0.6048, inputSeconds: seconds(15), official: true, usingGroup: "discount", wantBillable: 15, wantUSD: 18.144},
+		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(8.25),
+			wantExpr: `tier("720p", u("seconds") * 0.02 + u("input_video_billable_seconds") * 0.2)`, wantBillable: 8.25, wantUSD: 1.95},
+		{name: "short input without official billing bills measured seconds", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(2),
+			wantExpr: `tier("720p", u("seconds") * 0.02 + u("input_video_billable_seconds") * 0.2)`, wantBillable: 2, wantUSD: 0.7},
+		// No reference video: the same 0.3 the earlier input_video_seconds term charged.
+		{name: "zero input without official billing charges output only", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(0), wantUSD: 0.3},
+		// Seedance 2.0 720p list prices: 46 per 1M tokens without video
+		// (0.9936/s) and 28 with video (0.6048/s), 21,600 tokens per second.
+		// With reference the whole order is (O + max(R, ceil(O×2/3))) × 0.6048.
+		{name: "official: input equal to output", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(5), outputSeconds: 5, official: true,
+			wantExpr: `tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)`, wantBillable: 5, wantUSD: 6.048},
+		{name: "official: 2s of 10s bills ceil(20/3) = 7", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(2), outputSeconds: 10, official: true,
+			wantExpr: `tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)`, wantBillable: 7, wantUSD: 10.2816},
+		{name: "official: fractional input above the minimum is kept", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(8.25), outputSeconds: 10, official: true,
+			wantExpr: `tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)`, wantBillable: 8.25, wantUSD: 11.0376},
+		// 540,000 tokens × 28 / 1M, the official minimum usage of a 15-second 720p video.
+		{name: "official: 2s of 15s bills 10", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(2), official: true,
+			wantExpr: `tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)`, wantBillable: 10, wantUSD: 15.12},
+		// 216,000 tokens × 46 / 1M: without reference the output price applies.
+		{name: "official: zero input keeps the output price", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(0), outputSeconds: 10, official: true,
+			wantExpr: `tier("720p", u("seconds") * 0.9936)`, wantUSD: 9.936},
+		{name: "official: one group ratio discounts the whole order", tokenGroup: "default", frozen: true, outputPrice: 0.9936, inputPrice: 0.6048, inputSeconds: seconds(15), official: true, usingGroup: "discount",
+			wantExpr: `tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)`, wantBillable: 15, wantUSD: 18.144},
 		{name: "unmeasured input video is refused", tokenGroup: "default", frozen: true, inputPrice: 0.2, wantCode: "video_sales_input_unmeasured", wantStatus: http.StatusServiceUnavailable},
 		{name: "auto group is refused", tokenGroup: "auto", frozen: true, wantCode: "video_sales_auto_group", wantStatus: http.StatusBadRequest},
 		{name: "table appearing after entry never falls back to plugin pricing", tokenGroup: "default", wantCode: "video_sales_unavailable", wantStatus: http.StatusServiceUnavailable},
@@ -523,17 +537,12 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			snap := info.TieredBillingSnapshot
 			require.NotNil(t, snap, "submission error: %+v", taskErr)
 			assert.Equal(t, billingexpr.SalesSourceVideoRequest, snap.SalesSource)
-			outputPrice := cmp.Or(tc.outputPrice, 0.02)
-			wantExpr, wantFacts := fmt.Sprintf(`tier("720p", u("seconds") * %v)`, outputPrice), map[string]any{"seconds": float64(cmp.Or(tc.outputSeconds, 15)), "resolution": "720p"}
+			wantExpr, wantFacts := cmp.Or(tc.wantExpr, `tier("720p", u("seconds") * 0.02)`), map[string]any{"seconds": float64(cmp.Or(tc.outputSeconds, 15)), "resolution": "720p"}
 			if tc.inputSeconds != nil {
 				// The measured seconds are always logged next to the billed ones.
 				wantFacts["input_video_seconds"] = *tc.inputSeconds
 			}
 			if tc.wantBillable > 0 {
-				wantExpr = fmt.Sprintf(`tier("720p", u("seconds") * %v + u("input_video_billable_seconds") * %v)`, outputPrice, tc.inputPrice)
-				if tc.official {
-					wantExpr = fmt.Sprintf(`tier("720p", (u("seconds") + u("input_video_billable_seconds")) * %v)`, tc.inputPrice)
-				}
 				wantFacts["input_video_billable_seconds"] = tc.wantBillable
 			}
 			groupRatio := ratio_setting.GetGroupRatio(usingGroup)

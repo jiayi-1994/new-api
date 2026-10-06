@@ -7241,6 +7241,7 @@
     "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens": "Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens",
     "Reference video minimum": "Reference video minimum",
     "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds": "Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds",
-    "whole order repriced with reference video": "whole order repriced with reference video"
+    "whole order repriced with reference video": "whole order repriced with reference video",
+    "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.": "With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second."
   }
 }
