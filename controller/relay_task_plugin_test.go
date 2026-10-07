@@ -1005,8 +1005,10 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				require.NotNil(t, snapshot)
 				wantFacts := map[string]any{"seconds": float64(15), "resolution": "720p"}
 				if tc.inputVideos != nil {
+					// Measured seconds are logged; the billable ones are charged.
 					wantFacts["input_video_seconds"] = 8.25
-					assert.Equal(t, `tier("720p", u("seconds") * 0.02 + u("input_video_seconds") * 0.2)`, snapshot.ExprString)
+					wantFacts["input_video_billable_seconds"] = 8.25
+					assert.Equal(t, `tier("720p", u("seconds") * 0.02 + u("input_video_billable_seconds") * 0.2)`, snapshot.ExprString)
 				}
 				assert.Equal(t, wantFacts, snapshot.UsageFacts)
 				assert.Equal(t, wantQuota, info.Billing.GetPreConsumedQuota())
