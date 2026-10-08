@@ -34,19 +34,28 @@ type s3ArtifactStore struct {
 }
 
 func newS3ArtifactStore(config system_setting.TaskArtifactStoreConfig) *s3ArtifactStore {
-	client := s3.New(s3.Options{
-		Region:       config.S3Region,
-		BaseEndpoint: aws.String(config.S3Endpoint),
-		UsePathStyle: config.S3PathStyle,
-		Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(config.S3AccessKey, config.S3SecretKey, "")),
-		// Third-party S3 implementations reject the aws-chunked trailer
-		// checksums the SDK adds by default.
-		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
-		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
-	})
+	newClient := func(endpoint string) *s3.Client {
+		return s3.New(s3.Options{
+			Region:       config.S3Region,
+			BaseEndpoint: aws.String(endpoint),
+			UsePathStyle: config.S3PathStyle,
+			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(config.S3AccessKey, config.S3SecretKey, "")),
+			// Third-party S3 implementations reject the aws-chunked trailer
+			// checksums the SDK adds by default.
+			RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+			ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+		})
+	}
+	// Uploads use S3Endpoint (may be a private/internal address). Presigned
+	// customer URLs embed the host they were signed for, so they are signed
+	// against the public endpoint.
+	publicEndpoint := config.S3PublicEndpoint
+	if publicEndpoint == "" {
+		publicEndpoint = config.S3Endpoint
+	}
 	return &s3ArtifactStore{
-		client:     client,
-		presigner:  s3.NewPresignClient(client),
+		client:     newClient(config.S3Endpoint),
+		presigner:  s3.NewPresignClient(newClient(publicEndpoint)),
 		bucket:     config.S3Bucket,
 		prefix:     strings.Trim(config.S3Prefix, "/"),
 		presignTTL: time.Duration(config.S3PresignTTLSeconds) * time.Second,

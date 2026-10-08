@@ -24,17 +24,21 @@ const (
 )
 
 const (
-	TaskArtifactStoreModeEnv         = "TASK_ARTIFACT_STORE_MODE"
-	TaskArtifactStoreS3EndpointEnv   = "TASK_ARTIFACT_STORE_S3_ENDPOINT"
-	TaskArtifactStoreS3BucketEnv     = "TASK_ARTIFACT_STORE_S3_BUCKET"
-	TaskArtifactStoreS3RegionEnv     = "TASK_ARTIFACT_STORE_S3_REGION"
-	TaskArtifactStoreS3AccessKeyEnv  = "TASK_ARTIFACT_STORE_S3_ACCESS_KEY"
-	TaskArtifactStoreS3SecretKeyEnv  = "TASK_ARTIFACT_STORE_S3_SECRET_KEY"
-	TaskArtifactStoreS3PrefixEnv     = "TASK_ARTIFACT_STORE_S3_PREFIX"
-	TaskArtifactStoreS3PresignTTLEnv = "TASK_ARTIFACT_STORE_S3_PRESIGN_TTL"
-	TaskArtifactStoreS3PathStyleEnv  = "TASK_ARTIFACT_STORE_S3_PATH_STYLE"
-	TaskArtifactStoreRetentionEnv    = "TASK_ARTIFACT_STORE_RETENTION_DAYS"
-	TaskArtifactStoreSyncIntervalEnv = "TASK_ARTIFACT_STORE_SYNC_INTERVAL"
+	TaskArtifactStoreModeEnv       = "TASK_ARTIFACT_STORE_MODE"
+	TaskArtifactStoreS3EndpointEnv = "TASK_ARTIFACT_STORE_S3_ENDPOINT"
+	// Optional endpoint used only to presign customer download URLs, so uploads
+	// can go through a private (e.g. OSS -internal) endpoint while customers
+	// still receive publicly reachable links. Defaults to S3Endpoint.
+	TaskArtifactStoreS3PublicEndpointEnv = "TASK_ARTIFACT_STORE_S3_PUBLIC_ENDPOINT"
+	TaskArtifactStoreS3BucketEnv         = "TASK_ARTIFACT_STORE_S3_BUCKET"
+	TaskArtifactStoreS3RegionEnv         = "TASK_ARTIFACT_STORE_S3_REGION"
+	TaskArtifactStoreS3AccessKeyEnv      = "TASK_ARTIFACT_STORE_S3_ACCESS_KEY"
+	TaskArtifactStoreS3SecretKeyEnv      = "TASK_ARTIFACT_STORE_S3_SECRET_KEY"
+	TaskArtifactStoreS3PrefixEnv         = "TASK_ARTIFACT_STORE_S3_PREFIX"
+	TaskArtifactStoreS3PresignTTLEnv     = "TASK_ARTIFACT_STORE_S3_PRESIGN_TTL"
+	TaskArtifactStoreS3PathStyleEnv      = "TASK_ARTIFACT_STORE_S3_PATH_STYLE"
+	TaskArtifactStoreRetentionEnv        = "TASK_ARTIFACT_STORE_RETENTION_DAYS"
+	TaskArtifactStoreSyncIntervalEnv     = "TASK_ARTIFACT_STORE_SYNC_INTERVAL"
 )
 
 var (
@@ -49,6 +53,7 @@ var (
 type TaskArtifactStoreConfig struct {
 	Mode                string
 	S3Endpoint          string
+	S3PublicEndpoint    string
 	S3Bucket            string
 	S3Region            string
 	S3AccessKey         string
@@ -67,6 +72,7 @@ func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 	config := TaskArtifactStoreConfig{
 		Mode:                common.GetEnvOrDefaultString(TaskArtifactStoreModeEnv, TaskArtifactStoreModeUpstream),
 		S3Endpoint:          common.GetEnvOrDefaultString(TaskArtifactStoreS3EndpointEnv, ""),
+		S3PublicEndpoint:    common.GetEnvOrDefaultString(TaskArtifactStoreS3PublicEndpointEnv, ""),
 		S3Bucket:            common.GetEnvOrDefaultString(TaskArtifactStoreS3BucketEnv, ""),
 		S3Region:            common.GetEnvOrDefaultString(TaskArtifactStoreS3RegionEnv, ""),
 		S3AccessKey:         common.GetEnvOrDefaultString(TaskArtifactStoreS3AccessKeyEnv, ""),
@@ -105,20 +111,11 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 	if requireS3Fields && config.S3Endpoint == "" {
 		return errors.New("S3 endpoint is required")
 	}
-	if config.S3Endpoint != "" {
-		if config.S3Endpoint != strings.TrimSpace(config.S3Endpoint) {
-			return errors.New("S3 endpoint must not contain surrounding whitespace")
-		}
-		endpoint, err := url.Parse(config.S3Endpoint)
-		if err != nil || endpoint == nil || endpoint.Host == "" || endpoint.User != nil || endpoint.Opaque != "" {
-			return errors.New("S3 endpoint must be an absolute URL without userinfo")
-		}
-		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-			return errors.New("S3 endpoint must use http or https")
-		}
-		if endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
-			return errors.New("S3 endpoint must not contain a query or fragment")
-		}
+	if err := validateTaskArtifactStoreEndpoint("endpoint", config.S3Endpoint); err != nil {
+		return err
+	}
+	if err := validateTaskArtifactStoreEndpoint("public endpoint", config.S3PublicEndpoint); err != nil {
+		return err
 	}
 
 	if requireS3Fields && config.S3Bucket == "" {
@@ -159,6 +156,26 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 				return errors.New("S3 prefix must not contain control characters")
 			}
 		}
+	}
+	return nil
+}
+
+func validateTaskArtifactStoreEndpoint(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("S3 %s must not contain surrounding whitespace", name)
+	}
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint == nil || endpoint.Host == "" || endpoint.User != nil || endpoint.Opaque != "" {
+		return fmt.Errorf("S3 %s must be an absolute URL without userinfo", name)
+	}
+	if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+		return fmt.Errorf("S3 %s must use http or https", name)
+	}
+	if endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
+		return fmt.Errorf("S3 %s must not contain a query or fragment", name)
 	}
 	return nil
 }

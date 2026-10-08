@@ -37,6 +37,7 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 		{name: "endpoint scheme", mutate: func(config *TaskArtifactStoreConfig) { config.S3Endpoint = "ftp://objects.example.com" }, match: "http or https"},
 		{name: "endpoint credentials", mutate: func(config *TaskArtifactStoreConfig) { config.S3Endpoint = "https://user:pass@objects.example.com" }, match: "without userinfo"},
 		{name: "endpoint query", mutate: func(config *TaskArtifactStoreConfig) { config.S3Endpoint = "https://objects.example.com?token=secret" }, match: "query or fragment"},
+		{name: "public endpoint scheme", mutate: func(config *TaskArtifactStoreConfig) { config.S3PublicEndpoint = "ftp://objects.example.com" }, match: "public endpoint must use http or https"},
 		{name: "bucket", mutate: func(config *TaskArtifactStoreConfig) { config.S3Bucket = "Invalid_Bucket" }, match: "bucket syntax"},
 		{name: "IP bucket", mutate: func(config *TaskArtifactStoreConfig) { config.S3Bucket = "192.168.1.1" }, match: "bucket syntax"},
 		{name: "region", mutate: func(config *TaskArtifactStoreConfig) { config.S3Region = "bad region" }, match: "region syntax"},
@@ -76,7 +77,14 @@ func TestLoadTaskArtifactStoreConfigModes(t *testing.T) {
 
 	assert.Equal(t, TaskArtifactStoreModeS3, config.Mode)
 	assert.Equal(t, "https://objects.example.com", config.S3Endpoint)
+	assert.Empty(t, config.S3PublicEndpoint)
 	assert.Equal(t, 600, config.S3PresignTTLSeconds)
+
+	t.Setenv(TaskArtifactStoreS3PublicEndpointEnv, "https://public.example.com")
+	config = LoadTaskArtifactStoreConfig()
+	assert.Equal(t, "https://objects.example.com", config.S3Endpoint)
+	assert.Equal(t, "https://public.example.com", config.S3PublicEndpoint)
+	t.Setenv(TaskArtifactStoreS3PublicEndpointEnv, "")
 	assert.Equal(t, DefaultTaskArtifactStoreRetentionDays, config.RetentionDays)
 	assert.Equal(t, DefaultTaskArtifactStoreSyncIntervalSecs, config.SyncIntervalSeconds)
 

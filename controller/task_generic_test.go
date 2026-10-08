@@ -1019,7 +1019,8 @@ func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
 	defer bucketServer.Close()
 	restore := service.ConfigureTaskArtifactStore(system_setting.TaskArtifactStoreConfig{
 		Mode: system_setting.TaskArtifactStoreModeS3, S3Endpoint: bucketServer.URL, S3Bucket: "artifacts",
-		S3Region: "us-east-1", S3AccessKey: "ak", S3SecretKey: "sk", S3Prefix: "tasks/v1",
+		S3PublicEndpoint: "https://public.example.com",
+		S3Region:         "us-east-1", S3AccessKey: "ak", S3SecretKey: "sk", S3Prefix: "tasks/v1",
 		S3PresignTTLSeconds: 600, S3PathStyle: true, RetentionDays: 30, SyncIntervalSeconds: 60,
 	})
 	t.Cleanup(restore)
@@ -1059,7 +1060,10 @@ func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
 	require.Equal(t, http.StatusFound, recorder.Code)
 	location, err := url.Parse(recorder.Header().Get("Location"))
 	require.NoError(t, err)
-	assert.Equal(t, strings.TrimPrefix(bucketServer.URL, "http://"), location.Host)
+	// Uploads went to S3Endpoint (the test bucket); customer links are signed
+	// against the public endpoint.
+	assert.Equal(t, "https", location.Scheme)
+	assert.Equal(t, "public.example.com", location.Host)
 	assert.Equal(t, "/artifacts/tasks/v1/task_generic/video.mp4", location.Path)
 	assert.NotEmpty(t, location.Query().Get("X-Amz-Signature"))
 	assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
