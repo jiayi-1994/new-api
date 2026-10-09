@@ -77,26 +77,28 @@ test("describeSpec counts each reference kind from the final body, independent o
 const REQUEST = { model: "videos-fast", prompt: "a cat", seconds: "8", size: "1280x720" };
 const BASE_URL = "https://newapi.megabyai.cc";
 
-test("sd-2-720p is routable and preserves the mapped model, duration and references", () => {
-  assert.ok(plugin.meta.models.includes("sd-2-720p"));
-  const value = {
-    model: "seedance-2.0-test", prompt: "a restaurant scene", seconds: 15,
-    resolution: "720p", ratio: "16:9",
-    images: ["https://cdn.example/1.webp", "https://cdn.example/2.webp"],
-    videos: ["https://cdn.example/1.mp4"],
-  };
-  const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
-  assert.equal(intent.model, value.model);
-  const ctx = { model: value.model, upstreamModel: "sd-2-720p", requestBody: intent.requestBody, baseUrl: BASE_URL, apiKey: "fixture-only-key" };
-  const request = plugin.buildSubmitRequest(ctx);
-  assert.equal(request.url, BASE_URL + "/v1/videos");
-  assert.equal(request.method, "POST");
-  assert.deepEqual(request.body, {
-    model: "sd-2-720p", prompt: value.prompt, duration: 15, resolution: "720p", ratio: "16:9",
-    referenceImages: value.images, referenceVideos: value.videos,
+for (const [publicModel, upstreamModel] of [["seedance-2.0", "seedance-2.0"], ["seedance-2.0-test", "sd-2-720p"]]) {
+  test(`${publicModel} is routable and preserves the upstream model, duration and references`, () => {
+    assert.ok(plugin.meta.models.includes(upstreamModel));
+    const value = {
+      model: publicModel, prompt: "a restaurant scene", seconds: 15,
+      resolution: "720p", ratio: "16:9",
+      images: ["https://cdn.example/1.webp", "https://cdn.example/2.webp"],
+      videos: ["https://cdn.example/1.mp4"],
+    };
+    const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
+    assert.equal(intent.model, value.model);
+    const ctx = { model: value.model, upstreamModel, requestBody: intent.requestBody, baseUrl: BASE_URL, apiKey: "fixture-only-key" };
+    const request = plugin.buildSubmitRequest(ctx);
+    assert.equal(request.url, BASE_URL + "/v1/videos");
+    assert.equal(request.method, "POST");
+    assert.deepEqual(request.body, {
+      model: upstreamModel, prompt: value.prompt, duration: 15, resolution: "720p", ratio: "16:9",
+      referenceImages: value.images, referenceVideos: value.videos,
+    });
+    assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
   });
-  assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
-});
+}
 
 test("one output is accepted in JSON and multipart without changing the submitted request", () => {
   for (const kind of ["json", "multipart"]) {
