@@ -15,13 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"aggc", "alibaba", "bytefor", "cangyuan", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "vertex-ai", "vidu", "zongheng"}
+var expectedKeys = []string{"aggc", "alibaba", "bytefor", "cangyuan", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "vertex-ai", "vidu", "zongheng"}
 
 // responsesKeys are the vendor plugins that also serve OpenAI Responses.
 var responsesKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
 
 // videoOnlyKeys are third-party relays that only speak the OpenAI video protocol.
-var videoOnlyKeys = []string{"aggc", "bytefor", "cangyuan", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sudashui", "zongheng"}
+var videoOnlyKeys = []string{"aggc", "bytefor", "cangyuan", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sudashui", "zongheng"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -225,30 +225,33 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 		want       videosched.Spec
 	}{
 		{"aggc", "sd2.5-op", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "1080p", "images": images, "videos": video}, 30,
-			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 2, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"bytefor", "bytefor-2.5", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.mp3"}}, 30,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"cangyuan", "sd10-seedance-2.0", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.wav"}}, 10,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"cangyuan", "cangyuan-doubao-seedance-2-0-260128", map[string]any{"prompt": "cat", "seconds": 6, "resolution": "720p", "first_image_url": "https://cdn.example/first.png", "last_image_url": "asset://asset-last"}, 6,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 0, "audio": 0, "frame": 2}}},
 		{"meaicc", "w3-c1", map[string]any{"input": map[string]any{"prompt": "cat", "media": []any{
 			map[string]any{"type": "first_frame", "url": "https://cdn.example/f.png"},
 			map[string]any{"type": "reference_video", "url": "https://cdn.example/v.mp4"},
 		}}, "parameters": map[string]any{"duration": 12, "resolution": "1080p"}}, 12,
-			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 1, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/v.mp4"}}},
+			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 1}, ReferenceVideoURLs: []string{"https://cdn.example/v.mp4"}}},
 		{"megabyai", "videos-fast", map[string]any{"prompt": "cat", "seconds": "8", "size": "1280x720", "referenceImages": images}, 8,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
+		{"onmi", "e组-sd2.0mini", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "480p", "generate_audio": false, "references": []any{
+			map[string]any{"type": "video", "url": "https://cdn.example/1.mp4"},
+		}}, 10, videosched.Spec{Tier: "480p", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"seedance-hjmie", "videos-fast", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
-			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"sudashui", "sdas-mg-sd2.5-720p", map[string]any{"prompt": "cat", "duration": 30, "resolution": "720p", "images": images, "videos": video}, 30,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"paipu", "lec-seed-2-0-900", map[string]any{"prompt": "cat", "images": images}, 15,
-			videosched.Spec{Tier: "*", SecondsKind: videosched.KindFixed, References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+			videosched.Spec{Tier: "*", SecondsKind: videosched.KindFixed, References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
 		{"pidoi", "tejiasd-mini-720p", map[string]any{"prompt": "cat", "seconds": 8, "resolution": "480p", "images": images}, 8,
-			videosched.Spec{Tier: "480p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+			videosched.Spec{Tier: "480p", References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
 		{"zongheng", "XXseedacn2.5", map[string]any{"prompt": "cat", "seconds": 10, "size": "1280x720", "images": images, "videos": video, "start_frame": "https://cdn.example/start.png", "end_frame": "https://cdn.example/end.png"}, 10,
-			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 4, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 2}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
@@ -283,6 +286,20 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 
 // Replay through Sobek as well as the JS tests: HTTP JSON numbers, immutable
 // host-backed input maps and nested result envelopes must cross the runtime intact.
+func TestOnmiVideoPluginLifecycle(t *testing.T) {
+	source, err := Source("onmi")
+	require.NoError(t, err)
+	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{"name":"mapped E request preserves false and typed references","hook":"buildSubmitRequest","args":[{"model":"public-video","upstreamModel":"e组-sd2.0mini","publicTaskId":"task_fixture","baseUrl":"https://api.onmi.eu.cc/v1/","authHeader":"Bearer fixture-only-key","requestBody":{"prompt":"海边 @Video1","seconds":10,"resolution":"480p","generate_audio":false,"references":[{"type":"video","url":"https://cdn.example/v.mp4","name":"运镜","duration":2.5}]}}],"expected":{"url":"https://api.onmi.eu.cc/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json","Idempotency-Key":"task_fixture"},"body":{"model":"e组-sd2.0mini","prompt":"海边 @Video1","seconds":10,"resolution":"480p","aspect_ratio":"16:9","generate_audio":false,"references":[{"type":"video","url":"https://cdn.example/v.mp4","name":"运镜","duration":2.5}]}}},
+		{"name":"reference metadata cannot replace output usage","hook":"extractUsage","args":[{"model":"e组-sd2.0mini","requestBody":{"prompt":"cat","seconds":10,"resolution":"480p","references":[{"type":"video","url":"https://cdn.example/v.mp4","duration":2.5}]}}],"expected":{"output_seconds":10,"resolution":"480p","video_input":true}},
+		{"name":"completion keeps frozen local sales facts","hook":"extractUsageOnComplete","args":[{},{"status":"SUCCESS"},{"seconds":99999,"usage":{"seconds":2}}],"expected":{}},
+		{"name":"accepted terminal failure is persisted","hook":"parseSubmitResponse","args":[{},{"body":{"id":"upstream_fixture","status":"failed","error":{"code":"video_request_rejected","message":"Video generation failed"}}}],"expected":{"taskId":"upstream_fixture","taskData":{"id":"upstream_fixture","status":"failed","error":{"code":"video_request_rejected","message":"Video generation failed"}},"immediate":{"status":"FAILURE","reason":"video request rejected"}}},
+		{"name":"unknown status stays unknown","hook":"parseTaskResult","args":[{},{"status":"unexpected"}],"expected":{"status":"UNKNOWN","reason":"unrecognized upstream task status"}},
+		{"name":"content ignores untrusted response URL","hook":"buildContentRequest","args":[{"baseUrl":"https://api.onmi.eu.cc","apiKey":"fixture-only-key","upstreamTaskId":"up/a","artifactKey":"video","data":{"url":"https://untrusted.example/a"},"clientRequest":{"method":"HEAD"}}],"expected":{"url":"https://api.onmi.eu.cc/v1/videos/up%2Fa/content","method":"HEAD","headers":{"Authorization":"Bearer fixture-only-key"}}}
+	]}`))
+	require.NoError(t, err)
+}
+
 func TestAggcVideoPluginLifecycle(t *testing.T) {
 	// Adding this relay must not replace the official MiniMax billing metadata
 	// or add a non-schedulable official provider to its scheduling pool.
@@ -442,8 +459,8 @@ func TestZonghengVideoPluginLifecycle(t *testing.T) {
 	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
 		{"name":"multipart false and repeated images","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"model":"XXseedacn2.5","body":{"kind":"multipart","fields":{"model":["XXseedacn2.5"],"prompt":["cat"],"seconds":["6"],"size":["1280x720"],"generate_audio":["false"],"images[]":["https://cdn.example/a.png","https://cdn.example/b.png"]}}}],"expected":{"kind":"submit","model":"XXseedacn2.5","action":"reference_to_video","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","ratio":"16:9","generate_audio":false,"images":["https://cdn.example/a.png","https://cdn.example/b.png"]}}},
 		{"name":"local upload guidance","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"body":{"kind":"multipart","files":[{"ref":"request_file:input_reference"}]}}],"expectedError":"/v1/media"},
-		{"name":"fractional seconds remain exact","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6.5,"resolution":"720p"}}],"expected":{"spec_version":2,"output_seconds":6.5,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":0,"audio":0},"reference_video_urls":[]}},
-		{"name":"references include frames and repeated video inputs","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","images":["https://cdn.example/a.png"],"referenceImages":["https://cdn.example/a.png"],"start_frame":"https://cdn.example/start.png","end_frame":"https://cdn.example/end.png","videos":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"],"audios":["https://cdn.example/a.wav"]}}],"expected":{"spec_version":2,"output_seconds":6,"seconds_kind":"exact","resolution":"720p","references":{"image":3,"video":2,"audio":1},"reference_video_urls":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"]}},
+		{"name":"fractional seconds remain exact","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6.5,"resolution":"720p"}}],"expected":{"spec_version":3,"output_seconds":6.5,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":0,"audio":0,"frame":0},"reference_video_urls":[]}},
+		{"name":"references include frames and repeated video inputs","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","images":["https://cdn.example/a.png"],"referenceImages":["https://cdn.example/a.png"],"start_frame":"https://cdn.example/start.png","end_frame":"https://cdn.example/end.png","videos":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"],"audios":["https://cdn.example/a.wav"]}}],"expected":{"spec_version":3,"output_seconds":6,"seconds_kind":"exact","resolution":"720p","references":{"image":1,"video":2,"audio":1,"frame":2},"reference_video_urls":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"]}},
 		{"name":"conflicting media mirrors rejected","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","images":["https://cdn.example/a.png"],"referenceImages":["https://cdn.example/b.png"]}}],"expectedError":"conflicting reference fields"},
 		{"name":"mapped Grok rejects reference video","hook":"describeSpec","args":[{"model":"unified-video","upstreamModel":"TTP-grok","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","videos":["https://cdn.example/a.mp4"]}}],"expectedError":"Grok does not support"},
 		{"name":"public creation envelope","hook":"parseSubmitResponse","args":[{},{"statusCode":202,"body":{"code":0,"success":true,"task_id":"vid_test","status":"processing","next_poll_seconds":10}}],"expected":{"taskId":"vid_test","taskData":{"code":0,"success":true,"task_id":"vid_test","status":"processing","next_poll_seconds":10}}},
@@ -557,7 +574,7 @@ func TestCangyuanVideoPluginLifecycle(t *testing.T) {
 		{"name":"official relay requires host-owned sale","hook":"buildSubmitRequest","args":[{"model":"cangyuan-doubao-seedance-2-0-260128","requestBody":{"prompt":"cat","duration":6}}],"expectedError":"requires host-configured unified video sales"},
 		{"name":"official alias is removed only on the wire","hook":"buildSubmitRequest","args":[{"model":"unified-seedance","upstreamModel":"cangyuan-doubao-seedance-2-0-260128","salesSource":"video_request","baseUrl":"https://ai.cangyuansuanli.cn","apiKey":"fixture-only-key","requestBody":{"prompt":"cat","duration":6,"generate_audio":false,"seed":0}}],"expected":{"url":"https://ai.cangyuansuanli.cn/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json"},"body":{"model":"doubao-seedance-2-0-260128","prompt":"cat","duration":6,"resolution":"720p","aspect_ratio":"16:9","generate_audio":false,"seed":0}}},
 		{"name":"multipart arrays retain zero and false","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"model":"cangyuan-doubao-seedance-2-0-260128","body":{"kind":"multipart","fields":{"model":["cangyuan-doubao-seedance-2-0-260128"],"prompt":["cat"],"seconds":["6"],"seed":["0"],"generate_audio":["false"],"reference_image_urls[]":["https://cdn.example/a.png","https://cdn.example/b.png"]}}}],"expected":{"kind":"submit","model":"cangyuan-doubao-seedance-2-0-260128","action":"reference_to_video","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","aspect_ratio":"16:9","reference_image_urls":["https://cdn.example/a.png","https://cdn.example/b.png"],"generate_audio":false,"seed":0}}},
-		{"name":"asset videos cannot become partial duration sources","hook":"describeSpec","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":10,"reference_videos":["https://cdn.example/v.mp4","asset://asset-video"]}}],"expected":{"spec_version":2,"output_seconds":10,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":2,"audio":0}}},
+		{"name":"asset videos cannot become partial duration sources","hook":"describeSpec","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":10,"reference_videos":["https://cdn.example/v.mp4","asset://asset-video"]}}],"expected":{"spec_version":3,"output_seconds":10,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":2,"audio":0,"frame":0}}},
 		{"name":"overrides cannot bypass duration bounds","hook":"describeSpec","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":"18446744073686646784"}}],"expectedError":"duration must be an integer from 1 to 3600 seconds"},
 		{"name":"hidden multipliers are rejected","hook":"buildSubmitRequest","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":10,"metadata":{"duration":9999}}}],"expectedError":"unsupported video parameter: metadata"},
 		{"name":"accept creation with id","hook":"parseSubmitResponse","args":[{},{"statusCode":202,"body":{"id":"video_42","status":"queued"}}],"expected":{"taskId":"video_42","taskData":{"id":"video_42","status":"queued"}}},

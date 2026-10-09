@@ -400,7 +400,7 @@ func TestVideoInputSourceSpecVersion(t *testing.T) {
 		{"not an array", 2, 1, "https://media.example/a.mp4", "every submitted"},
 		{"non HTTP source", 2, 1, []any{"file:///video.mp4"}, "HTTP(S)"},
 		{"embedded credentials", 2, 1, []any{"https://user:secret@media.example/a.mp4"}, "without credentials"},
-		{"future version", 3, 0, []any{}, "version unsupported"},
+		{"future version", 4, 0, []any{}, "version unsupported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := map[string]any{"spec_version": tc.version, "references": map[string]any{"video": tc.count, "image": int64(0), "audio": int64(0)}, "reference_video_urls": tc.urls}
@@ -1543,7 +1543,7 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 export function describeSpec(ctx) {
-  if (ctx.upstreamModel === "future") return {spec_version: 3, references: {video: 0, image: 0, audio: 0}};
+  if (ctx.upstreamModel === "future") return {spec_version: 4, references: {video: 0, image: 0, audio: 0}};
   if (ctx.upstreamModel === "opt-out") return {unsupported: true};
   if (ctx.upstreamModel === "broken") throw new Error("bad body");
   return {spec_version: 1, output_seconds: 5, resolution: "*", references: {video: 0, image: 0, audio: 0}};
@@ -1888,7 +1888,7 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		3205: "not schedulable: no cost table",
 		3206: "not schedulable: model not priced",
 		3207: "tried",
-		3208: "spec version unsupported: 3",
+		3208: "spec version unsupported: 4",
 		3209: "not schedulable: model opt-out",
 		3210: "spec invalid: ",
 	}
@@ -2028,7 +2028,7 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		assert.Equal(t, 2, summary.AttemptSeq, "3207 was attempted first")
 		assert.True(t, summary.Probe)
 		require.NotNil(t, summary.Spec)
-		assert.Equal(t, map[string]int{"video": 0, "image": 0, "audio": 0}, summary.Spec.References)
+		assert.Equal(t, map[string]int{"video": 0, "image": 0, "audio": 0, "frame": 0}, summary.Spec.References)
 		other := model.NewLogOther()
 		AppendVideoScheduleConsumeLog(c, &model.Task{ChannelId: 3201}, other)
 		adminInfo := other.Snapshot()["admin_info"].(map[string]any)

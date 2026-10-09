@@ -82,7 +82,9 @@ export type Channel = z.infer<typeof channelSchema>
 // ============================================================================
 
 export type VideoCostMode = 'per_video' | 'per_second'
-export type VideoReferenceKind = 'video' | 'image' | 'audio'
+// 'frame' is the first/last frame images of image-to-video requests, priced
+// apart from reference images.
+export type VideoReferenceKind = 'video' | 'image' | 'audio' | 'frame'
 export type VideoReferenceMode =
   | 'unsupported'
   | 'included'

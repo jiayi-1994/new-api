@@ -109,16 +109,16 @@ test("metadata payload, OpenAI aliases and multipart normalize to the same wire 
     const wire = plugin.buildSubmitRequest(ctx).body;
     assert.deepEqual(JSON.parse(wire.metadata.payload), payload);
     assert.deepEqual(plugin.describeSpec(ctx), {
-      spec_version: 2, output_seconds: 8, seconds_kind: "exact", resolution: "720p",
-      references: { image: 1, video: 2, audio: 1 }, reference_video_urls: [video, video],
+      spec_version: 3, output_seconds: 8, seconds_kind: "exact", resolution: "720p",
+      references: { image: 1, video: 2, audio: 1, frame: 0 }, reference_video_urls: [video, video],
     });
     assert.deepEqual(plugin.extractUsage(ctx), { seconds: 8, resolution: "720p" });
   }
 });
 
-test("frames count both images and never merge with reference mode", () => {
+test("frames are two frame references and never merge with reference mode", () => {
   const ctx = context({ ...base, mode: "frames", firstFrameUrl: image, lastFrameUrl: image });
-  assert.equal(plugin.describeSpec(ctx).references.image, 2);
+  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 0, video: 0, audio: 0, frame: 2 });
   assert.deepEqual(JSON.parse(plugin.buildSubmitRequest(ctx).body.metadata.payload), { aspectRatio: "16:9", mode: "frames", firstFrameUrl: image, lastFrameUrl: image });
   for (const patch of [{ lastFrameUrl: undefined }, { images: [] }, { videos: [video] }, { mode: "references" }]) {
     assert.throws(() => context({ ...base, mode: "frames", firstFrameUrl: image, lastFrameUrl: image, ...patch }), /frames mode|references mode/);

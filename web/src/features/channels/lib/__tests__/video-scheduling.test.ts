@@ -198,6 +198,12 @@ describe('video scheduling channel settings', () => {
         value: '0',
       },
       { kind: 'audio' as const, tier: '*', mode: '' as const, value: '2' },
+      {
+        kind: 'frame' as const,
+        tier: '*',
+        mode: 'per_input' as const,
+        value: '0.05',
+      },
     ]
 
     const settings = savedSettings({
@@ -208,6 +214,7 @@ describe('video scheduling channel settings', () => {
     expect(settings.video_scheduling.models['videos-mini'].references).toEqual({
       video: { '720p': { mode: 'included' } },
       image: { '*': { mode: 'per_request', value: 0 } },
+      frame: { '*': { mode: 'per_input', value: 0.05 } },
     })
   })
 

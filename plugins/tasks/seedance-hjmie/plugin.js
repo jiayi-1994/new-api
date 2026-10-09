@@ -8,7 +8,7 @@ const ALLOWED_FIELDS = [
   "resolution", "video_resolution", "ratio", "aspect_ratio", "aspectRatio",
   "images", "videos", "audios", "referenceImages", "referenceVideos",
   "referenceAudios", "reference_images", "reference_videos",
-  "reference_audios", "image", "input_reference",
+  "reference_audios", "image", "input_reference", "first_image_url", "last_image_url", "first_image", "last_image",
 ];
 const MEDIA_FIELDS = [
   "images", "videos", "audios", "referenceImages", "referenceVideos",
@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.6",
+  version: "1.0.8",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -113,6 +113,19 @@ function scalarAlias(input, names, parse) {
   return found;
 }
 
+function frameURLs(input) {
+  const frames = {};
+  for (const name of ["first_image", "last_image"]) {
+    const url = scalarAlias(input, [name + "_url", name], function (value, field) {
+      if (typeof value !== "string" || !/^https?:\/\/[^\s/?#@\\]+(?:[/?#][^\s\\]*)?$/i.test(value.trim())) throw new Error(field + " must be a public http(s) URL");
+      return value.trim();
+    });
+    if (url !== undefined) frames[name + "_url"] = url;
+  }
+  if (frames.last_image_url && !frames.first_image_url) throw new Error("last_image_url requires first_image_url");
+  return frames;
+}
+
 function mediaURLs(input, names, label) {
   let selected;
   for (const name of names) {
@@ -198,9 +211,11 @@ function normalize(ctx) {
   if (images.length) requestBody.images = images;
   if (videos.length) requestBody.videos = videos;
   if (audios.length) requestBody.audios = audios;
+  const frames = frameURLs(input);
+  Object.assign(requestBody, frames);
   return {
     kind: "submit", model,
-    action: images.length || videos.length || audios.length ? "reference_to_video" : "text_to_video",
+    action: images.length || videos.length || audios.length || frames.first_image_url ? "reference_to_video" : "text_to_video",
     requestBody,
   };
 }
@@ -234,6 +249,7 @@ export function buildSubmitRequest(ctx) {
   for (const name of ["images", "videos", "audios"]) {
     if (input[name] !== undefined) body[name] = mediaURLs(input, [name], name);
   }
+  Object.assign(body, frameURLs(input));
   return {
     url: ctx.baseUrl.replace(/\/+$/, "") + "/v1/videos",
     method: "POST",
@@ -374,8 +390,9 @@ export function buildContentRequest(ctx) {
 export function describeSpec(ctx) {
   upstreamModel(ctx);
   const input = ctx.requestBody || {};
+  const frames = frameURLs(input);
   return {
-    spec_version: 2,
+    spec_version: 3,
     reference_video_urls: mediaURLs(input, ["videos"], "videos"),
     output_seconds: seconds(input.duration, "duration"),
     seconds_kind: "exact",
@@ -384,6 +401,7 @@ export function describeSpec(ctx) {
       video: mediaURLs(input, ["videos"], "videos").length,
       image: mediaURLs(input, ["images"], "images").length,
       audio: mediaURLs(input, ["audios"], "audios").length,
+      frame: Object.keys(frames).length,
     },
   };
 }

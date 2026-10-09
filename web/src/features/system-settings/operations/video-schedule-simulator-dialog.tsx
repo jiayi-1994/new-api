@@ -527,11 +527,12 @@ export function VideoScheduleSimulatorDialog(
                       {spec.tier ?? '—'}
                       {' · '}
                       {t(
-                        'References: {{video}} video, {{image}} image, {{audio}} audio',
+                        'References: {{video}} video, {{image}} image, {{audio}} audio, {{frame}} frame',
                         {
                           video: spec.references.video ?? 0,
                           image: spec.references.image ?? 0,
                           audio: spec.references.audio ?? 0,
+                          frame: spec.references.frame ?? 0,
                         }
                       )}
                       {spec.missing?.length

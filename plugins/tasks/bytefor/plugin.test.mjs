@@ -35,8 +35,8 @@ for (const [model, max, tiers] of CASES) {
         const before = JSON.stringify(ctx);
         assert.deepEqual(plugin.extractUsage(ctx), { seconds, resolution, video_input: true });
         assert.deepEqual(plugin.describeSpec(ctx), {
-          spec_version: 2, output_seconds: seconds, seconds_kind: 'exact', resolution,
-          references: { video: 1, image: 1, audio: 1 }, reference_video_urls: [VIDEO],
+          spec_version: 3, output_seconds: seconds, seconds_kind: 'exact', resolution,
+          references: { video: 1, image: 1, audio: 1, frame: 0 }, reference_video_urls: [VIDEO],
         });
         assert.deepEqual(plugin.buildSubmitRequest({ ...ctx, ...CREDENTIALS }), {
           url: 'https://open.bytefor.com/api/v3/contents/generations/tasks', method: 'POST',
@@ -98,7 +98,7 @@ test('Ark content is accepted at the top level or in metadata, with roles preser
   assert.deepEqual(plugin.buildSubmitRequest({ ...top, ...CREDENTIALS }).body, {
     model: 'bytefor-2.0-real-priority', resolution: '720p', ratio: '16:9', duration: 6, return_last_frame: true, content,
   });
-  assert.deepEqual(plugin.describeSpec(top).references, { video: 0, image: 2, audio: 0 });
+  assert.deepEqual(plugin.describeSpec(top).references, { video: 0, image: 0, audio: 0, frame: 2 });
   // A mirrored URL list must agree with content; a differing one fails instead of dropping a reference.
   const mirrored = driver({ model: 'bytefor-2.0-real-priority', metadata: { content }, images: ['https://cdn.example/start.png', 'https://cdn.example/end.png'] });
   assert.deepEqual(plugin.buildSubmitRequest({ ...mirrored, ...CREDENTIALS }).body.content, content);

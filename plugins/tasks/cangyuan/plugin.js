@@ -45,14 +45,14 @@ const MEDIA_FIELDS = MEDIA.flatMap(kind => kind.aliases);
 const FIELDS = [
   "model", "prompt", "duration", "seconds", "resolution", "size", "n",
   "aspect_ratio", "ratio", "camera_movement", "generate_audio", "face_mode",
-  "seed", "first_image_url", "last_image_url",
+  "seed", "first_image_url", "last_image_url", "first_image", "last_image",
 ].concat(MEDIA_FIELDS);
 
 export const meta = {
   apiVersion: 1,
   key: "cangyuan",
   name: "沧元算力 Seedance",
-  version: "1.1.0",
+  version: "1.1.1",
   author: { name: "jiayi-1994" },
   description: {
     en: "Seedance video generation through Cangyuan, with official relay models requiring unified video sales",
@@ -154,6 +154,14 @@ function resolution(value) {
 // including the body after administrator parameter overrides.
 function videoParams(input, model) {
   if (!isObject(input)) throw new Error("video request must be an object");
+  input = Object.assign({}, input);
+  for (const name of ["first_image", "last_image"]) {
+    if (!has(input, name)) continue;
+    const url = mediaURL(input[name], name);
+    if (has(input, name + "_url") && mediaURL(input[name + "_url"], name + "_url") !== url) throw new Error(name + " conflicts with " + name + "_url");
+    input[name + "_url"] = url;
+    delete input[name];
+  }
   const profile = model ? MODELS[model] : undefined;
   for (const key of Object.keys(input)) {
     if (!FIELDS.includes(key)) throw new Error("unsupported video parameter: " + key);
@@ -314,12 +322,13 @@ export function describeSpec(ctx) {
   const profile = MODELS[body.model];
   const videos = body.reference_videos || [];
   const spec = {
-    spec_version: 2, output_seconds: body.duration,
+    spec_version: 3, output_seconds: body.duration,
     seconds_kind: profile.seconds && profile.seconds.length === 1 ? "fixed" : "exact",
     resolution: body.resolution || "*",
     references: {
-      image: (body.reference_image_urls || []).length + (body.first_image_url ? 1 : 0) + (body.last_image_url ? 1 : 0),
+      image: (body.reference_image_urls || []).length,
       video: videos.length, audio: (body.reference_audios || []).length,
+      frame: (body.first_image_url ? 1 : 0) + (body.last_image_url ? 1 : 0),
     },
   };
   // Never publish a partial list: asset IDs cannot be read by the host's MP4

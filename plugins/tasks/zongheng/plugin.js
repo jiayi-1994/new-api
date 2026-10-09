@@ -25,7 +25,7 @@ export const meta = {
   apiVersion: 1,
   key: "zongheng",
   name: "Zongheng Video",
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Zongheng API", zh: "通过纵横科技 API 生成视频" },
   icon: "text:纵横",
@@ -200,10 +200,11 @@ export function extractUsageOnComplete() {
 export function describeSpec(ctx) {
   const request = modelRequest(ctx).request;
   return {
-    spec_version: 2, output_seconds: request.duration, seconds_kind: "exact", resolution: request.resolution,
+    spec_version: 3, output_seconds: request.duration, seconds_kind: "exact", resolution: request.resolution,
     references: {
-      image: (request.images || []).length + Number(Boolean(request.start_frame)) + Number(Boolean(request.end_frame)),
+      image: (request.images || []).length,
       video: (request.reference_videos || []).length, audio: (request.reference_audios || []).length,
+      frame: Number(Boolean(request.start_frame)) + Number(Boolean(request.end_frame)),
     },
     reference_video_urls: request.reference_videos || [],
   };

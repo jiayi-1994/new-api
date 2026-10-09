@@ -107,7 +107,7 @@ test('Each family enforces its own reference limits and unsupported media', () =
   ]) {
     const duration = model === 'sd8-seedance-2.5' ? 30 : 10;
     const fields = { duration, images: Array(images).fill(image), videos: Array(videos).fill(video), audios: Array(audios).fill(audio) };
-    assert.deepEqual(plugin.describeSpec(context(model, fields)).references, { image: images, video: videos, audio: audios });
+    assert.deepEqual(plugin.describeSpec(context(model, fields)).references, { image: images, video: videos, audio: audios, frame: 0 });
     for (const [field, max, url] of [['images', images, image], ['videos', videos, video], ['audios', audios, audio]]) {
       assert.throws(() => context(model, { duration, [field]: Array(max + 1).fill(url) }), undefined, model + ' ' + field);
     }
@@ -117,13 +117,13 @@ test('Each family enforces its own reference limits and unsupported media', () =
 test('SD11 and SD14 first-frame rules differ from paired official frames', () => {
   for (const model of ['sd11-seedance-2.0', 'sd11-seedance-2.0-fast', 'sd11-seedance-2.0-mini', 'sd11-seedance-2.5']) {
     const ctx = context(model, { first_image_url: image, images: [image], seed: 0, generate_audio: false });
-    assert.equal(plugin.describeSpec(ctx).references.image, 2);
+    assert.deepEqual(plugin.describeSpec(ctx).references, { image: 1, video: 0, audio: 0, frame: 1 });
     assert.equal(plugin.buildSubmitRequest(ctx).body.last_image_url, undefined);
-    assert.equal(plugin.describeSpec(context(model, { first_image_url: image, last_image_url: image, images: [image] })).references.image, 3);
+    assert.deepEqual(plugin.describeSpec(context(model, { first_image_url: image, last_image_url: image, images: [image] })).references, { image: 1, video: 0, audio: 0, frame: 2 });
     assert.throws(() => context(model, { seed: -1 }), /non-negative/);
     assert.throws(() => context(model, { last_image_url: image }), /requires first_image_url/);
   }
-  assert.equal(plugin.describeSpec(context('sd14-seedance-2.0', { duration: 10, first_image_url: image })).references.image, 1);
+  assert.deepEqual(plugin.describeSpec(context('sd14-seedance-2.0', { duration: 10, first_image_url: image })).references, { image: 0, video: 0, audio: 0, frame: 1 });
   assert.throws(() => context('sd14-seedance-2.0', { duration: 10, first_image_url: image, images: [image] }), /cannot be combined/);
   for (const model of ['sd13-seedance-2.0', 'sd15-seedance-2.0', 'sd7-seedance-2.0-720p']) {
     assert.throws(() => context(model, { duration: 10, first_image_url: image }), /does not support/);
@@ -150,8 +150,8 @@ test('SD10 charges once for each supported duration and reports exact scheduling
     assert.deepEqual(plugin.extractUsage(ctx), { requests: 1, resolution: '720p' });
     assert.deepEqual(plugin.extractUsageOnComplete(ctx, { status: 'SUCCESS' }, { duration: 999999, usage: { total_tokens: 999999 } }), {});
     assert.deepEqual(plugin.describeSpec(ctx), {
-      spec_version: 2, output_seconds: duration, seconds_kind: 'exact', resolution: '720p',
-      references: { image: 0, video: 0, audio: 0 }, reference_video_urls: [],
+      spec_version: 3, output_seconds: duration, seconds_kind: 'exact', resolution: '720p',
+      references: { image: 0, video: 0, audio: 0, frame: 0 }, reference_video_urls: [],
     });
     assert.deepEqual(plugin.buildSubmitRequest(ctx), {
       url: 'https://ai.cangyuansuanli.cn/v1/videos', method: 'POST',
@@ -206,14 +206,14 @@ test('SD10 forwards all user-confirmed references and preserves duplicate videos
   assert.deepEqual(body.reference_videos, [video, video]);
   assert.deepEqual(body.reference_audios, [audio]);
   assert.equal(body.face_mode, true);
-  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 1, video: 2, audio: 1 });
+  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 1, video: 2, audio: 1, frame: 0 });
   assert.deepEqual(plugin.describeSpec(ctx).reference_video_urls, [video, video]);
   assert.deepEqual(ctx.requestBody, before);
 });
 
 test('Equivalent reference aliases are not double-counted; different aliases fail', () => {
   const ctx = context(sd10, { duration: 10, images: [image], reference_image_urls: [image], reference_videos: [video], videos: [video] });
-  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 1, video: 1, audio: 0 });
+  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 1, video: 1, audio: 0, frame: 0 });
   assert.throws(() => context(sd10, { duration: 10, images: [image], reference_image_urls: ['https://cdn.example/other.png'] }), /conflicting reference/);
 });
 
@@ -225,7 +225,7 @@ test('Asset references remain on the wire and never become partial duration sour
     }), salesSource: 'video_request' };
     assert.deepEqual(plugin.buildSubmitRequest(ctx).body.reference_videos, [video, 'asset://asset-video']);
     const spec = plugin.describeSpec(ctx);
-    assert.deepEqual(spec.references, { image: 1, video: 2, audio: 1 });
+    assert.deepEqual(spec.references, { image: 1, video: 2, audio: 1, frame: 0 });
     assert.equal(Object.hasOwn(spec, 'reference_video_urls'), false);
     for (const face_mode of [false, true]) {
       assert.throws(() => plugin.describeSpec({ ...ctx, requestBody: { ...ctx.requestBody, face_mode } }), /omit face_mode/);
@@ -236,7 +236,7 @@ test('Asset references remain on the wire and never become partial duration sour
 test('Official first and last frames are paired, counted and exclusive with references', () => {
   const frames = { first_image_url: image, last_image_url: 'asset://asset-last' };
   const ctx = context(alias, { duration: 8, ...frames });
-  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 2, video: 0, audio: 0 });
+  assert.deepEqual(plugin.describeSpec(ctx).references, { image: 0, video: 0, audio: 0, frame: 2 });
   assert.equal(plugin.buildSubmitRequest({ ...ctx, salesSource: 'video_request' }).body.last_image_url, frames.last_image_url);
   for (const field of ['first_image_url', 'last_image_url']) assert.throws(() => context(alias, { [field]: image }), /supplied together|requires first_image_url/);
   for (const field of ['images', 'reference_videos', 'reference_audios']) assert.throws(() => context(alias, { ...frames, [field]: [image] }), /cannot be combined/);

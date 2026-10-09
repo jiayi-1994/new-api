@@ -40,8 +40,11 @@ const (
 )
 
 // ReferenceKinds is the fixed order in which reference lines are priced and
-// reported, so the first failure never depends on map iteration.
-var ReferenceKinds = []string{"video", "image", "audio"}
+// reported, so the first failure never depends on map iteration. "frame" is
+// the first/last frame images that condition the output (image-to-video); it
+// is priced apart from "image" references because vendors support and price
+// the two differently.
+var ReferenceKinds = []string{"video", "image", "audio", "frame"}
 
 // Sell price kinds and unknown-sell policies.
 const (

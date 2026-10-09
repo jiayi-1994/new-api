@@ -66,14 +66,110 @@ test("Customer aliases and extra options normalize before billing and forwarding
   assert.deepEqual(plugin.buildSubmitRequest(context).body, { model: request.model, ...expected });
 });
 
+test("Canvas mixed requests preserve the mapped model, prompt and three ordered images", () => {
+  const prompt = "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词";
+  const images = ["https://cdn.example/1.png", "https://cdn.example/2.png", "https://cdn.example/3.png"];
+  const expected = {
+    input: { prompt, media: images.map(url => ({ type: "reference_image", url })) },
+    parameters: { duration: 15, resolution: "720p", ratio: "9:16" },
+  };
+  const value = {
+    model: "c4-seedance2.0", prompt, seconds: "15", duration: 15, resolution: "720p", aspect_ratio: "9:16",
+    images, image_urls: images, generate_audio: true,
+    input: expected.input,
+    parameters: { resolution: "720P", duration: 15, ratio: "9:16", prompt_extend: false, watermark: false },
+    requests: 0, n: 99, metadata: { duration: 99999 },
+  };
+  const original = structuredClone(value);
+  for (const kind of ["json", "multipart"]) {
+    const body = kind === "json" ? { kind, value } : {
+      kind, fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, [typeof item === "object" ? JSON.stringify(item) : String(item)]])),
+    };
+    const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel: "sd-2-c4", body });
+    assert.equal(intent.model, value.model);
+    assert.equal(intent.action, "reference_to_video");
+    assert.deepEqual(intent.requestBody, expected, kind);
+    // All hooks must also validate the raw mixed form, without relying on the decoder.
+    for (const requestBody of [value, intent.requestBody]) {
+      const ctx = { model: value.model, upstreamModel: "sd-2-c4", baseUrl: "https://api.meaicc.com", apiKey: "fixture-only-key", requestBody };
+      assert.deepEqual(plugin.buildSubmitRequest(ctx).body, { model: "sd-2-c4", ...expected }, kind);
+      assert.deepEqual(plugin.extractUsage(ctx), { requests: 1 }, kind);
+      assert.deepEqual(plugin.describeSpec(ctx), {
+        spec_version: 3, reference_video_urls: [], output_seconds: 15, seconds_kind: "exact", resolution: "720p",
+        references: { video: 0, image: 3, audio: 0, frame: 0 },
+      }, kind);
+    }
+  }
+  assert.deepEqual(value, original);
+});
+
+test("Mixed request fields fill missing values and retain frame roles and repeated references", () => {
+  const prompt = "a cat";
+  const image = "https://cdn.example/image.png";
+  const frame = "https://cdn.example/first.png";
+  const video = "https://cdn.example/video.mp4";
+  for (const [fields, expectedMedia] of [
+    [{ input: { prompt }, seconds: "10", resolution: "720p" }, undefined],
+    [{ prompt, parameters: { seconds: "10", resolution: "720P", aspectRatio: "9:16" } }, undefined],
+    [{ prompt, seconds: "10", resolution: "720p", input: {}, parameters: {} }, undefined],
+    [{ prompt, seconds: "10", resolution: "720p", input: { media: [{ type: "first_frame", url: frame }, { type: "reference_image", url: image }, { type: "reference_image", url: image }] }, images: [image, image], first_image_url: frame, videos: [video] }, [
+      { type: "first_frame", url: frame }, { type: "reference_image", url: image }, { type: "reference_image", url: image }, { type: "reference_video", url: video },
+    ]],
+    [{ prompt, seconds: "10", resolution: "720p", input: { media: [{ type: "reference_image", url: image }] }, media: [{ type: "reference_image", url: image }], images: [image] }, [{ type: "reference_image", url: image }]],
+  ]) {
+    const value = { model: "sd-2-c4", ...fields };
+    const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
+    assert.equal(intent.requestBody.input.prompt, prompt);
+    assert.equal(intent.requestBody.parameters.duration, 10);
+    assert.equal(intent.requestBody.parameters.resolution, "720p");
+    assert.deepEqual(intent.requestBody.input.media, expectedMedia);
+    if (fields.parameters?.aspectRatio) assert.equal(intent.requestBody.parameters.ratio, "9:16");
+  }
+});
+
+test("Mixed request conflicts and invalid secondary fields fail before usage or submission", () => {
+  const image = "https://cdn.example/1.png";
+  const second = "https://cdn.example/2.png";
+  const value = {
+    model: "sd-2-c4", prompt: "a cat", seconds: "10", resolution: "720p", aspect_ratio: "9:16", images: [image, second],
+    input: { prompt: "a cat", media: [{ type: "reference_image", url: image }, { type: "reference_image", url: second }] },
+    parameters: { duration: 10, resolution: "720p", ratio: "9:16" },
+  };
+  for (const [overrides, error] of [
+    [{ prompt: "different" }, /prompt conflicts with input.prompt/],
+    [{ seconds: "15" }, /duration conflicts/],
+    [{ parameters: { ...value.parameters, seconds: "15" } }, /seconds conflicts with duration/],
+    [{ parameters: { ...value.parameters, duration: 0 } }, /integer number of seconds/],
+    [{ seconds: "18446744073686646784" }, /between 1 and 30/],
+    [{ resolution: "1080p" }, /resolution conflicts/],
+    [{ size: "1280x720" }, /size conflicts with ratio/],
+    [{ aspect_ratio: "16:9" }, /ratio conflicts/],
+    [{ images: [second, image] }, /conflicting reference fields/],
+    [{ images: [] }, /conflicting reference fields/],
+    [{ image_urls: ["file:///bad.png"] }, /entries must be http\(s\)/],
+    [{ media: [...value.input.media].reverse() }, /conflicting reference fields/],
+    [{ input: null }, /input must be an object/],
+    [{ parameters: [] }, /parameters must be an object/],
+    [{ input: { ...value.input, media: {} } }, /media must be an array/],
+    [{ first_image_url: "file:///bad.png" }, /must be a public http\(s\)/],
+  ]) {
+    const requestBody = { ...value, ...overrides };
+    const ctx = { model: value.model, baseUrl: "https://api.meaicc.com", apiKey: "fixture-only-key", requestBody };
+    assert.throws(() => plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value: requestBody } }), error);
+    assert.throws(() => plugin.extractUsage(ctx), error);
+    assert.throws(() => plugin.describeSpec(ctx), error);
+    assert.throws(() => plugin.buildSubmitRequest(ctx), error);
+  }
+});
+
 // The spec a submission is scheduled by, derived from the body actually sent upstream.
 function submittedSpec(ctx) {
   const body = plugin.buildSubmitRequest({ ...ctx, baseUrl: "https://api.meaicc.com", apiKey: "fixture-only-key" }).body;
-  const references = { video: 0, image: 0, audio: 0 };
+  const references = { video: 0, image: 0, audio: 0, frame: 0 };
   for (const item of body.input.media || []) {
-    references[item.type === "reference_video" ? "video" : item.type === "reference_voice" ? "audio" : "image"] += 1;
+    references[item.type === "reference_video" ? "video" : item.type === "reference_voice" ? "audio" : item.type === "reference_image" ? "image" : "frame"] += 1;
   }
-  return { spec_version: 2, reference_video_urls: (body.input.media || []).filter((item) => item.type === "reference_video").map((item) => item.url), output_seconds: body.parameters.duration, seconds_kind: "exact", resolution: body.parameters.resolution, references };
+  return { spec_version: 3, reference_video_urls: (body.input.media || []).filter((item) => item.type === "reference_video").map((item) => item.url), output_seconds: body.parameters.duration, seconds_kind: "exact", resolution: body.parameters.resolution, references };
 }
 
 test("describeSpec agrees with the submitted body and rejects what usage rejects", () => {
@@ -91,7 +187,7 @@ test("describeSpec agrees with the submitted body and rejects what usage rejects
   }
 });
 
-test("describeSpec classifies every media type into the three reference kinds", () => {
+test("describeSpec classifies every media type into the four reference kinds", () => {
   const media = [
     { type: "first_frame", url: "https://cdn.example/f.png" }, { type: "last_frame", url: "https://cdn.example/l.png" },
     { type: "reference_image", url: "https://cdn.example/r.png" }, { type: "reference_video", url: "https://cdn.example/v.mp4" },
@@ -101,8 +197,8 @@ test("describeSpec classifies every media type into the three reference kinds", 
   const intent = plugin.protocols.openai_video.decodeRequest({ model: request.model, body: { kind: "json", value: request } });
   const ctx = { model: request.model, requestBody: intent.requestBody };
   assert.deepEqual(plugin.describeSpec(ctx), {
-    spec_version: 2, reference_video_urls: ["https://cdn.example/v.mp4"], output_seconds: 12, seconds_kind: "exact", resolution: "1080p",
-    references: { video: 1, image: 3, audio: 2 },
+    spec_version: 3, reference_video_urls: ["https://cdn.example/v.mp4"], output_seconds: 12, seconds_kind: "exact", resolution: "1080p",
+    references: { video: 1, image: 1, audio: 2, frame: 2 },
   });
   assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
   assert.throws(() => plugin.describeSpec({ model: "sd-2-fast", requestBody: intent.requestBody }), /sd-2-fast/);
@@ -124,7 +220,7 @@ test("public media aliases retain every submitted reference in JSON and multipar
         const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body });
         const ctx = { model: value.model, requestBody: intent.requestBody, baseUrl: BASE_URL, apiKey: "fixture-only-key" };
         assert.deepEqual(plugin.buildSubmitRequest(ctx).body.input.media, [{ type, url: value[field] }], field);
-        assert.deepEqual(plugin.describeSpec(ctx).references, { video: 0, image: 0, audio: 0, [kind]: 1 }, field);
+        assert.deepEqual(plugin.describeSpec(ctx).references, { video: 0, image: 0, audio: 0, frame: 0, [kind]: 1 }, field);
         assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx), field);
       }
     }

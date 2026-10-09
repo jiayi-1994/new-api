@@ -497,7 +497,7 @@ export type VideoScheduleSpec = {
   input_video_seconds?: number
   seconds_kind?: string
   tier?: string
-  references: Partial<Record<'video' | 'image' | 'audio', number>>
+  references: Partial<Record<'video' | 'image' | 'audio' | 'frame', number>>
   missing?: string[]
 }
 

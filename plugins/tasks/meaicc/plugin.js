@@ -11,13 +11,13 @@ const REFERENCE_FIELDS = [
   "videos", "video_url", "video_urls", "input_video", "reference_video", "referenceVideos", "reference_videos",
   "audios", "audio_url", "audio_urls", "input_audio", "referenceAudios", "reference_audios",
 ];
-const FLAT_FIELDS = ["model", "prompt", "media", "seconds", "duration", "resolution", "size", "ratio", "aspect_ratio", "aspectRatio"].concat(REFERENCE_FIELDS);
+const FLAT_FIELDS = ["model", "prompt", "media", "seconds", "duration", "resolution", "size", "ratio", "aspect_ratio", "aspectRatio", "first_image_url", "last_image_url", "first_image", "last_image"].concat(REFERENCE_FIELDS);
 
 export const meta = {
   apiVersion: 1,
   key: "meaicc",
   name: "Meaicc Video",
-  version: "1.1.4",
+  version: "1.1.6",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through Meaicc, billed per request", zh: "通过 Meaicc 生成视频，按次计费" },
   icon: "text:M",
@@ -116,72 +116,97 @@ function referenceURLs(value, field) {
   });
 }
 
-// Both supported client forms become the documented input/parameters contract.
+// Flat, nested and mixed client forms become the documented input/parameters contract.
 // Driver and billing hooks revalidate it so sandbox/direct hook calls cannot bypass limits.
 function videoRequest(value) {
   if (!isObject(value)) throw new Error("video request must be an object");
-  let input;
-  let parameters;
-  if (has(value, "input") || has(value, "parameters")) {
-    // Conflicting request forms remain an error; unrelated client options are ignored.
-    for (const key of FLAT_FIELDS) {
-      if (key !== "model" && has(value, key)) throw new Error("unsupported video request field: " + key + "; do not mix flat and nested parameters");
-    }
-    input = knownFields(value.input, ["prompt", "media"], "input");
-    parameters = knownFields(value.parameters, ["duration", "seconds", "resolution", "ratio", "aspect_ratio", "aspectRatio"], "parameters");
-  } else {
-    value = knownFields(value, FLAT_FIELDS, "video request");
-    input = { prompt: value.prompt };
-    parameters = {};
-    parameters.duration = scalarAlias(value, ["duration", "seconds"], duration);
-    if (has(value, "resolution")) parameters.resolution = resolution(value.resolution);
-    const selectedRatio = scalarAlias(value, ["ratio", "aspect_ratio", "aspectRatio"], ratio);
-    if (selectedRatio !== undefined) parameters.ratio = selectedRatio;
-    if (has(value, "size")) {
-      if (typeof value.size !== "string") throw new Error("size must be a resolution or WIDTHxHEIGHT");
-      const size = value.size.trim().toLowerCase();
-      const match = /^([1-9]\d{2,4})x([1-9]\d{2,4})$/.exec(size);
-      let selectedResolution;
-      let selectedRatio;
-      if (match) {
-        const width = Number(match[1]);
-        const height = Number(match[2]);
-        selectedResolution = resolution(Math.min(width, height) + "p");
-        for (const name of RATIOS) {
-          const parts = name.split(":");
-          if (Math.abs(width / height - Number(parts[0]) / Number(parts[1])) < 0.01) selectedRatio = name;
-        }
-        if (!selectedRatio) throw new Error("size does not map to a supported ratio");
-      } else {
-        selectedResolution = resolution(size);
+  const input = has(value, "input") ? knownFields(value.input, ["prompt", "media"], "input") : {};
+  const nestedParameters = has(value, "parameters") ? knownFields(value.parameters, ["duration", "seconds", "resolution", "ratio", "aspect_ratio", "aspectRatio"], "parameters") : {};
+  value = knownFields(value, FLAT_FIELDS, "video request");
+  if (has(value, "prompt")) {
+    if (has(input, "prompt") && input.prompt !== value.prompt) throw new Error("prompt conflicts with input.prompt");
+    input.prompt = value.prompt;
+  }
+  const parameters = {};
+  for (const [name, names, parse] of [
+    ["duration", ["duration", "seconds"], duration],
+    ["resolution", ["resolution"], resolution],
+    ["ratio", ["ratio", "aspect_ratio", "aspectRatio"], ratio],
+  ]) {
+    const flat = scalarAlias(value, names, parse);
+    const nested = scalarAlias(nestedParameters, names, parse);
+    if (flat !== undefined && nested !== undefined && flat !== nested) throw new Error(name + " conflicts between flat and nested parameters");
+    const selected = nested !== undefined ? nested : flat;
+    if (selected !== undefined) parameters[name] = selected;
+  }
+  if (has(value, "size")) {
+    if (typeof value.size !== "string") throw new Error("size must be a resolution or WIDTHxHEIGHT");
+    const size = value.size.trim().toLowerCase();
+    const match = /^([1-9]\d{2,4})x([1-9]\d{2,4})$/.exec(size);
+    let selectedResolution;
+    let selectedRatio;
+    if (match) {
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      selectedResolution = resolution(Math.min(width, height) + "p");
+      for (const name of RATIOS) {
+        const parts = name.split(":");
+        if (Math.abs(width / height - Number(parts[0]) / Number(parts[1])) < 0.01) selectedRatio = name;
       }
-      if (has(parameters, "resolution") && parameters.resolution !== selectedResolution) throw new Error("size conflicts with resolution");
-      if (selectedRatio && has(parameters, "ratio") && parameters.ratio !== selectedRatio) throw new Error("size conflicts with ratio");
-      parameters.resolution = selectedResolution;
-      if (selectedRatio) parameters.ratio = selectedRatio;
+      if (!selectedRatio) throw new Error("size does not map to a supported ratio");
+    } else {
+      selectedResolution = resolution(size);
     }
-    const media = [];
-    for (const group of [
-      { fields: ["images", "image", "image_url", "image_urls", "referenceImages", "reference_images", "reference_image_urls", "input_reference"], type: "reference_image" },
-      { fields: ["videos", "video_url", "video_urls", "input_video", "reference_video", "referenceVideos", "reference_videos"], type: "reference_video" },
-      { fields: ["audios", "audio_url", "audio_urls", "input_audio", "referenceAudios", "reference_audios"], type: "reference_voice" },
-    ]) {
-      const names = group.fields.filter(function (name) { return has(value, name); });
-      if (!names.length) continue;
-      if (has(value, "media")) throw new Error("media cannot be combined with reference URL fields");
-      const urls = referenceURLs(value[names[0]], names[0]);
-      for (const name of names.slice(1)) {
-        const other = referenceURLs(value[name], name);
-        // Order is meaningful to prompts such as @image1. Equal aliases must not
-        // append a second copy; different lists must not be merged or dropped.
-        if (other.length !== urls.length || other.some(function (url, index) { return url !== urls[index]; })) {
-          throw new Error("conflicting reference fields: " + names.join(", "));
-        }
+    if (has(parameters, "resolution") && parameters.resolution !== selectedResolution) throw new Error("size conflicts with resolution");
+    if (selectedRatio && has(parameters, "ratio") && parameters.ratio !== selectedRatio) throw new Error("size conflicts with ratio");
+    parameters.resolution = selectedResolution;
+    if (selectedRatio) parameters.ratio = selectedRatio;
+  }
+  if (has(input, "media")) input.media = mediaList(input.media);
+  if (has(value, "media")) {
+    const items = mediaList(value.media);
+    if (has(input, "media") && (input.media.length !== items.length || items.some((item, index) => item.type !== input.media[index].type || item.url !== input.media[index].url))) {
+      throw new Error("conflicting reference fields: media, input.media");
+    }
+    input.media = items;
+  }
+  const media = input.media || [];
+  for (const group of [
+    { fields: ["images", "image", "image_url", "image_urls", "referenceImages", "reference_images", "reference_image_urls", "input_reference"], type: "reference_image" },
+    { fields: ["videos", "video_url", "video_urls", "input_video", "reference_video", "referenceVideos", "reference_videos"], type: "reference_video" },
+    { fields: ["audios", "audio_url", "audio_urls", "input_audio", "referenceAudios", "reference_audios"], type: "reference_voice" },
+  ]) {
+    const names = group.fields.filter(function (name) { return has(value, name); });
+    if (!names.length) continue;
+    const urls = referenceURLs(value[names[0]], names[0]);
+    for (const name of names.slice(1)) {
+      const other = referenceURLs(value[name], name);
+      if (other.length !== urls.length || other.some(function (url, index) { return url !== urls[index]; })) {
+        throw new Error("conflicting reference fields: " + names.join(", "));
       }
+    }
+    // Compare numbered references by role, retaining their order and intentional
+    // repeats within a list. Repeated representations must not duplicate media.
+    const existing = media.filter(item => item.type === group.type);
+    if (existing.length) {
+      if (existing.length !== urls.length || existing.some((item, index) => item.url !== urls[index])) {
+        throw new Error("conflicting reference fields: " + names.join(", ") + ", media");
+      }
+    } else {
       for (const url of urls) media.push({ type: group.type, url });
     }
-    if (has(value, "media")) input.media = value.media;
-    else if (media.length) input.media = media;
+  }
+  if (has(input, "media") || media.length) input.media = media;
+  for (const [name, type] of [["first_image", "first_frame"], ["last_image", "last_frame"]]) {
+    const url = scalarAlias(value, [name + "_url", name], function (url) {
+      if (!httpURL(url)) throw new Error(name + " must be a public http(s) URL");
+      return url.trim();
+    });
+    if (url === undefined) continue;
+    const items = input.media || [];
+    const frames = items.filter(item => item.type === type);
+    if (frames.length > 1 || (frames.length && frames[0].url !== url)) throw new Error(name + " conflicts with media " + type);
+    input.media = frames.length ? items : items.concat({ type, url });
   }
   if (typeof input.prompt !== "string" || !input.prompt.trim()) throw new Error("prompt is required");
   const output = {
@@ -283,11 +308,11 @@ export function extractUsage(ctx) {
 // Reads the same validated body extractUsage and buildSubmitRequest use.
 export function describeSpec(ctx) {
   const body = modelRequest(ctx);
-  const references = { video: 0, image: 0, audio: 0 };
-  const kinds = { reference_video: "video", first_frame: "image", last_frame: "image", reference_image: "image", reference_voice: "audio" };
+  const references = { video: 0, image: 0, audio: 0, frame: 0 };
+  const kinds = { reference_video: "video", first_frame: "frame", last_frame: "frame", reference_image: "image", reference_voice: "audio" };
   for (const item of body.input.media || []) references[kinds[item.type]] += 1;
   return {
-    spec_version: 2,
+    spec_version: 3,
     reference_video_urls: (body.input.media || []).filter((item) => item.type === "reference_video").map((item) => item.url),
     output_seconds: body.parameters.duration,
     seconds_kind: "exact",

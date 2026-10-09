@@ -74,7 +74,7 @@ func TestParseAccepts(t *testing.T) {
 
 	s, _, err := spec.Parse(valid(map[string]any{"references": refs(int64(1), 0.0, int64(3))}))
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{"video": 1, "image": 0, "audio": 3}, s.References, "explicit zeros are kept")
+	assert.Equal(t, map[string]int{"video": 1, "image": 0, "audio": 3, "frame": 0}, s.References, "explicit zeros are kept")
 }
 
 func TestParseRejects(t *testing.T) {
@@ -121,10 +121,28 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
+func TestParseFrameReferences(t *testing.T) {
+	s, _, err := spec.Parse(valid(nil))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}, s.References, "older versions report no frames")
+
+	withFrame := refs(int64(0), int64(1), int64(0))
+	withFrame["frame"] = int64(2)
+	_, _, err = spec.Parse(valid(map[string]any{"spec_version": int64(2), "references": withFrame}))
+	require.ErrorContains(t, err, "references.frame requires spec_version 3")
+
+	_, _, err = spec.Parse(valid(map[string]any{"spec_version": int64(3)}))
+	require.ErrorContains(t, err, "references.frame is required")
+
+	s, _, err = spec.Parse(valid(map[string]any{"spec_version": int64(3), "references": withFrame}))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"video": 0, "image": 1, "audio": 0, "frame": 2}, s.References, "frames are counted apart from images")
+}
+
 func TestParseVersionAndOptOut(t *testing.T) {
-	_, _, err := spec.Parse(valid(map[string]any{"spec_version": int64(3)}))
+	_, _, err := spec.Parse(valid(map[string]any{"spec_version": int64(4)}))
 	require.ErrorIs(t, err, spec.ErrVersion)
-	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "4")
 
 	_, _, err = spec.Parse(map[string]any{"unsupported": true})
 	require.ErrorIs(t, err, spec.ErrOptOut, "an opt-out needs no other field")

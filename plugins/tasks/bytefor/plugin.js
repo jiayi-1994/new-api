@@ -24,7 +24,7 @@ const REFERENCE_KINDS = [
   { name: "video", type: "video_url", list: "videos", roles: ["reference_video"], max: 10 },
   { name: "audio", type: "audio_url", list: "audios", roles: ["reference_audio"], max: 10 },
 ];
-const FIELDS = ["model", "prompt", "content", "metadata", "duration", "seconds", "resolution", "size", "ratio", "aspect_ratio", "generate_audio", "return_last_frame", "n", "images", "videos", "audios"];
+const FIELDS = ["model", "prompt", "content", "metadata", "duration", "seconds", "resolution", "size", "ratio", "aspect_ratio", "generate_audio", "return_last_frame", "n", "images", "videos", "audios", "first_image_url", "last_image_url", "first_image", "last_image"];
 const METADATA_FIELDS = ["content", "duration", "seconds", "resolution", "ratio", "aspect_ratio", "generate_audio", "return_last_frame"];
 
 const RESOLUTION_FIELD = { description: { en: "Output video resolution", zh: "输出视频分辨率" } };
@@ -44,7 +44,7 @@ export const meta = {
   apiVersion: 1,
   key: "bytefor",
   name: "Bytefor",
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Bytefor Ark compatible API", zh: "通过 Bytefor 火山方舟兼容接口生成视频" },
   icon: "text:B",
@@ -212,6 +212,19 @@ function videoRequest(input, profile) {
       return item;
     }));
   }
+  for (const [name, role] of [["first_image", "first_frame"], ["last_image", "last_frame"]]) {
+    let url;
+    for (const field of [name + "_url", name]) {
+      if (!has(input, field)) continue;
+      const value = referenceURL(REFERENCE_KINDS[0], input[field], field);
+      if (url !== undefined && url !== value) throw new Error(name + " conflicts with " + name + "_url");
+      url = value;
+    }
+    if (url === undefined) continue;
+    const frames = references.filter(item => item.role === role);
+    if (frames.length > 1 || (frames.length && frames[0].image_url.url !== url)) throw new Error(name + " conflicts with content " + role);
+    if (!frames.length) references = references.concat({ type: "image_url", role, image_url: { url } });
+  }
   for (const kind of REFERENCE_KINDS) {
     if (references.filter(function (item) { return item.type === kind.type; }).length > kind.max) throw new Error("at most " + kind.max + " " + kind.name + " references are allowed");
   }
@@ -305,12 +318,14 @@ export function extractUsage(ctx) {
 export function describeSpec(ctx) {
   const params = videoRequest(ctx.requestBody, videoProfile(ctx));
   const [images, videos, audios] = REFERENCE_KINDS.map(function (kind) { return referenceURLs(params, kind); });
+  // first_frame/last_frame condition the output; the host prices them as the "frame" kind, not as reference images.
+  const frames = (params.content || []).filter(function (item) { return item.type === "image_url" && (item.role === "first_frame" || item.role === "last_frame"); }).length;
   return {
-    spec_version: 2,
+    spec_version: 3,
     output_seconds: params.duration,
     seconds_kind: "exact",
     resolution: params.resolution,
-    references: { video: videos.length, image: images.length, audio: audios.length },
+    references: { video: videos.length, image: images.length - frames, audio: audios.length, frame: frames },
     reference_video_urls: videos,
   };
 }

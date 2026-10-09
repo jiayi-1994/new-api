@@ -126,14 +126,15 @@
         }
       ],
       "expected": {
-        "spec_version": 2,
+        "spec_version": 3,
         "output_seconds": 30,
         "seconds_kind": "exact",
         "resolution": "720p",
         "references": {
           "image": 1,
           "video": 2,
-          "audio": 1
+          "audio": 1,
+          "frame": 0
         },
         "reference_video_urls": [
           "https://cdn.example/a.mp4",
@@ -602,14 +603,15 @@
         }
       ],
       "expected": {
-        "spec_version": 2,
+        "spec_version": 3,
         "output_seconds": 30,
         "seconds_kind": "fixed",
         "resolution": "720p",
         "references": {
           "image": 0,
           "video": 0,
-          "audio": 0
+          "audio": 0,
+          "frame": 0
         },
         "reference_video_urls": []
       }

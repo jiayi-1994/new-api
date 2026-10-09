@@ -32,6 +32,7 @@ export const VIDEO_REFERENCE_KINDS: VideoReferenceKind[] = [
   'video',
   'image',
   'audio',
+  'frame',
 ]
 export const VIDEO_REFERENCE_CHARGING_MODES: VideoReferenceMode[] = [
   'per_request',
@@ -204,7 +205,7 @@ function tierError(tier: string): string | null {
 }
 
 const referenceDraftSchema = z.object({
-  kind: z.enum(['video', 'image', 'audio']),
+  kind: z.enum(['video', 'image', 'audio', 'frame']),
   tier: z.string(),
   mode: z.enum([
     '',

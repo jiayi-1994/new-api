@@ -15,7 +15,11 @@ import (
 )
 
 // Version is the highest describeSpec contract version this host prices.
-const Version = 2
+// Version 3 adds the "frame" reference kind (first/last frame images).
+const Version = 3
+
+// frameVersion is the first spec_version that reports references.frame.
+const frameVersion = 3
 
 // MaxOutputSeconds mirrors relay/common.MaxTaskDurationSeconds; this leaf
 // package cannot import the host.
@@ -32,7 +36,7 @@ var (
 	ErrVersion = errors.New("spec version unsupported")
 )
 
-// knownKeys are the top-level describeSpec fields through spec_version 2.
+// knownKeys are the top-level describeSpec fields through spec_version 3.
 var knownKeys = []string{"unsupported", "spec_version", "output_seconds", "seconds_kind", "resolution", "references", "reference_video_urls"}
 
 // Parse strictly validates a describeSpec result. A missing key, a key with a
@@ -78,6 +82,14 @@ func Parse(raw map[string]any) (s videosched.Spec, ignored []string, err error) 
 	s.References = make(map[string]int, len(videosched.ReferenceKinds))
 	for _, kind := range videosched.ReferenceKinds {
 		value, ok := references[kind]
+		if kind == "frame" && version < frameVersion {
+			// Older plugins fold frames into image; they cannot report the kind.
+			if ok {
+				return s, nil, fmt.Errorf("references.frame requires spec_version %d", frameVersion)
+			}
+			s.References[kind] = 0
+			continue
+		}
 		if !ok {
 			return s, nil, fmt.Errorf("references.%s is required", kind)
 		}

@@ -85,7 +85,7 @@ const MEDIA_GROUPS = [
 ];
 const MEDIA_FIELDS = MEDIA_GROUPS.flat();
 const PAYLOAD_FIELDS = ["aspectRatio", "mode", "imageUrls", "videoUrls", "audioUrls", "firstFrameUrl", "lastFrameUrl", "bypassCopyrightReferenceLevel"];
-const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "n", "ratio", "aspect_ratio", "metadata"].concat(PAYLOAD_FIELDS, MEDIA_FIELDS);
+const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "n", "ratio", "aspect_ratio", "metadata", "first_image_url", "last_image_url", "first_image", "last_image"].concat(PAYLOAD_FIELDS, MEDIA_FIELDS);
 const USAGE_SCHEMA = {
   requests: { type: "number", unit: "count", unitLabel: { en: "video", zh: "条" }, description: { en: "Video generation per-video price", zh: "视频按条单价" } },
   seconds: { type: "number", unit: "second", description: { en: "Video generation per-second price", zh: "视频按秒单价" } },
@@ -96,7 +96,7 @@ export const meta = {
   apiVersion: 1,
   key: "sudashui",
   name: "苏打水 Sudashui",
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through Sudashui with purchase-cost scheduling", zh: "通过苏打水生成视频，支持采购成本调度" },
   icon: "text:苏打",
@@ -226,6 +226,16 @@ function videoRequest(input) {
     tier = sizeTier;
   }
 
+  for (const [name, target] of [["first_image", "firstFrameUrl"], ["last_image", "lastFrameUrl"]]) {
+    for (const field of [name + "_url", name]) {
+      if (!has(merged, field)) continue;
+      if (!httpURL(merged[field])) throw new Error(field + " must be a public http(s) URL");
+      const url = merged[field].trim();
+      if (has(merged, target) && (!httpURL(merged[target]) || merged[target].trim() !== url)) throw new Error(field + " conflicts with " + target);
+      merged[target] = url;
+      if (!has(merged, "mode")) merged.mode = "frames";
+    }
+  }
   const mode = has(merged, "mode") ? merged.mode : "references";
   if (mode !== "references" && mode !== "frames") throw new Error("mode must be references or frames");
   const result = { duration: seconds, aspectRatio: ratio || "16:9", mode };
@@ -315,8 +325,9 @@ export function describeSpec(ctx) {
   if (capabilities.schedulable === false) return { unsupported: true };
   const request = normalized.request;
   return {
-    spec_version: 2, output_seconds: request.duration, seconds_kind: capabilities.fixed ? "fixed" : "exact", resolution: request.resolution,
-    references: { image: request.mode === "frames" ? 2 : (request.imageUrls || []).length, video: (request.videoUrls || []).length, audio: (request.audioUrls || []).length },
+    spec_version: 3, output_seconds: request.duration, seconds_kind: capabilities.fixed ? "fixed" : "exact", resolution: request.resolution,
+    // frames mode always carries both frame URLs and no reference arrays.
+    references: { image: (request.imageUrls || []).length, video: (request.videoUrls || []).length, audio: (request.audioUrls || []).length, frame: request.mode === "frames" ? 2 : 0 },
     reference_video_urls: request.videoUrls || [],
   };
 }

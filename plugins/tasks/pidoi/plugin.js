@@ -43,7 +43,7 @@ const IMAGE_PRIMARY = ["image_url", "image", "input_reference"];
 const VIDEO_FIELDS = ["reference_video", "reference_videos", "videos", "video_url", "video_urls", "input_video", "referenceVideos"];
 const AUDIO_FIELDS = ["audio_url", "audio_urls", "audios", "input_audio", "referenceAudios", "reference_audios"];
 const MEDIA_FIELDS = IMAGE_LISTS.concat(IMAGE_EXTRAS, IMAGE_PRIMARY, VIDEO_FIELDS, AUDIO_FIELDS);
-const STRUCTURED_MEDIA_FIELDS = ["media", "input", "parameters"];
+const UNSUPPORTED_MEDIA_FIELDS = ["media", "input", "parameters", "first_image_url", "last_image_url", "first_image", "last_image"];
 const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "aspect_ratio", "aspectRatio", "ratio"].concat(MEDIA_FIELDS);
 const REQUEST_SCHEMA = {
   requests: { type: "number", unit: "count", description: { en: "Video generation unit price", zh: "视频生成单价" } },
@@ -56,7 +56,7 @@ export const meta = {
   apiVersion: 1,
   key: "pidoi",
   name: "Pidoi Video",
-  version: "1.0.4",
+  version: "1.0.5",
   author: { name: "jiayi-1994" },
   description: { en: "Pidoi video generation with per-request or per-second pricing by model", zh: "通过 Pidoi 生成视频，按模型分别按次或按秒计费" },
   icon: "text:PI",
@@ -144,7 +144,7 @@ function mediaAliases(value, names) {
 
 function videoParams(value) {
   if (!isObject(value)) throw new Error("video request must be an object");
-  for (const name of STRUCTURED_MEDIA_FIELDS) {
+  for (const name of UNSUPPORTED_MEDIA_FIELDS) {
     if (has(value, name)) throw new Error(name + " is not supported; use flat reference URL fields");
   }
   if (typeof value.prompt !== "string" || !value.prompt.trim()) throw new Error("prompt is required");
@@ -378,7 +378,7 @@ export const protocols = {
         value = {};
         for (const rawName of Object.keys(body.fields || {})) {
           const name = rawName.endsWith("[]") ? rawName.slice(0, -2) : rawName;
-          if (STRUCTURED_MEDIA_FIELDS.includes(name)) throw new Error(name + " is not supported; use flat reference URL fields");
+          if (UNSUPPORTED_MEDIA_FIELDS.includes(name)) throw new Error(name + " is not supported; use flat reference URL fields");
           if (!FIELDS.includes(name)) continue;
           if (has(value, name)) throw new Error("duplicate field: " + name);
           const entries = body.fields[rawName];

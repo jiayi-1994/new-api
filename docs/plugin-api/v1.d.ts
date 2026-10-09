@@ -90,8 +90,9 @@ export interface VideoSpec {
   output_seconds?: number;
   seconds_kind?: "exact" | "fixed";
   resolution?: string;
-  references: {video: number; image: number; audio: number};
-  /** spec_version 2 only: every submitted input video URL, in order, including duplicates. Transient; never stored in audits. */
+  /** spec_version 3 adds frame: first/last frame images conditioning the output, not counted under image. */
+  references: {video: number; image: number; audio: number; frame?: number};
+  /** spec_version 2 and later: every submitted input video URL, in order, including duplicates. Transient; never stored in audits. */
   reference_video_urls?: readonly string[];
 }
 /** Optional, read-only scheduling facts; never billing usage. */

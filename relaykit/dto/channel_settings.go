@@ -151,7 +151,9 @@ const (
 	MaxVideoCapacityGroupLength = 64
 )
 
-var videoReferenceKinds = []string{"video", "image", "audio"}
+// videoReferenceKinds mirrors videosched.ReferenceKinds; "frame" is the
+// first/last frame images of image-to-video requests.
+var videoReferenceKinds = []string{"video", "image", "audio", "frame"}
 
 type VideoSchedulingConfig struct {
 	Quality       float64 `json:"quality"`                  // [0,1]
@@ -173,8 +175,8 @@ type VideoModelCost struct {
 	// AllowedSecondsByResolution, when present, replaces the model-wide
 	// duration constraints. An absent tier cannot accept any duration.
 	AllowedSecondsByResolution map[string][]int `json:"allowed_seconds_by_resolution,omitempty"`
-	// References maps kind (video|image|audio) -> tier|"*" -> rule. A missing
-	// kind or tier is unpriced, never included.
+	// References maps kind (video|image|audio|frame) -> tier|"*" -> rule. A
+	// missing kind or tier is unpriced, never included.
 	References map[string]map[string]VideoReferenceCost `json:"references,omitempty"`
 }
 

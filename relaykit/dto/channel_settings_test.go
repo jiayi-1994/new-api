@@ -746,6 +746,8 @@ func TestVideoSchedulingConfigValidate(t *testing.T) {
 	}{
 		{name: "valid with explicit zero surcharge", json: valid},
 		{name: "references absent and price at bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":100}}}}`},
+		{name: "frame references are a kind of their own", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"image":{"*":{"mode":"unsupported"}},"frame":{"*":{"mode":"per_input","value":0.1}}}}}}`},
+		{name: "input seconds rejected for frames", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"frame":{"*":{"mode":"per_input_second","value":0.1}}}}}}`, wantErr: "requires video references"},
 		{name: "price just over bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":100.00000000000001}}}}`, wantErr: "price for tier"},
 		{name: "per second unit over bound", json: `{"models":{"m":{"mode":"per_second","prices":{"*":101}}}}`, wantErr: "price for tier"},
 		{name: "surcharge over bound", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"references":{"video":{"*":{"mode":"per_request","value":101}}}}}}`, wantErr: "value must be within"},

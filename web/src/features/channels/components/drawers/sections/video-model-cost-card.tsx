@@ -96,6 +96,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
     video: t('Reference videos'),
     image: t('Reference images'),
     audio: t('Reference audio'),
+    frame: t('First and last frames'),
   }
 
   return (
@@ -311,7 +312,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
               })
             }
           >
-            {t('All three included')}
+            {t('All kinds included')}
           </Button>
         </div>
         {VIDEO_REFERENCE_KINDS.map((kind) => {

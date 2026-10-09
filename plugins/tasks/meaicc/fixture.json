@@ -1082,7 +1082,7 @@
           }
         }
       ],
-      "expectedError": "unsupported video request field: prompt"
+      "expectedError": "prompt conflicts with input.prompt"
     },
     {
       "name": "Duration aliases must agree",
@@ -1804,7 +1804,11 @@
           }
         }
       ],
-      "expected": {"rejected": {"reason": "余额不足"}}
+      "expected": {
+        "rejected": {
+          "reason": "余额不足"
+        }
+      }
     },
     {
       "name": "Failure with a task ID is terminal at submission",
@@ -3323,6 +3327,176 @@
         }
       ],
       "expectedError": "between 1 and 30"
+    },
+    {
+      "name": "Canvas mixed json request normalizes duplicate references and scalar aliases",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "c4-seedance2.0",
+          "upstreamModel": "sd-2-c4",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "c4-seedance2.0",
+              "prompt": "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词",
+              "seconds": "15",
+              "duration": 15,
+              "resolution": "720p",
+              "aspect_ratio": "9:16",
+              "images": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png",
+                "https://cdn.example/3.png"
+              ],
+              "image_urls": [
+                "https://cdn.example/1.png",
+                "https://cdn.example/2.png",
+                "https://cdn.example/3.png"
+              ],
+              "generate_audio": true,
+              "input": {
+                "prompt": "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词",
+                "media": [
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/1.png"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/2.png"
+                  },
+                  {
+                    "type": "reference_image",
+                    "url": "https://cdn.example/3.png"
+                  }
+                ]
+              },
+              "parameters": {
+                "resolution": "720P",
+                "duration": 15,
+                "ratio": "9:16",
+                "prompt_extend": false,
+                "watermark": false
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "c4-seedance2.0",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
+    },
+    {
+      "name": "Canvas mixed multipart request normalizes duplicate references and scalar aliases",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "c4-seedance2.0",
+          "upstreamModel": "sd-2-c4",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "c4-seedance2.0"
+              ],
+              "prompt": [
+                "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词"
+              ],
+              "seconds": [
+                "15"
+              ],
+              "duration": [
+                "15"
+              ],
+              "resolution": [
+                "720p"
+              ],
+              "aspect_ratio": [
+                "9:16"
+              ],
+              "images": [
+                "[\"https://cdn.example/1.png\",\"https://cdn.example/2.png\",\"https://cdn.example/3.png\"]"
+              ],
+              "image_urls": [
+                "[\"https://cdn.example/1.png\",\"https://cdn.example/2.png\",\"https://cdn.example/3.png\"]"
+              ],
+              "generate_audio": [
+                "true"
+              ],
+              "input": [
+                "{\"prompt\":\"图1是林秀芳，图2是张翠花，图3是别墅客厅。\\n【15秒段1】即梦提示词\",\"media\":[{\"type\":\"reference_image\",\"url\":\"https://cdn.example/1.png\"},{\"type\":\"reference_image\",\"url\":\"https://cdn.example/2.png\"},{\"type\":\"reference_image\",\"url\":\"https://cdn.example/3.png\"}]}"
+              ],
+              "parameters": [
+                "{\"resolution\":\"720P\",\"duration\":15,\"ratio\":\"9:16\",\"prompt_extend\":false,\"watermark\":false}"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "c4-seedance2.0",
+        "action": "reference_to_video",
+        "requestBody": {
+          "input": {
+            "prompt": "图1是林秀芳，图2是张翠花，图3是别墅客厅。\n【15秒段1】即梦提示词",
+            "media": [
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/1.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/2.png"
+              },
+              {
+                "type": "reference_image",
+                "url": "https://cdn.example/3.png"
+              }
+            ]
+          },
+          "parameters": {
+            "duration": 15,
+            "resolution": "720p",
+            "ratio": "9:16"
+          }
+        }
+      }
     }
   ]
 }
