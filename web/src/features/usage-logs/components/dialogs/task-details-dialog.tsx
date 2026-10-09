@@ -18,14 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Shield01Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
+import { CopyButton } from '@/components/copy-button'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { Label } from '@/components/ui/label'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
+import { getTaskRequestBody } from '../../api'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
 import { resolveTaskDetailAccess } from '../../lib/task-details'
 import type { TaskLog } from '../../types'
@@ -66,6 +70,54 @@ function DetailSection(props: {
         {props.children}
       </div>
     </section>
+  )
+}
+
+// The payload is shown exactly as sent: re-serializing JSON would round
+// integers beyond 2^53, such as seeds.
+function TaskRequestBodySection(props: { taskId: string; open: boolean }) {
+  const { t } = useTranslation()
+  const query = useQuery({
+    queryKey: ['usage-logs', 'task-request-body', props.taskId],
+    queryFn: async () =>
+      requireServerSuccess(await getTaskRequestBody(props.taskId)),
+    enabled: props.open,
+    retry: false,
+    staleTime: 30_000,
+  })
+  const record = query.data?.data
+
+  let content: React.ReactNode
+  if (query.isPending) {
+    content = t('Loading...')
+  } else if (query.isError) {
+    content = t('Failed to load')
+  } else if (!record?.body) {
+    content = t('Not recorded')
+  }
+
+  return (
+    <DetailSection label={t('Request body')}>
+      {record?.body ? (
+        <>
+          <div className='flex items-center justify-between gap-2'>
+            <span className='text-muted-foreground min-w-0 truncate font-mono text-xs'>
+              {record.content_type || '-'}
+            </span>
+            <CopyButton
+              value={record.body}
+              className='size-6'
+              iconClassName='size-3.5'
+            />
+          </div>
+          <pre className='bg-background/60 max-h-80 overflow-y-auto rounded border p-2 font-mono text-[11px] leading-relaxed wrap-anywhere whitespace-pre-wrap'>
+            {record.body}
+          </pre>
+        </>
+      ) : (
+        <span className='text-muted-foreground text-xs'>{content}</span>
+      )}
+    </DetailSection>
   )
 }
 
@@ -161,6 +213,8 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
             <DetailRow label={t('Fail Reason')} value={props.log.fail_reason} />
           ) : null}
         </DetailSection>
+
+        <TaskRequestBodySection taskId={props.log.task_id} open={props.open} />
 
         {props.isAdmin ? (
           <DetailSection

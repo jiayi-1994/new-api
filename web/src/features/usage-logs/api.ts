@@ -28,6 +28,7 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
   TaskArtifactsResponse,
+  TaskRequestBodyResponse,
   UserInfo,
 } from './types'
 
@@ -124,4 +125,12 @@ export async function getTaskArtifacts(taskId: string) {
     taskArtifactRequestConfig
   )
   return parseTaskArtifactsResponse(response.data)
+}
+
+export async function getTaskRequestBody(taskId: string) {
+  const response = await api.get<TaskRequestBodyResponse>(
+    `/api/task/${encodeURIComponent(taskId)}/request_body`,
+    taskArtifactRequestConfig
+  )
+  return response.data
 }

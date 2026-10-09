@@ -31,7 +31,7 @@ func setupGenericTaskTest(t *testing.T) *model.Task {
 	common.RedisEnabled = false
 	// The dialect harness lets the same fixture run against MySQL and
 	// PostgreSQL when TEST_TASK_DB_DIALECT selects them; SQLite stays the default.
-	database, _ := openTaskDialectDatabase(t, &model.Task{}, &model.Channel{}, &model.User{})
+	database, _ := openTaskDialectDatabase(t, &model.Task{}, &model.Channel{}, &model.User{}, &model.TaskRequestBody{})
 	model.DB = database
 	t.Cleanup(func() {
 		model.DB = originalDB
@@ -137,6 +137,58 @@ func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 	_, exists, err = getTaskForArtifactRequest(apiToken, task.TaskID)
 	require.NoError(t, err)
 	assert.False(t, exists)
+}
+
+func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	require.NoError(t, model.DB.Create(&model.TaskRequestBody{
+		TaskRowID: task.ID, ContentType: "application/json", Size: 14, Body: `{"prompt":"a"}`,
+	}).Error)
+	legacy := &model.Task{TaskID: "task_legacy", Platform: "document", UserId: 7, ChannelId: 1, Status: model.TaskStatusSuccess}
+	require.NoError(t, model.DB.Create(legacy).Error)
+
+	for _, tc := range []struct {
+		name      string
+		taskID    string
+		userID    int
+		role      int
+		tokenID   int
+		wantFound bool
+		wantBody  string
+	}{
+		{name: "owner", taskID: task.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true, wantBody: `{"prompt":"a"}`},
+		{name: "admin session", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true, wantBody: `{"prompt":"a"}`},
+		{name: "other user", taskID: task.TaskID, userID: 8, role: common.RoleCommonUser},
+		{name: "root api token", taskID: task.TaskID, userID: 8, role: common.RoleRootUser, tokenID: 99},
+		{name: "owner of an unrecorded task", taskID: legacy.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/task/"+tc.taskID+"/request_body", nil)
+			c.Params = gin.Params{{Key: "task_id", Value: tc.taskID}}
+			c.Set("id", tc.userID)
+			c.Set("role", tc.role)
+			if tc.tokenID != 0 {
+				c.Set("token_id", tc.tokenID)
+			}
+
+			GetTaskRequestBody(c)
+
+			var response struct {
+				Success bool                   `json:"success"`
+				Data    *model.TaskRequestBody `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, tc.wantFound, response.Success)
+			if tc.wantBody == "" {
+				assert.Nil(t, response.Data)
+				return
+			}
+			require.NotNil(t, response.Data)
+			assert.Equal(t, tc.wantBody, response.Data.Body)
+		})
+	}
 }
 
 func TestDashboardTaskArtifactsReturnsLegacyCapabilityWithoutUpstreamURL(t *testing.T) {

@@ -414,6 +414,17 @@ export interface TaskArtifactsResponse {
   }
 }
 
+/** Client submit payload; `data` is null for tasks recorded before it was kept. */
+export interface TaskRequestBodyResponse {
+  success: boolean
+  message?: string
+  data?: {
+    content_type: string
+    size: number
+    body: string
+  } | null
+}
+
 // ============================================================================
 // Common Log Types
 // ============================================================================

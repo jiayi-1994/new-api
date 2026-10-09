@@ -755,6 +755,14 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	durable = true
+	// Best effort, and detached from the request context: the task row is
+	// already durable, so a disconnecting client must not drop its payload.
+	if requestBody := service.TaskRequestBodySnapshot(c); requestBody != nil {
+		requestBody.TaskRowID = task.ID
+		if err := model.DB.Create(requestBody).Error; err != nil {
+			common.SysError("save task request body error: " + err.Error())
+		}
+	}
 	common.SetContextKey(c, constant.ContextKeyTaskPersisted, task.TaskID)
 	service.VideoTaskPersisted(c, task)
 	stage = "settle"

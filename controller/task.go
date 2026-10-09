@@ -440,6 +440,36 @@ func GetUserTask(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+// GetTaskRequestBody returns the payload the client submitted for a task.
+// Admin sessions can read any task; tokens and other users only their own.
+// Tasks submitted before the payload was recorded return null data.
+func GetTaskRequestBody(c *gin.Context) {
+	taskID := c.Param("task_id")
+	var task *model.Task
+	var exists bool
+	var err error
+	if c.GetInt("token_id") == 0 && c.GetInt("role") >= common.RoleAdminUser {
+		task, exists, err = model.GetByOnlyTaskId(taskID)
+	} else {
+		task, exists, err = model.GetByTaskId(c.GetInt("id"), taskID)
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !exists || task == nil {
+		common.ApiErrorMsg(c, "task not found")
+		return
+	}
+	record, _, err := model.GetTaskRequestBody(task.ID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	common.ApiSuccess(c, record)
+}
+
 func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskDto {
 	var userIDMap map[int]*model.UserBase
 	if fillUser {

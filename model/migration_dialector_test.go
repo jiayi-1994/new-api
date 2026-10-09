@@ -128,6 +128,22 @@ func TestMigrationSchemaStability(t *testing.T) {
 				}
 			})
 
+			t.Run("task_request_body", func(t *testing.T) {
+				t.Cleanup(func() { _ = db.Migrator().DropTable(&TaskRequestBody{}) })
+				require.NoError(t, db.AutoMigrate(&TaskRequestBody{}))
+				recorder.reset()
+				require.NoError(t, db.AutoMigrate(&TaskRequestBody{}))
+				assert.Empty(t, recorder.schemaMutations())
+
+				// The largest stored snapshot must fit every dialect; MySQL TEXT holds 65535 bytes.
+				body := strings.Repeat("中", 20000) + "...[truncated]"
+				require.NoError(t, db.Create(&TaskRequestBody{TaskRowID: 42, ContentType: "application/json", Size: 1 << 20, Body: body}).Error)
+				var saved TaskRequestBody
+				require.NoError(t, db.Where("task_row_id = ?", 42).First(&saved).Error)
+				assert.Equal(t, body, saved.Body)
+				assert.Error(t, db.Create(&TaskRequestBody{TaskRowID: 42}).Error, "one body per task")
+			})
+
 			t.Run("unique_constraint_changes", func(t *testing.T) {
 				const table = "migration_constraint_test"
 				t.Cleanup(func() { _ = db.Migrator().DropTable(table) })
