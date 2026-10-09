@@ -1,6 +1,6 @@
 // Task Plugin API v1 for https://newapi.megabyai.cc/video-docs.
 // Self-contained: install this file in an official New API instance.
-const MODELS = ["videos-mini", "videos-fast", "videos-standard"];
+const MODELS = ["videos-mini", "videos-fast", "videos-standard", "sd-2-720p"];
 // 分辨率开关：仅保留要开放的档位，至少保留一个；删去后重新上传插件并保存价格。
 // 官方插件无法读取后台价格，价格留空/填 0 不会禁用；此列表同步控制校验和展示。
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
@@ -29,7 +29,7 @@ export const meta = {
   apiVersion: 1,
   key: "megabyai",
   name: "Mega Video",
-  version: "2.1.5",
+  version: "2.1.6",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Mega API", zh: "通过 Mega API 生成视频" },
   icon: "text:M",

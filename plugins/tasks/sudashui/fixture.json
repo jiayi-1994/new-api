@@ -1,0 +1,659 @@
+{
+  "cases": [
+    {
+      "name": "decode public model alias and all reference types",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "body": {
+            "kind": "json",
+            "value": {
+              "model": "seedance-2.5",
+              "prompt": "a cat",
+              "seconds": "30",
+              "resolution": "720p",
+              "images": [
+                "https://cdn.example/a.png"
+              ],
+              "videos": [
+                "https://cdn.example/a.mp4",
+                "https://cdn.example/a.mp4"
+              ],
+              "audios": [
+                "https://cdn.example/a.mp3"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "seedance-2.5",
+        "action": "reference_to_video",
+        "requestBody": {
+          "prompt": "a cat",
+          "duration": 30,
+          "resolution": "720p",
+          "aspectRatio": "16:9",
+          "mode": "references",
+          "imageUrls": [
+            "https://cdn.example/a.png"
+          ],
+          "videoUrls": [
+            "https://cdn.example/a.mp4",
+            "https://cdn.example/a.mp4"
+          ],
+          "audioUrls": [
+            "https://cdn.example/a.mp3"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mapped model builds a string payload without top-level resolution or media",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "upstreamModel": "sdas-mg-sd2.5-720p",
+          "baseUrl": "https://api.sudashuiapi.com/",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "720p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.sudashuiapi.com/v1/video/generations",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sdas-mg-sd2.5-720p",
+          "duration": 30,
+          "metadata": {
+            "payload": "{\"aspectRatio\":\"16:9\",\"mode\":\"references\",\"imageUrls\":[\"https://cdn.example/a.png\"],\"videoUrls\":[\"https://cdn.example/a.mp4\",\"https://cdn.example/a.mp4\"],\"audioUrls\":[\"https://cdn.example/a.mp3\"]}"
+          },
+          "prompt": "a cat"
+        }
+      }
+    },
+    {
+      "name": "repeated video references retain their full ordered URL list",
+      "hook": "describeSpec",
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "upstreamModel": "sdas-mg-sd2.5-720p",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "720p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "spec_version": 2,
+        "output_seconds": 30,
+        "seconds_kind": "exact",
+        "resolution": "720p",
+        "references": {
+          "image": 1,
+          "video": 2,
+          "audio": 1
+        },
+        "reference_video_urls": [
+          "https://cdn.example/a.mp4",
+          "https://cdn.example/a.mp4"
+        ]
+      }
+    },
+    {
+      "name": "per-second quantities use the mapped model",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "upstreamModel": "sdas-mg-sd2.5-720p",
+          "baseUrl": "https://api.sudashuiapi.com/",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "720p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 30,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "per-video model bills one output",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sdas-qd-seedance-2.5-720p",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "720p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "mapped resolution mismatch is rejected before submitting",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "upstreamModel": "sdas-mg-sd2.5-720p",
+          "baseUrl": "https://api.sudashuiapi.com/",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "1080p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expectedError": "resolution conflicts"
+    },
+    {
+      "name": "override duration cannot bypass per-model bounds",
+      "hook": "describeSpec",
+      "args": [
+        {
+          "model": "seedance-2.5",
+          "upstreamModel": "sdas-mg-sd2.0-720p",
+          "baseUrl": "https://api.sudashuiapi.com/",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "a cat",
+            "duration": 30,
+            "resolution": "720p",
+            "aspectRatio": "16:9",
+            "mode": "references",
+            "imageUrls": [
+              "https://cdn.example/a.png"
+            ],
+            "videoUrls": [
+              "https://cdn.example/a.mp4",
+              "https://cdn.example/a.mp4"
+            ],
+            "audioUrls": [
+              "https://cdn.example/a.mp3"
+            ]
+          }
+        }
+      ],
+      "expectedError": "duration must be between 4 and 15"
+    },
+    {
+      "name": "nested hidden duration is rejected",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sdas-mg-sd2.5-720p",
+          "requestBody": {
+            "duration": 4,
+            "metadata": {
+              "payload": "{\"duration\":30}"
+            }
+          }
+        }
+      ],
+      "expectedError": "unsupported metadata.payload parameter: duration"
+    },
+    {
+      "name": "documented queued creation remains asynchronous",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "statusCode": 202,
+          "body": {
+            "id": "task-123",
+            "task_id": "task-123",
+            "object": "video",
+            "status": "queued",
+            "progress": 0
+          }
+        }
+      ],
+      "expected": {
+        "taskId": "task-123",
+        "taskData": {
+          "id": "task-123",
+          "task_id": "task-123",
+          "object": "video",
+          "status": "queued",
+          "progress": 0
+        }
+      }
+    },
+    {
+      "name": "explicit structured business rejection is safe to classify",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "statusCode": 200,
+          "body": {
+            "code": "fail_to_fetch_task",
+            "message": "{\"state\":\"failed\",\"err_code\":\"invalid_request\",\"message\":\"duration must be from 4 to 15 seconds.\",\"creations\":[]}",
+            "data": null
+          }
+        }
+      ],
+      "expected": {
+        "rejected": {
+          "reason": "invalid_request: duration must be from 4 to 15 seconds."
+        }
+      }
+    },
+    {
+      "name": "unstructured fetch errors never authorize paid resubmission",
+      "hook": "parseSubmitResponse",
+      "args": [
+        {},
+        {
+          "statusCode": 200,
+          "body": {
+            "code": "fail_to_fetch_task",
+            "message": "network failure",
+            "data": null
+          }
+        }
+      ],
+      "expectedError": "ambiguous"
+    },
+    {
+      "name": "query uses persisted upstream id and encoded path",
+      "hook": "buildQueryRequest",
+      "args": [
+        {
+          "taskId": "task/123",
+          "baseUrl": "https://api.sudashuiapi.com/",
+          "authHeader": "Bearer fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.sudashuiapi.com/v1/video/generations/task%2F123",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key"
+        }
+      }
+    },
+    {
+      "name": "query completion ignores numeric database row id",
+      "hook": "parseTaskResult",
+      "args": [
+        {
+          "taskId": "task-123"
+        },
+        {
+          "code": "success",
+          "message": "",
+          "data": {
+            "id": 1339987,
+            "task_id": "task-123",
+            "status": "SUCCESS",
+            "result_url": "https://files.sudashuiapi.com/output.mp4",
+            "progress": "100%",
+            "data": {
+              "state": "success",
+              "creations": [
+                {
+                  "id": "private-creation",
+                  "url": "https://files.sudashuiapi.com/output.mp4"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "status": "SUCCESS",
+        "progress": "100%"
+      }
+    },
+    {
+      "name": "query failure reason is not a video URL",
+      "hook": "parseTaskResult",
+      "args": [
+        {
+          "taskId": "task-123"
+        },
+        {
+          "code": "success",
+          "data": {
+            "task_id": "task-123",
+            "status": "FAILURE",
+            "fail_reason": "Real human faces are not supported.",
+            "result_url": "Real human faces are not supported.",
+            "progress": "100%",
+            "data": {
+              "state": "failed",
+              "creations": []
+            }
+          }
+        }
+      ],
+      "expected": {
+        "status": "FAILURE",
+        "progress": "100%",
+        "reason": "Real human faces are not supported."
+      }
+    },
+    {
+      "name": "HTTP-success error envelope remains a polling error",
+      "hook": "parseTaskResult",
+      "args": [
+        {},
+        {
+          "code": "unauthorized",
+          "message": "unauthorized",
+          "data": null
+        }
+      ],
+      "expected": {
+        "status": "UNKNOWN",
+        "reason": "unrecognized or conflicting Sudashui task status"
+      }
+    },
+    {
+      "name": "completed output is a host video artifact",
+      "hook": "listArtifacts",
+      "args": [
+        {
+          "status": "SUCCESS",
+          "data": {
+            "code": "success",
+            "message": "",
+            "data": {
+              "id": 1339987,
+              "task_id": "task-123",
+              "status": "SUCCESS",
+              "result_url": "https://files.sudashuiapi.com/output.mp4",
+              "progress": "100%",
+              "data": {
+                "state": "success",
+                "creations": [
+                  {
+                    "id": "private-creation",
+                    "url": "https://files.sudashuiapi.com/output.mp4"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "expected": [
+        {
+          "key": "video",
+          "type": "video",
+          "mimeType": "video/mp4"
+        }
+      ]
+    },
+    {
+      "name": "HEAD content never forwards API or client credentials",
+      "hook": "buildContentRequest",
+      "args": [
+        {
+          "artifactKey": "video",
+          "apiKey": "fixture-only-key",
+          "data": {
+            "code": "success",
+            "message": "",
+            "data": {
+              "id": 1339987,
+              "task_id": "task-123",
+              "status": "SUCCESS",
+              "result_url": "https://files.sudashuiapi.com/output.mp4",
+              "progress": "100%",
+              "data": {
+                "state": "success",
+                "creations": [
+                  {
+                    "id": "private-creation",
+                    "url": "https://files.sudashuiapi.com/output.mp4"
+                  }
+                ]
+              }
+            }
+          },
+          "clientRequest": {
+            "method": "HEAD",
+            "headers": {
+              "Authorization": "private-client-token"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://files.sudashuiapi.com/output.mp4",
+        "method": "HEAD",
+        "credentialless": true
+      }
+    },
+    {
+      "name": "renderer exposes only video output",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "render"
+      ],
+      "args": [
+        {},
+        {
+          "status": "SUCCESS",
+          "data": {
+            "code": "success",
+            "message": "",
+            "data": {
+              "id": 1339987,
+              "task_id": "task-123",
+              "status": "SUCCESS",
+              "result_url": "https://files.sudashuiapi.com/output.mp4",
+              "progress": "100%",
+              "data": {
+                "state": "success",
+                "creations": [
+                  {
+                    "id": "private-creation",
+                    "url": "https://files.sudashuiapi.com/output.mp4"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://files.sudashuiapi.com/output.mp4"
+      }
+    },
+    {
+      "name": "upstream credits never alter reserved output quantities",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {},
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "duration": 0,
+          "credits": -100000
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "face rejection does not penalize channel health",
+      "hook": "classifyFailure",
+      "args": [
+        "Real human faces are not supported."
+      ],
+      "expected": "user"
+    },
+    {
+      "name": "2k never silently becomes a guessed scheduling tier",
+      "hook": "describeSpec",
+      "args": [
+        {
+          "model": "sdas-gf-seedance-2.0-2k",
+          "requestBody": {
+            "duration": 4
+          }
+        }
+      ],
+      "expected": {
+        "unsupported": true
+      }
+    },
+    {
+      "name": "fixed 30 second product reports a fixed spec",
+      "hook": "describeSpec",
+      "args": [
+        {
+          "model": "sdas-ll-sd2.5-pro-30s-720p",
+          "requestBody": {
+            "duration": 30
+          }
+        }
+      ],
+      "expected": {
+        "spec_version": 2,
+        "output_seconds": 30,
+        "seconds_kind": "fixed",
+        "resolution": "720p",
+        "references": {
+          "image": 0,
+          "video": 0,
+          "audio": 0
+        },
+        "reference_video_urls": []
+      }
+    },
+    {
+      "name": "multipart nested payload keeps numeric preprocessing level",
+      "hook": "protocols",
+      "path": [
+        "openai_video",
+        "decodeRequest"
+      ],
+      "args": [
+        {
+          "model": "sdas-qd-seedance-2.0-720p",
+          "upstreamModel": "sdas-qd-seedance-2.0-720p",
+          "body": {
+            "kind": "multipart",
+            "fields": {
+              "model": [
+                "sdas-qd-seedance-2.0-720p"
+              ],
+              "duration": [
+                "4"
+              ],
+              "metadata": [
+                "{\"payload\":\"{\\\"aspectRatio\\\":\\\"16:9\\\",\\\"mode\\\":\\\"frames\\\",\\\"firstFrameUrl\\\":\\\"https://cdn.example/first.png\\\",\\\"lastFrameUrl\\\":\\\"https://cdn.example/last.png\\\",\\\"bypassCopyrightReferenceLevel\\\":0.7}\"}"
+              ]
+            }
+          }
+        }
+      ],
+      "expected": {
+        "kind": "submit",
+        "model": "sdas-qd-seedance-2.0-720p",
+        "action": "reference_to_video",
+        "requestBody": {
+          "duration": 4,
+          "aspectRatio": "16:9",
+          "mode": "frames",
+          "firstFrameUrl": "https://cdn.example/first.png",
+          "lastFrameUrl": "https://cdn.example/last.png",
+          "bypassCopyrightReferenceLevel": 0.7
+        }
+      }
+    }
+  ]
+}

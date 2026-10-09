@@ -1,0 +1,458 @@
+{
+  "source": "https://www.sudashuiapi.com/api/pricing",
+  "retrievedAt": "2026-10-07",
+  "models": [
+    {
+      "model_name": "bf-sdas-2.0",
+      "description": "9图 3音频 3视频",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "bf-sdas-2.0-fast",
+      "description": "9图 3音频 3视频",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "bf-sdas-2.0-fast-real-priority",
+      "description": "9图 3音频 3视频",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "bf-sdas-2.0-real-priority",
+      "description": "9图 3音频 3视频",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "bf-sdas-2.5-480p",
+      "description": "30图10视频10音频，4-30s，1:1, \"3:4\", \"4:3\", \"9:16\", \"16:9\", \"21:9\"，原生过人脸",
+      "tags": "480p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "bf-sdas-2.5-720p",
+      "description": "30图10视频10音频，4-30s，1:1, \"3:4\", \"4:3\", \"9:16\", \"16:9\", \"21:9\"，原生过人脸",
+      "tags": "720p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "ld-sdas-2-cvk",
+      "description": "9图3音频3视频，4-15s，支持真人，提示词不能超过15000字符",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "ld-sdas-cvk-pro-933-720p",
+      "description": "9图3视频3音频；4-15s；比例支持 21:9、16:9、4:3、1:1、3:4、9:16，提示词不能超过15000字符，非原生过人脸",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-gf-seedance-2.0-1080p",
+      "description": "官方特价模型，9图0视频3音频，4-15s，超分模型，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "1080p,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf-seedance-2.0-2k",
+      "description": "官方特价模型，9图0视频3音频，4-15s，超分模型，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "2k,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf-seedance-2.0-4k",
+      "description": "官方特价模型，9图0视频3音频，4-15s，超分模型，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "4k,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf-seedance-2.0-720p",
+      "description": "官方特价模型，9图0视频3音频，4-15s，超分模型，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "720p,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf-seedance-2.0-fast-720p",
+      "description": "官方特价模型，9图0视频3音频，4-15s，超分模型，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "720p,s2.0fast,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf3-seedance-2.0-1080p",
+      "description": "官方标准模型，不是超分，9图0视频3音频，4-15s，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "1080p,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf3-seedance-2.0-720p",
+      "description": "官方标准模型，不是超分，9图0视频3音频，4-15s，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "720p,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf3-seedance-2.0-fast-720p",
+      "description": "官方标准模型，不是超分，9图0视频3音频，4-15s，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "720p,s2.0fast,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf3-seedance-2.0-mini-720p",
+      "description": "官方标准模型，不是超分，9图0视频3音频，4-15s，按秒计费，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。",
+      "tags": "480p,s2.0mini,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-480p",
+      "description": "官转极速通道，9图0视频3音频，4-15s，按秒计费，比例支持：1:1、3:4、4:3、9:16、16:9、21:9，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "480p,s2.0满血,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-5-1080p",
+      "description": "官转极速通道，30图0视频10音频，4s-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "1080p,s2.5,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-5-480p",
+      "description": "官转极速通道，30图0视频10音频，4s-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "480p,s2.5,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-5-720p",
+      "description": "官转极速通道，30图0视频10音频，4s-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "720p,s2.5,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-fast-480p",
+      "description": "官转极速通道，9图0视频3音频，4-15s，按秒计费，比例支持：1:1、3:4、4:3、9:16、16:9、21:9，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "480p,s2.0fast,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-gf8-seedance-2-mini-480p",
+      "description": "官转极速通道，9图0视频3音频，4-15s，按秒计费，比例支持：1:1、3:4、4:3、9:16、16:9、21:9，每秒价格=输入价格，其他标注的价格不用管，系统自动按秒计费。不是超分",
+      "tags": "480p,s2.0mini,支持真人,官方模型",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-hn-sd2.0-933-720p",
+      "description": null,
+      "tags": null,
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-hn-sd2.0-fast-720p",
+      "description": "4图3视频1音频；5s、10s、15s；比例16:9, 9:16",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-hn-sd2.0-pro-933-720p",
+      "description": "9图3视频3音频，15秒，\"16:9\", \"9:16\", \"1:1\", \"4:3\", \"3:4\", \"21:9\"",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-ll-sd2.5-pro-30s-2-720p",
+      "description": null,
+      "tags": null,
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-ll-sd2.5-pro-30s-720p",
+      "description": "30图3视频0音频，固定30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，不支持真人",
+      "tags": "720p,s2.5",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-1080p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "1080p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-480p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "480p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-720p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-fast-480p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "480p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-fast-720p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-mini-480p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "480p,s2.0mini,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.0-mini-720p",
+      "description": "9图3视频3音频，4-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸",
+      "tags": "720p,s2.0mini,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.5-1080p",
+      "description": "10图5视频5音频，4-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸，版权和内容风控卡的比较严",
+      "tags": "1080p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.5-480p",
+      "description": "30图10视频10音频，4-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸，版权和内容风控卡的比较严",
+      "tags": "480p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mg-sd2.5-720p",
+      "description": "30图10视频10音频，4-30s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"，原生过人脸，版权和内容风控卡的比较严",
+      "tags": "720p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-mj-minimax-h3-2k",
+      "description": "海螺h3，9图0视频3音频，4-15s，比例支持\"1:1\", \"16:9\", \"9:16\", \"3:4\", \"4:3\", \"21:9\"",
+      "tags": "2k,海螺h3,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-pd-sd2.0-mini-903-480p",
+      "description": "9图0视频3音频，5-15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"",
+      "tags": "480p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-pd-sd2.0-mini-903-720p",
+      "description": "9图0视频3音频，5-12s（注意720p最大12s），\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"",
+      "tags": "720p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-1080p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "1080p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "480p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-4k",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "4k,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-fast-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "480p,s2.0fast,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-fast-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-fast-no-face-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "480p,s2.0fast",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-fast-no-face-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "720p,s2.0fast",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-mini-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "480p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-mini-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "720p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-mini-no-face-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "480p,s2.0mini",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-mini-no-face-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "720p,s2.0mini",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-no-face-1080p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "1080p,s2.0满血",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-no-face-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "480p,s2.0满血",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-no-face-4k",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "4k,s2.0满血",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.0-no-face-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，卡人脸，可自行处理后使用",
+      "tags": "720p,s2.0满血",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.5-1080p",
+      "description": "30图10视频10音频，4-30s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "1080p,s2.5,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.5-480p",
+      "description": "30图10视频10音频，4-30s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "480p,s2.5,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-qd-seedance-2.5-720p",
+      "description": "30图10视频10音频，4-30s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，后台处理的人脸，请使用 bypassCopyrightReferenceLevel 参数调节处理强度 ，具体文档参考： https://files2.sudashuiapi.com/ceshi/sdas-qd-video-task-update.html",
+      "tags": "720p,s2.5,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-wd-sd2.0-480p",
+      "description": "9图0视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "480p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wd-sd2.0-720p",
+      "description": "9图0视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wd-sd2.0-fast-480p",
+      "description": "9图0视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "480p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wd-sd2.0-fast-720p",
+      "description": "9图0视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "720p,s2.0fast,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wd-sd2.5-480p",
+      "description": "30图0视频10音频，4-30s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "480p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wd-sd2.5-720p",
+      "description": "30图0视频10音频，4-30s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`，原生过人脸",
+      "tags": "720p,s2.5,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-wf-sd2.0-mini-933-480p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`",
+      "tags": "480p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-wf-sd2.0-mini-933-720p",
+      "description": "9图3视频3音频，4-12s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`",
+      "tags": "720p,s2.0mini,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-xg-sd2.0-pro-933-2-720p",
+      "description": null,
+      "tags": null,
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-xg-sd2.0-pro-933-720p",
+      "description": "9图3视频3音频，4-15s，`1:1`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`",
+      "tags": "720p,s2.0满血,支持真人",
+      "quota_type": 1
+    },
+    {
+      "model_name": "sdas-xh-wan3.0-2-720p",
+      "description": "10图 5视频 5音频，4-15秒，[\"16:9\", \"9:16\", \"1:1\", \"4:3\", \"3:4\", \"21:9\"]",
+      "tags": "720p,wan3.0,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-xh-wan3.0-720p",
+      "description": "10图 0视频 5音频，4-30秒，[\"16:9\", \"9:16\", \"1:1\", \"4:3\", \"3:4\", \"21:9\"]",
+      "tags": "720p,wan3.0,支持真人",
+      "quota_type": 0
+    },
+    {
+      "model_name": "sdas-xl-sd2.0-903-mini-480p",
+      "description": "9图0视频3音频，15s，\"21:9\", \"16:9\", \"4:3\", \"1:1\", \"3:4\", \"9:16\"",
+      "tags": "480p,s2.0mini,支持真人",
+      "quota_type": 1
+    }
+  ],
+  "excluded": [
+    {
+      "model": "sdas-hn-sd2.0-933-720p",
+      "reason": "Model-specific capabilities are not published"
+    },
+    {
+      "model": "sdas-ll-sd2.5-pro-30s-2-720p",
+      "reason": "Model-specific capabilities are not published"
+    },
+    {
+      "model": "sdas-xg-sd2.0-pro-933-2-720p",
+      "reason": "Model-specific capabilities are not published"
+    }
+  ]
+}

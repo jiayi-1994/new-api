@@ -15,13 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sora", "sunoapi", "vertex-ai", "vidu"}
+var expectedKeys = []string{"aggc", "alibaba", "bytefor", "cangyuan", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "vertex-ai", "vidu", "zongheng"}
 
 // responsesKeys are the vendor plugins that also serve OpenAI Responses.
 var responsesKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
 
 // videoOnlyKeys are third-party relays that only speak the OpenAI video protocol.
-var videoOnlyKeys = []string{"meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie"}
+var videoOnlyKeys = []string{"aggc", "bytefor", "cangyuan", "meaicc", "megabyai", "paipu", "pidoi", "seedance-hjmie", "sudashui", "zongheng"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -224,6 +224,14 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 		seconds    float64
 		want       videosched.Spec
 	}{
+		{"aggc", "sd2.5-op", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "1080p", "images": images, "videos": video}, 30,
+			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 2, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"bytefor", "bytefor-2.5", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.mp3"}}, 30,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"cangyuan", "sd10-seedance-2.0", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.wav"}}, 10,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"cangyuan", "cangyuan-doubao-seedance-2-0-260128", map[string]any{"prompt": "cat", "seconds": 6, "resolution": "720p", "first_image_url": "https://cdn.example/first.png", "last_image_url": "asset://asset-last"}, 6,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
 		{"meaicc", "w3-c1", map[string]any{"input": map[string]any{"prompt": "cat", "media": []any{
 			map[string]any{"type": "first_frame", "url": "https://cdn.example/f.png"},
 			map[string]any{"type": "reference_video", "url": "https://cdn.example/v.mp4"},
@@ -233,10 +241,14 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
 		{"seedance-hjmie", "videos-fast", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
 			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"sudashui", "sdas-mg-sd2.5-720p", map[string]any{"prompt": "cat", "duration": 30, "resolution": "720p", "images": images, "videos": video}, 30,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"paipu", "lec-seed-2-0-900", map[string]any{"prompt": "cat", "images": images}, 15,
 			videosched.Spec{Tier: "*", SecondsKind: videosched.KindFixed, References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
 		{"pidoi", "tejiasd-mini-720p", map[string]any{"prompt": "cat", "seconds": 8, "resolution": "480p", "images": images}, 8,
 			videosched.Spec{Tier: "480p", References: map[string]int{"video": 0, "image": 2, "audio": 0}}},
+		{"zongheng", "XXseedacn2.5", map[string]any{"prompt": "cat", "seconds": 10, "size": "1280x720", "images": images, "videos": video, "start_frame": "https://cdn.example/start.png", "end_frame": "https://cdn.example/end.png"}, 10,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 4, "audio": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
@@ -267,6 +279,298 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			assert.Equal(t, want, got)
 		})
 	}
+}
+
+// Replay through Sobek as well as the JS tests: HTTP JSON numbers, immutable
+// host-backed input maps and nested result envelopes must cross the runtime intact.
+func TestAggcVideoPluginLifecycle(t *testing.T) {
+	// Adding this relay must not replace the official MiniMax billing metadata
+	// or add a non-schedulable official provider to its scheduling pool.
+	generation := jsplugin.DefaultRegistry.Generation()
+	official, found := generation.LookupEndpoint("POST", "/v1/videos", "MiniMax-H3")
+	require.True(t, found)
+	assert.Equal(t, "hailuo", official.Plugin.Meta.Key)
+	relay, found := generation.LookupEndpoint("POST", "/v1/videos", "aggc-minimax-h3")
+	require.True(t, found)
+	assert.Equal(t, "aggc", relay.Plugin.Meta.Key)
+
+	source, err := Source("aggc")
+	require.NoError(t, err)
+	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{
+			"name":"mapped alias builds the AGGC wire request with raw API key",
+			"hook":"buildSubmitRequest",
+			"args":[{"model":"public-video","upstreamModel":"sd2.5-op","baseUrl":"https://aggc.site/","authHeader":"fixture-only-key","requestBody":{
+				"prompt":"cat","params":{"duration":30,"resolution":"1080p","imageUrls":["https://cdn.example/a.png"],"videoUrls":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"]}
+			}}],
+			"expected":{"url":"https://aggc.site/api/v1/prot/generate","method":"POST","headers":{"x-api-key":"fixture-only-key","Content-Type":"application/json"},"body":{
+				"model_id":"sd2.5-op","type":"video","prompt":"cat","params":{"duration":30,"aspectRatio":"16:9","resolution":"1080p","imageUrls":["https://cdn.example/a.png"],"videoUrls":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"]}
+			}}
+		},
+		{
+			"name":"nested duration cannot bypass quoting limits",
+			"hook":"describeSpec",
+			"args":[{"model":"public-video","upstreamModel":"sd2.0-933-op","requestBody":{"prompt":"cat","params":{"duration":30,"resolution":"720p"}}}],
+			"expectedError":"duration must be between 4 and 15 seconds"
+		},
+		{
+			"name":"submission accepts a numeric job id without premature completion",
+			"hook":"parseSubmitResponse",
+			"args":[{},{"statusCode":200,"body":{"code":0,"message":"OK","data":{"job_id":123,"status":"success","credits_frozen":10}}}],
+			"expected":{"taskId":"123","taskData":{"code":0,"message":"OK","data":{"job_id":123,"status":"success","credits_frozen":10}}}
+		},
+		{
+			"name":"poll context has no request body",
+			"hook":"buildQueryRequest",
+			"args":[{"taskId":"123","baseUrl":"https://aggc.site","apiKey":"fixture-only-key"}],
+			"expected":{"url":"https://aggc.site/api/v1/prot/query/123","method":"GET","headers":{"x-api-key":"fixture-only-key"}}
+		},
+		{
+			"name":"poll completes from the nested video result",
+			"hook":"parseTaskResult",
+			"args":[{"taskId":"123"},{"code":0,"data":{"job_id":123,"status":"success","video_url":"https://cdn.example/video.mp4"}}],
+			"expected":{"status":"SUCCESS"}
+		},
+		{
+			"name":"documented generation failure remains an accepted failed task",
+			"hook":"parseSubmitResponse",
+			"args":[{},{"statusCode":200,"body":{"code":3001,"data":{"job_id":123,"status":"failed","error_message":"invalid video"}}}],
+			"expected":{"taskId":"123","taskData":{"code":3001,"data":{"job_id":123,"status":"failed","error_message":"invalid video"}},"immediate":{"status":"FAILURE","reason":"aggc:3001: invalid video"}}
+		},
+		{
+			"name":"video download never receives the API key",
+			"hook":"buildContentRequest",
+			"args":[{"artifactKey":"video","apiKey":"fixture-only-key","data":{"code":0,"data":{"job_id":123,"status":"success","video_url":"https://cdn.example/video.mp4"}},"clientRequest":{"method":"HEAD","headers":{"Authorization":"private-client-token"}}}],
+			"expected":{"url":"https://cdn.example/video.mp4","method":"HEAD","credentialless":true}
+		}
+	]}`))
+	require.NoError(t, err)
+}
+
+func TestSudashuiVideoPluginLifecycle(t *testing.T) {
+	source, err := Source("sudashui")
+	require.NoError(t, err)
+	fixture, err := os.ReadFile("tasks/sudashui/fixture.json")
+	require.NoError(t, err)
+	report, err := jsplugin.ReplayFixture(t.Context(), source, fixture)
+	require.NoError(t, err)
+	assert.Equal(t, report.Total, report.Passed)
+}
+
+func TestZonghengVideoPluginLifecycle(t *testing.T) {
+	source, err := Source("zongheng")
+	require.NoError(t, err)
+	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "zongheng"})
+	require.NoError(t, err)
+
+	t.Run("mapped models keep scheduling billing and wire parameters consistent", func(t *testing.T) {
+		for _, model := range plugin.Meta.Models {
+			t.Run(model, func(t *testing.T) {
+				decoded, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+					"model": "unified-video", "upstreamModel": model,
+					"body": map[string]any{"kind": "json", "value": map[string]any{
+						"model": "unified-video", "prompt": "海边日出", "seconds": "6", "size": "1280x720", "generate_audio": false,
+					}},
+				})
+				require.NoError(t, decodeErr)
+				intent := decoded.(map[string]any)
+				assert.Equal(t, "unified-video", intent["model"])
+				ctx := map[string]any{"model": "unified-video", "upstreamModel": model, "requestBody": intent["requestBody"]}
+				value, specErr := plugin.Engine.Call(t.Context(), "describeSpec", ctx)
+				require.NoError(t, specErr)
+				got, _, parseErr := spec.Parse(value.(map[string]any))
+				require.NoError(t, parseErr)
+				usage, usageErr := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+				require.NoError(t, usageErr)
+				encodedUsage, marshalErr := common.Marshal(usage)
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, `{"seconds":6,"resolution":"720p"}`, string(encodedUsage))
+				ctx["publicTaskId"] = "task_stable"
+				ctx["baseUrl"] = "https://cnd-coo-new.pages.dev/"
+				ctx["authHeader"] = "Bearer fixture-only-key"
+				built, buildErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+				require.NoError(t, buildErr)
+				request := built.(map[string]any)
+				wire := request["body"].(map[string]any)
+				assert.Equal(t, "https://cnd-coo-new.pages.dev/v1/videos", request["url"])
+				assert.Equal(t, model, wire["model"])
+				assert.NotContains(t, request, "model", "descriptor must not replace the pinned alias")
+				assert.Equal(t, false, wire["generate_audio"])
+				assert.Equal(t, got.Tier, wire["resolution"])
+				assert.EqualValues(t, *got.OutputSeconds, wire["duration"])
+				assert.NotContains(t, wire, "seconds")
+				assert.NotContains(t, wire, "size")
+				assert.Equal(t, "task_stable", request["headers"].(map[string]any)["Idempotency-Key"])
+				retried, retryErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+				require.NoError(t, retryErr)
+				assert.Equal(t, built, retried)
+			})
+		}
+	})
+
+	t.Run("channel overrides cannot bypass validation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, field string
+			value       any
+		}{
+			{"zero duration", "duration", 0}, {"negative duration", "duration", -1},
+			{"oversized duration", "duration", 3601}, {"wrapped unsigned duration", "duration", "18446744073686646784"},
+			{"boolean duration", "duration", true}, {"conflicting seconds", "seconds", 12},
+			{"hidden multiplier", "extra", map[string]any{"duration": 999999}},
+			{"hidden metadata", "metadata", map[string]any{"duration": 999999}},
+			{"multiple outputs", "n", 2}, {"string boolean", "generate_audio", "false"},
+			{"conflicting resolution", "size", "1920x1080"}, {"unsupported resolution", "resolution", "2k"},
+			{"unauthenticated public media required", "images", []any{"https://user:pass@example.com/a.png"}},
+			{"local media rejected", "images", []any{"data:image/png;base64,AA=="}},
+			{"HTTPS required", "reference_videos", []any{"http://cdn.example/a.mp4"}},
+			{"tail frame requires head", "end_frame", "https://cdn.example/end.png"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				body := map[string]any{"prompt": "cat", "duration": 6, "resolution": "720p"}
+				body[tc.field] = tc.value
+				ctx := map[string]any{"model": "XXseedacn2.5", "requestBody": body, "publicTaskId": "task_test", "baseUrl": "https://cnd-coo-new.pages.dev", "apiKey": "fixture-only-key"}
+				for _, hook := range []string{"describeSpec", "extractUsage", "buildSubmitRequest"} {
+					_, callErr := plugin.Engine.Call(t.Context(), hook, ctx)
+					require.Error(t, callErr, hook)
+				}
+			})
+		}
+	})
+
+	// Exercise the real Sobek boundary with host-backed arrays and the documented
+	// response envelopes; no live paid generation is needed for these regressions.
+	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{"name":"multipart false and repeated images","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"model":"XXseedacn2.5","body":{"kind":"multipart","fields":{"model":["XXseedacn2.5"],"prompt":["cat"],"seconds":["6"],"size":["1280x720"],"generate_audio":["false"],"images[]":["https://cdn.example/a.png","https://cdn.example/b.png"]}}}],"expected":{"kind":"submit","model":"XXseedacn2.5","action":"reference_to_video","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","ratio":"16:9","generate_audio":false,"images":["https://cdn.example/a.png","https://cdn.example/b.png"]}}},
+		{"name":"local upload guidance","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"body":{"kind":"multipart","files":[{"ref":"request_file:input_reference"}]}}],"expectedError":"/v1/media"},
+		{"name":"fractional seconds remain exact","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6.5,"resolution":"720p"}}],"expected":{"spec_version":2,"output_seconds":6.5,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":0,"audio":0},"reference_video_urls":[]}},
+		{"name":"references include frames and repeated video inputs","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","images":["https://cdn.example/a.png"],"referenceImages":["https://cdn.example/a.png"],"start_frame":"https://cdn.example/start.png","end_frame":"https://cdn.example/end.png","videos":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"],"audios":["https://cdn.example/a.wav"]}}],"expected":{"spec_version":2,"output_seconds":6,"seconds_kind":"exact","resolution":"720p","references":{"image":3,"video":2,"audio":1},"reference_video_urls":["https://cdn.example/a.mp4","https://cdn.example/a.mp4"]}},
+		{"name":"conflicting media mirrors rejected","hook":"describeSpec","args":[{"model":"XXseedacn2.5","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","images":["https://cdn.example/a.png"],"referenceImages":["https://cdn.example/b.png"]}}],"expectedError":"conflicting reference fields"},
+		{"name":"mapped Grok rejects reference video","hook":"describeSpec","args":[{"model":"unified-video","upstreamModel":"TTP-grok","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","videos":["https://cdn.example/a.mp4"]}}],"expectedError":"Grok does not support"},
+		{"name":"public creation envelope","hook":"parseSubmitResponse","args":[{},{"statusCode":202,"body":{"code":0,"success":true,"task_id":"vid_test","status":"processing","next_poll_seconds":10}}],"expected":{"taskId":"vid_test","taskData":{"code":0,"success":true,"task_id":"vid_test","status":"processing","next_poll_seconds":10}}},
+		{"name":"ambiguous acceptance must not resubmit","hook":"parseSubmitResponse","args":[{},{"body":{"error":{"type":"invalid_prompt","message":"rejected"}}}],"expectedError":"no valid task id"},
+		{"name":"contradictory acceptance must not resubmit","hook":"parseSubmitResponse","args":[{},{"body":{"success":false,"task_id":"vid_test","status":"processing"}}],"expectedError":"conflicting"},
+		{"name":"accepted terminal failure refunds","hook":"parseSubmitResponse","args":[{},{"body":{"task_id":"vid_test","status":"failed","error_code":"invalid_prompt","error_detail":"提示词未通过内容审核"}}],"expected":{"taskId":"vid_test","taskData":{"task_id":"vid_test","status":"failed","error_code":"invalid_prompt","error_detail":"提示词未通过内容审核"},"immediate":{"status":"FAILURE","reason":"invalid_prompt: 提示词未通过内容审核"}}},
+		{"name":"query encoded task id using persisted context","hook":"buildQueryRequest","args":[{"taskId":"vid/a?b","baseUrl":"https://cnd-coo-new.pages.dev/","apiKey":"fixture-only-key"}],"expected":{"url":"https://cnd-coo-new.pages.dev/v1/tasks/vid%2Fa%3Fb","method":"GET","headers":{"Authorization":"Bearer fixture-only-key"}}},
+		{"name":"processing poll","hook":"parseTaskResult","args":[{"taskId":"vid_test"},{"task_id":"vid_test","status":"processing","next_poll_seconds":10}],"expected":{"status":"IN_PROGRESS"}},
+		{"name":"successful public poll","hook":"parseTaskResult","args":[{"taskId":"vid_test"},{"task_id":"vid_test","status":"succeeded","video_url":"https://cnd-coo-new.pages.dev/api/video-content/vid_test"}],"expected":{"status":"SUCCESS","progress":"100%"}},
+		{"name":"unknown status does not become processing","hook":"parseTaskResult","args":[{"taskId":"vid_test"},{"task_id":"vid_test","status":"unexpected"}],"expected":{"status":"UNKNOWN","reason":"unrecognized task status or missing video URL"}},
+		{"name":"success requires video content","hook":"parseTaskResult","args":[{"taskId":"vid_test"},{"task_id":"vid_test","status":"succeeded"}],"expected":{"status":"UNKNOWN","reason":"unrecognized task status or missing video URL"}},
+		{"name":"wrong task cannot settle","hook":"parseTaskResult","args":[{"taskId":"vid_test"},{"task_id":"vid_other","status":"succeeded","url":"https://cdn.example/v.mp4"}],"expected":{"status":"UNKNOWN","reason":"upstream task id does not match the queried task"}},
+		{"name":"credits cannot replace reserved seconds","hook":"extractUsageOnComplete","args":[{},{"status":"SUCCESS"},{"credits":999999,"duration":-1}],"expected":{}},
+		{"name":"credentialless content preserves vendor URL","hook":"buildContentRequest","args":[{"artifactKey":"video","apiKey":"fixture-only-key","data":{"status":"succeeded","video_url":"https://cnd-coo-new.pages.dev/api/video-content/vid_test?sig=original"},"clientRequest":{"method":"HEAD","headers":{"Authorization":"client-secret","Range":"bytes=0-99"}}}],"expected":{"url":"https://cnd-coo-new.pages.dev/api/video-content/vid_test?sig=original","method":"HEAD","credentialless":true}},
+		{"name":"non-success cannot expose media","hook":"listArtifacts","args":[{"status":"FAILURE","data":{"status":"processing","video_url":"https://cdn.example/v.mp4"}}],"expected":[]},
+		{"name":"video artifact","hook":"listArtifacts","args":[{"status":"SUCCESS","data":{"status":"succeeded","result_url":"https://cdn.example/v.mp4"}}],"expected":[{"key":"video","type":"video","mimeType":"video/mp4"}]},
+		{"name":"renderer omits private metadata","hook":"protocols","path":["openai_video","render"],"args":[{},{"status":"SUCCESS","data":{"task_id":"vid_private","status":"succeeded","url":"https://cdn.example/v.mp4","credits":5}}],"expected":{"url":"https://cdn.example/v.mp4"}},
+		{"name":"moderation does not penalize channel health","hook":"classifyFailure","args":["invalid_prompt: 提示词未通过内容审核"],"expected":"user"},
+		{"name":"quota failure penalizes channel health","hook":"classifyFailure","args":["insufficient balance"],"expected":"upstream"}
+	]}`))
+	require.NoError(t, err)
+}
+
+func TestCangyuanVideoPluginLifecycle(t *testing.T) {
+	generation := jsplugin.DefaultRegistry.Generation()
+	official, found := generation.LookupEndpoint("POST", "/v1/videos", "doubao-seedance-2-0-260128")
+	require.True(t, found)
+	assert.Equal(t, "doubao", official.Plugin.Meta.Key, "relay must not replace official token pricing or join its scheduling pool")
+	plugin, found := generation.Get("cangyuan")
+	require.True(t, found)
+	cases := []struct {
+		model       string
+		seconds     float64
+		resolutions []string
+	}{
+		{"sd10-seedance-2.0", 15, []string{"720p"}},
+		{"sd10-seedance-2.0-fast", 15, []string{"720p"}},
+		{"sd10-seedance-2.0-mini", 10, []string{"720p"}},
+		{"sd10-seedance-2.5", 30, []string{"720p"}},
+		{"sd11-seedance-2.0", 15, []string{"480p", "720p", "1080p"}},
+		{"sd11-seedance-2.0-fast", 15, []string{"480p", "720p"}},
+		{"sd11-seedance-2.0-mini", 15, []string{"480p", "720p"}},
+		{"sd11-seedance-2.5", 30, []string{"480p", "720p", "1080p"}},
+		{"sd13-seedance-2.0", 15, []string{"480p", "720p", "1080p", "4k"}},
+		{"sd13-seedance-2.0-fast", 15, []string{"480p", "720p"}},
+		{"sd13-seedance-2.0-mini", 15, []string{"480p", "720p"}},
+		{"sd13-seedance-2.5", 30, []string{"480p", "720p"}},
+		{"sd14-seedance-2.0", 15, []string{"720p"}},
+		{"sd15-seedance-2.0", 15, []string{"480p", "720p"}},
+		{"sd15-seedance-2.5", 30, []string{"480p", "720p"}},
+		{"sd7-seedance-2.0-1080p", 15, []string{"1080p"}},
+		{"sd7-seedance-2.0-720p", 15, []string{"720p"}},
+		{"sd8-seedance-2.5", 30, nil},
+		{"cangyuan-doubao-seedance-2-0-260128", 15, []string{"720p"}},
+		{"cangyuan-doubao-seedance-2-0-fast-260128", 15, []string{"720p"}},
+		{"cangyuan-doubao-seedance-2-5-260628", 30, []string{"720p"}},
+	}
+	require.Len(t, plugin.Meta.Models, len(cases))
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			binding, found := generation.LookupEndpoint("POST", "/v1/videos", tc.model)
+			require.True(t, found)
+			assert.Equal(t, "cangyuan", binding.Plugin.Meta.Key)
+			body := map[string]any{"prompt": "cat", "duration": tc.seconds}
+			tier := "*"
+			if len(tc.resolutions) > 0 {
+				tier = tc.resolutions[len(tc.resolutions)-1]
+				body["resolution"] = tier
+			}
+			driver := map[string]any{"model": "public-alias", "upstreamModel": tc.model, "requestBody": body, "salesSource": "video_request"}
+			value, err := plugin.Engine.Call(t.Context(), "describeSpec", driver)
+			require.NoError(t, err)
+			got, ignored, err := spec.Parse(value.(map[string]any))
+			require.NoError(t, err)
+			assert.Empty(t, ignored)
+			assert.Equal(t, &tc.seconds, got.OutputSeconds)
+			assert.Equal(t, tier, got.Tier)
+			kind := videosched.KindExact
+			if tc.model == "sd10-seedance-2.5" || tc.model == "sd8-seedance-2.5" {
+				kind = videosched.KindFixed
+			}
+			assert.Equal(t, kind, got.SecondsKind)
+			value, err = plugin.Engine.Call(t.Context(), "extractUsage", driver)
+			require.NoError(t, err)
+			facts := value.(map[string]any)
+			ratios, err := plugin.Meta.ValidateUsageFacts(facts, tc.model, "public-alias")
+			require.NoError(t, err)
+			schema, _ := plugin.Meta.UsageForModels(tc.model, "public-alias")
+			if strings.HasPrefix(tc.model, "cangyuan-") {
+				assert.Empty(t, facts)
+				assert.Empty(t, schema, "token-priced models must not inherit per-generation pricing")
+				return
+			}
+			assert.Equal(t, map[string]float64{"requests": 1}, ratios)
+			if len(tc.resolutions) > 0 {
+				assert.Equal(t, tier, facts["resolution"])
+				assert.Equal(t, tc.resolutions, schema["resolution"].Enum)
+			} else {
+				assert.NotContains(t, facts, "resolution")
+				assert.NotContains(t, schema, "resolution")
+			}
+		})
+	}
+	source, err := Source("cangyuan")
+	require.NoError(t, err)
+	// Host-backed JSON maps/arrays and numeric fields must behave identically in
+	// Sobek and the standalone JS regressions. No network or database is involved.
+	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{"name":"mapped public alias preserves SD10 references","hook":"buildSubmitRequest","args":[{"model":"unified-seedance","upstreamModel":"sd10-seedance-2.0","baseUrl":"https://ai.cangyuansuanli.cn/","authHeader":"Bearer fixture-only-key","requestBody":{"prompt":"cat","seconds":10,"size":"1280x720","images":["https://cdn.example/i.png"],"videos":["https://cdn.example/v.mp4"],"audios":["https://cdn.example/a.wav"]}}],"expected":{"url":"https://ai.cangyuansuanli.cn/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json"},"body":{"model":"sd10-seedance-2.0","prompt":"cat","duration":10,"resolution":"720p","aspect_ratio":"16:9","reference_image_urls":["https://cdn.example/i.png"],"reference_videos":["https://cdn.example/v.mp4"],"reference_audios":["https://cdn.example/a.wav"]}}},
+		{"name":"SD10 billing remains per generation","hook":"extractUsage","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":15}}],"expected":{"requests":1,"resolution":"720p"}},
+		{"name":"official relay requires host-owned sale","hook":"buildSubmitRequest","args":[{"model":"cangyuan-doubao-seedance-2-0-260128","requestBody":{"prompt":"cat","duration":6}}],"expectedError":"requires host-configured unified video sales"},
+		{"name":"official alias is removed only on the wire","hook":"buildSubmitRequest","args":[{"model":"unified-seedance","upstreamModel":"cangyuan-doubao-seedance-2-0-260128","salesSource":"video_request","baseUrl":"https://ai.cangyuansuanli.cn","apiKey":"fixture-only-key","requestBody":{"prompt":"cat","duration":6,"generate_audio":false,"seed":0}}],"expected":{"url":"https://ai.cangyuansuanli.cn/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json"},"body":{"model":"doubao-seedance-2-0-260128","prompt":"cat","duration":6,"resolution":"720p","aspect_ratio":"16:9","generate_audio":false,"seed":0}}},
+		{"name":"multipart arrays retain zero and false","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"model":"cangyuan-doubao-seedance-2-0-260128","body":{"kind":"multipart","fields":{"model":["cangyuan-doubao-seedance-2-0-260128"],"prompt":["cat"],"seconds":["6"],"seed":["0"],"generate_audio":["false"],"reference_image_urls[]":["https://cdn.example/a.png","https://cdn.example/b.png"]}}}],"expected":{"kind":"submit","model":"cangyuan-doubao-seedance-2-0-260128","action":"reference_to_video","requestBody":{"prompt":"cat","duration":6,"resolution":"720p","aspect_ratio":"16:9","reference_image_urls":["https://cdn.example/a.png","https://cdn.example/b.png"],"generate_audio":false,"seed":0}}},
+		{"name":"asset videos cannot become partial duration sources","hook":"describeSpec","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":10,"reference_videos":["https://cdn.example/v.mp4","asset://asset-video"]}}],"expected":{"spec_version":2,"output_seconds":10,"seconds_kind":"exact","resolution":"720p","references":{"image":0,"video":2,"audio":0}}},
+		{"name":"overrides cannot bypass duration bounds","hook":"describeSpec","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":"18446744073686646784"}}],"expectedError":"duration must be an integer from 1 to 3600 seconds"},
+		{"name":"hidden multipliers are rejected","hook":"buildSubmitRequest","args":[{"model":"sd10-seedance-2.0","requestBody":{"prompt":"cat","duration":10,"metadata":{"duration":9999}}}],"expectedError":"unsupported video parameter: metadata"},
+		{"name":"accept creation with id","hook":"parseSubmitResponse","args":[{},{"statusCode":202,"body":{"id":"video_42","status":"queued"}}],"expected":{"taskId":"video_42","taskData":{"id":"video_42","status":"queued"}}},
+		{"name":"accepted terminal failure refunds","hook":"parseSubmitResponse","args":[{},{"body":{"id":"video_42","status":"failed","error":{"message":"content moderation rejected the prompt"}}}],"expected":{"taskId":"video_42","taskData":{"id":"video_42","status":"failed","error":{"message":"content moderation rejected the prompt"}},"immediate":{"status":"FAILURE","reason":"content moderation rejected the prompt"}}},
+		{"name":"ambiguous acceptance cannot trigger retry","hook":"parseSubmitResponse","args":[{},{"body":{"id":"video_42","error":"quota exhausted"}}],"expectedError":"conflicting acceptance and rejection"},
+		{"name":"query uses persisted id","hook":"buildQueryRequest","args":[{"taskId":"video/a?b","baseUrl":"https://ai.cangyuansuanli.cn","apiKey":"fixture-only-key"}],"expected":{"url":"https://ai.cangyuansuanli.cn/v1/videos/video%2Fa%3Fb","method":"GET","headers":{"Authorization":"Bearer fixture-only-key"}}},
+		{"name":"completion supports documented array result","hook":"parseTaskResult","args":[{"taskId":"video_42"},{"id":"video_42","status":"completed","data":[{"url":"https://cdn.example/v.mp4"}]}],"expected":{"status":"SUCCESS"}},
+		{"name":"unknown status stays unknown","hook":"parseTaskResult","args":[{}, {"status":"unexpected"}],"expected":{"status":"UNKNOWN","reason":"unrecognized Cangyuan task status"}},
+		{"name":"success without video cannot settle","hook":"parseTaskResult","args":[{}, {"status":"completed"}],"expected":{"status":"UNKNOWN","reason":"completed task has no valid video URL"}},
+		{"name":"download excludes all credentials","hook":"buildContentRequest","args":[{"artifactKey":"video","apiKey":"fixture-only-key","data":{"video_url":"https://cdn.example/v.mp4?sig=original%2Bvalue"},"clientRequest":{"method":"HEAD","headers":{"Authorization":"client-secret"}}}],"expected":{"url":"https://cdn.example/v.mp4?sig=original%2Bvalue","method":"HEAD","credentialless":true}},
+		{"name":"upstream cost never changes usage","hook":"extractUsageOnComplete","args":[{}, {"status":"SUCCESS"},{"usage":{"cost":9999},"duration":0}],"expected":{}}
+	]}`))
+	require.NoError(t, err)
 }
 
 func TestBuiltInPluginsAddressNewAPIUpstreamOnNativeRoutes(t *testing.T) {
