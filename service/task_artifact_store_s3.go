@@ -110,7 +110,8 @@ func (s *s3ArtifactStore) Persist(ctx context.Context, task *model.Task, artifac
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
-	objectKey := path.Join(s.prefix, task.TaskID, artifact.Key+artifactExtension(mimeType))
+	// Archive by upload date (server timezone); old refs keep their stored ObjectKey.
+	objectKey := path.Join(s.prefix, time.Now().Format("20060102"), task.TaskID, artifact.Key+artifactExtension(mimeType))
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(objectKey),

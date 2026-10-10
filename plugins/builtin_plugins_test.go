@@ -239,9 +239,8 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 1}, ReferenceVideoURLs: []string{"https://cdn.example/v.mp4"}}},
 		{"megabyai", "videos-fast", map[string]any{"prompt": "cat", "seconds": "8", "size": "1280x720", "referenceImages": images}, 8,
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
-		{"onmi", "e组-sd2.0mini", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "480p", "generate_audio": false, "references": []any{
-			map[string]any{"type": "video", "url": "https://cdn.example/1.mp4"},
-		}}, 10, videosched.Spec{Tier: "480p", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"onmi", "e组-sd2.0mini", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "480p", "ratio": "16:9", "n": 1, "generate_audio": false, "images": images, "videos": video, "audios": []any{"https://cdn.example/1.mp3"}}, 10,
+			videosched.Spec{Tier: "480p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"seedance-hjmie", "videos-fast", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
 			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"sudashui", "sdas-mg-sd2.5-720p", map[string]any{"prompt": "cat", "duration": 30, "resolution": "720p", "images": images, "videos": video}, 30,
