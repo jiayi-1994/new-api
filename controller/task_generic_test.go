@@ -1083,14 +1083,15 @@ func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
 	require.NoError(t, model.DB.Save(task).Error)
 
 	summary := runTaskArtifactSyncOnce(context.Background())
+	objectKey := "tasks/v1/" + time.Now().Format("20060102") + "/task_generic/video.mp4"
 	assert.Equal(t, taskArtifactSyncSummary{Scanned: 1, Stored: 1}, summary)
-	assert.Equal(t, "/artifacts/tasks/v1/task_generic/video.mp4", storedKey)
+	assert.Equal(t, "/artifacts/"+objectKey, storedKey)
 	assert.Equal(t, "video-bytes", storedBody)
 
 	var stored model.Task
 	require.NoError(t, model.DB.First(&stored, task.ID).Error)
 	require.NotNil(t, stored.PrivateData.StoredArtifact)
-	assert.Equal(t, "tasks/v1/task_generic/video.mp4", stored.PrivateData.StoredArtifact.ObjectKey)
+	assert.Equal(t, objectKey, stored.PrivateData.StoredArtifact.ObjectKey)
 	assert.Equal(t, int64(len("video-bytes")), stored.PrivateData.StoredArtifact.Size)
 
 	// A second pass is a no-op: nothing is fetched or uploaded again.
@@ -1116,7 +1117,7 @@ func TestTaskArtifactSyncStoresVideoAndServesPresignedURL(t *testing.T) {
 	// against the public endpoint.
 	assert.Equal(t, "https", location.Scheme)
 	assert.Equal(t, "public.example.com", location.Host)
-	assert.Equal(t, "/artifacts/tasks/v1/task_generic/video.mp4", location.Path)
+	assert.Equal(t, "/artifacts/"+objectKey, location.Path)
 	assert.NotEmpty(t, location.Query().Get("X-Amz-Signature"))
 	assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
 
@@ -1243,7 +1244,7 @@ func TestTaskArtifactSyncStoresPluginVideos(t *testing.T) {
 			require.NoError(t, model.DB.Save(task).Error)
 
 			assert.Equal(t, taskArtifactSyncSummary{Scanned: 1, Stored: 1}, runTaskArtifactSyncOnce(t.Context()))
-			assert.Equal(t, "/artifacts/"+task.TaskID+"/video.mp4", storedKey)
+			assert.Equal(t, "/artifacts/"+time.Now().Format("20060102")+"/"+task.TaskID+"/video.mp4", storedKey)
 			assert.Equal(t, "plugin-video-bytes", storedBody)
 			var stored model.Task
 			require.NoError(t, model.DB.First(&stored, task.ID).Error)
