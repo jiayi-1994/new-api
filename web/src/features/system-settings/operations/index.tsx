@@ -45,6 +45,7 @@ const defaultOperationsSettings: OperationsSettings = {
   WorkerAllowHttpImageRequestEnabled: false,
   LogConsumeEnabled: false,
   'performance_setting.disk_cache_enabled': false,
+  'task_polling_setting.interval_seconds': 15,
   'performance_setting.disk_cache_threshold_mb': 10,
   'performance_setting.disk_cache_max_size_mb': 1024,
   'performance_setting.disk_cache_path': '',

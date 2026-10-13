@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import i18next from 'i18next'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -53,6 +54,8 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { handleServerError } from '@/lib/handle-server-error'
 
+import { FormDirtyIndicator } from '../components/form-dirty-indicator'
+import { FormNavigationGuard } from '../components/form-navigation-guard'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -72,6 +75,15 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
  * server-side key format right before persisting.
  */
 const perfSchema = z.object({
+  task_polling_setting: z.object({
+    interval_seconds: z.coerce
+      .number()
+      .int({ error: () => i18next.t('Enter a whole number from 3 to 300') })
+      .min(3, { error: () => i18next.t('Enter a whole number from 3 to 300') })
+      .max(300, {
+        error: () => i18next.t('Enter a whole number from 3 to 300'),
+      }),
+  }),
   performance_setting: z.object({
     disk_cache_enabled: z.boolean(),
     disk_cache_threshold_mb: z.coerce.number().min(1),
@@ -88,6 +100,7 @@ type PerfFormInput = z.input<typeof perfSchema>
 type PerfFormValues = z.output<typeof perfSchema>
 
 type FlatPerfDefaults = {
+  'task_polling_setting.interval_seconds': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number
@@ -99,6 +112,9 @@ type FlatPerfDefaults = {
 }
 
 const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
+  task_polling_setting: {
+    interval_seconds: defaults['task_polling_setting.interval_seconds'],
+  },
   performance_setting: {
     disk_cache_enabled: defaults['performance_setting.disk_cache_enabled'],
     disk_cache_threshold_mb:
@@ -117,6 +133,8 @@ const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
 })
 
 const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
+  'task_polling_setting.interval_seconds':
+    values.task_polling_setting.interval_seconds,
   'performance_setting.disk_cache_enabled':
     values.performance_setting.disk_cache_enabled,
   'performance_setting.disk_cache_threshold_mb':
@@ -241,11 +259,16 @@ export function PerformanceSection(props: Props) {
       return
     }
 
-    for (const key of changedKeys) {
-      await updateOption.mutateAsync({
-        key,
-        value: normalized[key],
-      })
+    try {
+      for (const key of changedKeys) {
+        await updateOption.mutateAsync({
+          key,
+          value: normalized[key],
+        })
+      }
+    } catch {
+      // The shared mutation reports the server error. Preserve unsaved input.
+      return
     }
 
     baselineRef.current = normalized
@@ -325,12 +348,57 @@ export function PerformanceSection(props: Props) {
 
   return (
     <SettingsSection title={t('Performance Settings')}>
+      <FormDirtyIndicator isDirty={form.formState.isDirty} />
+      <FormNavigationGuard when={form.formState.isDirty} />
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}
-            isSaving={updateOption.isPending}
+            isSaving={form.formState.isSubmitting}
           />
+          <div>
+            <h4 className='font-medium'>{t('Async Task Polling')}</h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'Round duration and per-channel task delays also affect refresh speed. Multi-instance deployments apply changes through the existing configuration sync cycle; no restart is needed.'
+              )}
+            </p>
+          </div>
+          <FormField
+            control={form.control}
+            name='task_polling_setting.interval_seconds'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('Async task polling interval (seconds)')}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={3}
+                    max={300}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                    onChange={(event) =>
+                      field.onChange(
+                        event.target.value === ''
+                          ? ''
+                          : event.target.valueAsNumber
+                      )
+                    }
+                    disabled={form.formState.isSubmitting}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Seconds to wait after each async task polling round finishes. Lower values update status sooner but increase query requests and database operations.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <Separator />
           {/* Disk Cache Settings */}
           <div>
             <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>

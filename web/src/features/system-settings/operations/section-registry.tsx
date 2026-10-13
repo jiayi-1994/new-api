@@ -115,6 +115,8 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <PerformanceSection
         defaultValues={{
+          'task_polling_setting.interval_seconds':
+            settings['task_polling_setting.interval_seconds'] ?? 15,
           'performance_setting.disk_cache_enabled':
             settings['performance_setting.disk_cache_enabled'] ?? false,
           'performance_setting.disk_cache_threshold_mb':

@@ -108,7 +108,8 @@ var (
 	// systemTaskWakeup signals the runner to check for runnable tasks
 	// immediately instead of waiting for the idle poll. Buffered so a signal
 	// raised while the runner is busy is not lost and is handled on the next loop.
-	systemTaskWakeup = make(chan struct{}, 1)
+	systemTaskWakeup      = make(chan struct{}, 1)
+	asyncTaskPollFinished = make(chan struct{}, 1)
 )
 
 // notifySystemTaskRunner wakes the runner without blocking. If a wakeup is
@@ -132,6 +133,11 @@ func StartSystemTaskRunner() {
 
 			ticker := time.NewTicker(systemTaskRunnerIdleInterval)
 			defer ticker.Stop()
+			pollTicker := time.NewTicker(time.Second)
+			defer pollTicker.Stop()
+			pollTimer := time.NewTimer(systemTaskSchedulerInterval)
+			defer pollTimer.Stop()
+			pollSchedule := asyncTaskPollSchedule{}
 
 			var lastScheduler time.Time
 			var lastStaleLockCleanup time.Time
@@ -149,15 +155,32 @@ func StartSystemTaskRunner() {
 				if now.Sub(lastScheduler) >= systemTaskSchedulerInterval {
 					lastScheduler = now
 					runSystemTaskScheduler()
+					pollSchedule.refresh(now)
 				}
 				runSystemTaskClaimPass(runnerID)
 			}
 
 			runPass()
 			for {
+				pollTimer.Reset(max(0, time.Until(pollSchedule.nextCheck())))
+				targetedPoll := false
 				select {
 				case <-ticker.C:
 				case <-systemTaskWakeup:
+				case <-asyncTaskPollFinished:
+					targetedPoll = true
+				case <-pollTicker.C:
+					// Recalculate the timer from memory to pick up option changes.
+					continue
+				case <-pollTimer.C:
+					targetedPoll = true
+				}
+				if targetedPoll {
+					pollSchedule.refresh(time.Now())
+					if h := asyncTaskPollHandler(); h != nil {
+						runSystemTaskClaimPass(runnerID, h)
+					}
+					continue
 				}
 				runPass()
 			}
@@ -222,8 +245,10 @@ func EnqueueSystemTask(taskType string, payload any) (*model.SystemTask, bool, e
 // runSystemTaskClaimPass tries to claim one pending task per registered type
 // and dispatches each claimed task in its own goroutine so a long-running
 // handler (e.g. channel test) never blocks another type (e.g. log cleanup).
-func runSystemTaskClaimPass(runnerID string) {
-	handlers := registeredSystemTaskHandlers()
+func runSystemTaskClaimPass(runnerID string, handlers ...SystemTaskHandler) {
+	if len(handlers) == 0 {
+		handlers = registeredSystemTaskHandlers()
+	}
 	taskTypes := make([]string, 0, len(handlers))
 	for _, handler := range handlers {
 		taskTypes = append(taskTypes, handler.Type())
@@ -252,6 +277,12 @@ func runSystemTaskClaimPass(runnerID string) {
 			runWithLeaseHeartbeat(dispatchTask, runnerID, func(ctx context.Context) {
 				dispatchHandler.Run(ctx, dispatchTask, runnerID)
 			})
+			if dispatchTask.Type == model.SystemTaskTypeAsyncTaskPoll {
+				select {
+				case asyncTaskPollFinished <- struct{}{}:
+				default:
+				}
+			}
 		})
 	}
 }
@@ -267,7 +298,7 @@ func runSystemTaskScheduler() {
 	taskTypes := make([]string, 0, len(handlers))
 	for _, handler := range handlers {
 		scheduled, ok := handler.(ScheduledSystemTaskHandler)
-		if !ok || !scheduled.Enabled() {
+		if !ok || scheduled.Type() == model.SystemTaskTypeAsyncTaskPoll || !scheduled.Enabled() {
 			continue
 		}
 		scheduledHandlers = append(scheduledHandlers, scheduled)
@@ -280,25 +311,88 @@ func runSystemTaskScheduler() {
 	}
 	for _, scheduled := range scheduledHandlers {
 		latest := latestTasks[scheduled.Type()]
-		if latest != nil {
-			if latest.Status == model.SystemTaskStatusPending || latest.Status == model.SystemTaskStatusRunning {
-				continue // an active row already exists
-			}
-			if now-latest.UpdatedAt < int64(scheduled.Interval().Seconds()) {
-				continue // not due yet
-			}
-		}
-		if _, err := model.CreateSystemTask(scheduled.Type(), scheduled.NewPayload(), nil); err != nil {
-			activeTask, activeErr := model.GetActiveSystemTask(scheduled.Type())
-			if activeErr == nil && activeTask != nil {
-				continue
-			}
-			if activeErr != nil {
-				logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler active lookup failed: type=%s err=%v", scheduled.Type(), activeErr))
-			}
+		if _, err := scheduleSystemTask(scheduled, latest, time.Unix(now, 0)); err != nil {
 			logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler create failed: type=%s err=%v", scheduled.Type(), err))
-			continue
 		}
+	}
+}
+
+// scheduleSystemTask is shared by the global scheduler and the targeted poll
+// checks. Cached timing only controls wakeups; database state and active_key
+// remain authoritative for deduplication and claiming.
+func scheduleSystemTask(scheduled ScheduledSystemTaskHandler, latest *model.SystemTask, now time.Time) (*model.SystemTask, error) {
+	if latest != nil {
+		if latest.Status == model.SystemTaskStatusPending || latest.Status == model.SystemTaskStatusRunning {
+			return latest, nil
+		}
+		if now.Before(systemTaskNextRun(scheduled, latest)) {
+			return latest, nil
+		}
+	}
+	task, err := model.CreateSystemTask(scheduled.Type(), scheduled.NewPayload(), nil)
+	if err != nil {
+		activeTask, activeErr := model.GetActiveSystemTask(scheduled.Type())
+		if activeErr == nil && activeTask != nil {
+			return activeTask, nil
+		}
+		if activeErr != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler active lookup failed: type=%s err=%v", scheduled.Type(), activeErr))
+		}
+	}
+	return task, err
+}
+
+func systemTaskNextRun(h ScheduledSystemTaskHandler, latest *model.SystemTask) time.Time {
+	finished := time.Unix(latest.UpdatedAt, 0)
+	if h.Type() == model.SystemTaskTypeAsyncTaskPoll {
+		// Persisted timestamps have second precision. Wait to the end of that
+		// second so a remote/restarted runner never shortens the requested gap.
+		finished = finished.Add(time.Second)
+	}
+	return finished.Add(h.Interval())
+}
+
+func asyncTaskPollHandler() ScheduledSystemTaskHandler {
+	systemTaskHandlersMu.RLock()
+	defer systemTaskHandlersMu.RUnlock()
+	h, _ := systemTaskHandlers[model.SystemTaskTypeAsyncTaskPoll].(ScheduledSystemTaskHandler)
+	return h
+}
+
+// Owned exclusively by the runner goroutine, and reconstructed from the DB at
+// startup. Idle discovery and errors use the existing low-frequency cadence.
+type asyncTaskPollSchedule struct {
+	latest    *model.SystemTask
+	checkedAt time.Time
+}
+
+func (s *asyncTaskPollSchedule) nextCheck() time.Time {
+	h := asyncTaskPollHandler()
+	if h == nil || s.latest == nil {
+		return s.checkedAt.Add(systemTaskSchedulerInterval)
+	}
+	if s.latest.Status == model.SystemTaskStatusPending || s.latest.Status == model.SystemTaskStatusRunning {
+		// Observe completion on another node soon enough to schedule F + I,
+		// without querying the DB on every one-second memory tick.
+		return s.checkedAt.Add(min(h.Interval(), systemTaskSchedulerInterval))
+	}
+	return systemTaskNextRun(h, s.latest)
+}
+
+func (s *asyncTaskPollSchedule) refresh(now time.Time) {
+	s.checkedAt = now
+	s.latest = nil
+	h := asyncTaskPollHandler()
+	if h == nil || !h.Enabled() {
+		return
+	}
+	latest, err := model.GetLatestSystemTask(h.Type())
+	if err == nil {
+		s.latest, err = scheduleSystemTask(h, latest, now)
+	}
+	if err != nil {
+		s.latest = nil // back off on database errors
+		logger.LogWarn(context.Background(), fmt.Sprintf("async task poll scheduling failed: %v", err))
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,6 +27,13 @@ type Option struct {
 	Value string `json:"value"`
 }
 
+// Serialize this option's persistence and reload so a stale SyncOptions read
+// cannot overwrite a value just committed by this process.
+var (
+	taskPollingOptionMutex    sync.Mutex
+	taskPollingDefaultLogOnce sync.Once
+)
+
 func AllOption() ([]*Option, error) {
 	var options []*Option
 	var err error
@@ -36,6 +44,7 @@ func AllOption() ([]*Option, error) {
 func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
+	common.OptionMap[operation_setting.TaskPollingIntervalOptionKey] = strconv.Itoa(operation_setting.DefaultTaskPollingIntervalSeconds)
 
 	// 添加原有的系统配置
 	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
@@ -198,6 +207,8 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	taskPollingOptionMutex.Lock()
+	defer taskPollingOptionMutex.Unlock()
 	requestPolicyOptionMutex.Lock()
 	defer requestPolicyOptionMutex.Unlock()
 	defer func() {
@@ -207,9 +218,17 @@ func loadOptionsFromDatabase() {
 	}()
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
-	options, _ := AllOption()
+	options, loadErr := AllOption()
+	if loadErr != nil {
+		common.SysError("failed to load options: " + loadErr.Error())
+		return
+	}
+	pollingIntervalFound := false
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
+		if option.Key == operation_setting.TaskPollingIntervalOptionKey {
+			pollingIntervalFound = true
+		}
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
 			continue
@@ -218,6 +237,12 @@ func loadOptionsFromDatabase() {
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
+	}
+	if !pollingIntervalFound {
+		taskPollingDefaultLogOnce.Do(func() {
+			common.SysLog("task polling interval not configured; using 15 seconds")
+		})
+		_ = updateOptionMap(operation_setting.TaskPollingIntervalOptionKey, strconv.Itoa(operation_setting.DefaultTaskPollingIntervalSeconds))
 	}
 	applyPasskeyDomainOptions(passkeyOptions)
 }
@@ -231,6 +256,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == operation_setting.TaskPollingIntervalOptionKey {
+		_, err := operation_setting.ParseTaskPollingInterval(value)
+		return err
+	}
 	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
 		return err
 	}
@@ -293,6 +322,9 @@ func validateVideoSalesOption(value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == operation_setting.TaskPollingIntervalOptionKey {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if strings.HasPrefix(key, "video_scheduling_setting.") || key == billing_setting.VideoSalesOption {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
@@ -330,6 +362,10 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	if _, ok := values[operation_setting.TaskPollingIntervalOptionKey]; ok {
+		taskPollingOptionMutex.Lock()
+		defer taskPollingOptionMutex.Unlock()
+	}
 	if len(values) == 0 {
 		return nil
 	}
@@ -423,6 +459,13 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	if key == operation_setting.TaskPollingIntervalOptionKey {
+		if err := operation_setting.LoadTaskPollingInterval(value); err != nil {
+			common.SysError("invalid task polling interval in options; using 15 seconds")
+		}
+		common.OptionMap[key] = strconv.Itoa(int(operation_setting.TaskPollingInterval().Seconds()))
+		return nil
+	}
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理

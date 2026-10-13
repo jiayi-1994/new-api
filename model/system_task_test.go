@@ -1,10 +1,16 @@
 package model
 
 import (
+	"errors"
+	"fmt"
+	"maps"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +20,153 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
+
+func TestTaskPollingOptionsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var driver gorm.Dialector
+			switch dialect {
+			case "sqlite":
+				driver = sqlite.Open(":memory:")
+			case "mysql":
+				if os.Getenv("TEST_MYSQL_DSN") == "" {
+					t.Skip("TEST_MYSQL_DSN is not configured")
+				}
+				driver = mysql.Open(os.Getenv("TEST_MYSQL_DSN"))
+			case "postgres":
+				if os.Getenv("TEST_POSTGRES_DSN") == "" {
+					t.Skip("TEST_POSTGRES_DSN is not configured")
+				}
+				driver = postgres.Open(os.Getenv("TEST_POSTGRES_DSN"))
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			if dialect == "sqlite" {
+				sqlDB.SetMaxOpenConns(1)
+			}
+			t.Cleanup(func() { assert.NoError(t, sqlDB.Close()) })
+			models := []any{&Option{}, &SystemTask{}, &SystemTaskLock{}}
+			for _, table := range models {
+				require.False(t, db.Migrator().HasTable(table), "polling matrix requires an isolated database without existing options/system task tables")
+			}
+			previousDB, previousKind := DB, common.MainDatabaseType()
+			common.OptionMapRWMutex.Lock()
+			previousOptions := maps.Clone(common.OptionMap)
+			common.OptionMap = make(map[string]string)
+			common.OptionMapRWMutex.Unlock()
+			previousInterval := operation_setting.TaskPollingInterval()
+			DB = db
+			common.SetMainDatabaseType(common.DatabaseType(dialect))
+			t.Cleanup(func() {
+				assert.NoError(t, db.Migrator().DropTable(models...))
+				DB = previousDB
+				common.SetMainDatabaseType(previousKind)
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap = previousOptions
+				common.OptionMapRWMutex.Unlock()
+				assert.NoError(t, operation_setting.LoadTaskPollingInterval(fmt.Sprint(int(previousInterval.Seconds()))))
+			})
+			require.NoError(t, db.AutoMigrate(models...))
+			versionSQL := "SELECT version()"
+			if dialect == "sqlite" {
+				versionSQL = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(versionSQL).Scan(&version).Error)
+			t.Logf("real database version: %s", version)
+			key := operation_setting.TaskPollingIntervalOptionKey
+			loadOptionsFromDatabase()
+			assert.Equal(t, "15", common.OptionMap[key])
+			assert.Equal(t, 15*time.Second, operation_setting.TaskPollingInterval())
+
+			for _, value := range []string{"3", "5", "15", "300"} {
+				require.NoError(t, UpdateOption(key, value))
+				require.NoError(t, operation_setting.LoadTaskPollingInterval("15"))
+				loadOptionsFromDatabase() // restart / another process's SyncOptions path
+				assert.Equal(t, value, common.OptionMap[key])
+				seconds, err := operation_setting.ParseTaskPollingInterval(value)
+				require.NoError(t, err)
+				assert.Equal(t, time.Duration(seconds)*time.Second, operation_setting.TaskPollingInterval())
+			}
+			for _, value := range []string{"", "0", "-1", "2", "301", "3.5", "NaN", "abc", "999999999999999999999999"} {
+				assert.Error(t, UpdateOption(key, value), value)
+				assert.Error(t, UpdateOptionsBulk(map[string]string{key: value}), value)
+				assert.Equal(t, 300*time.Second, operation_setting.TaskPollingInterval())
+			}
+			var stored Option
+			require.NoError(t, db.Where(&Option{Key: key}).First(&stored).Error)
+			assert.Equal(t, "300", stored.Value)
+
+			// A failed transaction must not publish the requested runtime value.
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("polling_write_failure", func(tx *gorm.DB) { tx.AddError(errors.New("injected write failure")) }))
+			assert.Error(t, UpdateOption(key, "5"))
+			require.NoError(t, db.Callback().Update().Remove("polling_write_failure"))
+			assert.Equal(t, "300", common.OptionMap[key])
+			assert.Equal(t, 300*time.Second, operation_setting.TaskPollingInterval())
+			require.NoError(t, db.Where(&Option{Key: key}).First(&stored).Error)
+			assert.Equal(t, "300", stored.Value)
+			require.NoError(t, db.Model(&Option{}).Where(&Option{Key: key}).Update("value", "corrupt").Error)
+			loadOptionsFromDatabase()
+			assert.Equal(t, "15", common.OptionMap[key])
+			assert.Equal(t, 15*time.Second, operation_setting.TaskPollingInterval())
+			require.NoError(t, UpdateOption(key, "5"))
+
+			// Two nodes race to create and claim. The existing unique active key
+			// and database lease must leave just one executor.
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Go(func() { _, _ = CreateSystemTask(SystemTaskTypeAsyncTaskPoll, nil, nil) })
+			}
+			wg.Wait()
+			var rows int64
+			require.NoError(t, db.Model(&SystemTask{}).Count(&rows).Error)
+			assert.EqualValues(t, 1, rows)
+			task, err := GetLatestSystemTask(SystemTaskTypeAsyncTaskPoll)
+			require.NoError(t, err)
+			require.NotNil(t, task)
+			winners := make(chan string, 2)
+			for _, node := range []string{"poll-a", "poll-b"} {
+				wg.Go(func() {
+					_, claimed, claimErr := ClaimSystemTask(task.ID, task.Type, node, common.GetTimestamp()+60)
+					assert.NoError(t, claimErr)
+					if claimed {
+						winners <- node
+					}
+				})
+			}
+			wg.Wait()
+			require.Len(t, winners, 1)
+			require.NoError(t, FinishSystemTask(task.TaskID, <-winners, SystemTaskStatusSucceeded, nil, ""))
+			active, err := GetActiveSystemTask(task.Type)
+			require.NoError(t, err)
+			assert.Nil(t, active)
+			latest, err := GetLatestSystemTask(task.Type)
+			require.NoError(t, err)
+			assert.Equal(t, SystemTaskStatusSucceeded, latest.Status)
+			assert.Positive(t, latest.UpdatedAt)
+			// Reopen/migrate and recover an expired owner's lease through the
+			// same path used on restart. No new schema is introduced.
+			require.NoError(t, db.AutoMigrate(models...))
+			loadOptionsFromDatabase()
+			assert.Equal(t, 5*time.Second, operation_setting.TaskPollingInterval())
+			next, err := CreateSystemTask(task.Type, nil, nil)
+			require.NoError(t, err)
+			_, claimed, err := ClaimSystemTask(next.ID, next.Type, "crashed", common.GetTimestamp()+60)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			require.NoError(t, db.Model(&SystemTaskLock{}).Where("type = ?", next.Type).Update("locked_until", common.GetTimestamp()-1).Error)
+			require.NoError(t, ExpireStaleSystemTaskLocks(common.GetTimestamp()))
+			active, err = GetActiveSystemTask(next.Type)
+			require.NoError(t, err)
+			assert.Nil(t, active)
+			latest, err = GetLatestSystemTask(next.Type)
+			require.NoError(t, err)
+			assert.Equal(t, SystemTaskStatusFailed, latest.Status)
+		})
+	}
+}
 
 func TestSystemTaskHistoryDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {

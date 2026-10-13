@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,6 +108,80 @@ func TestSystemTaskSchedulerSkipsDisabled(t *testing.T) {
 
 	runSystemTaskScheduler()
 	assert.Equal(t, int64(0), countSystemTasks(t, handler.taskType))
+}
+
+func TestSystemTaskAsyncPollUsesCompletionAndReloadedInterval(t *testing.T) {
+	truncate(t)
+	h := &stubScheduledHandler{taskType: model.SystemTaskTypeAsyncTaskPoll, enabled: true, interval: 5 * time.Second}
+	withSystemTaskRegistry(t, h)
+	start := time.Unix(1000, 0)
+	// Simulate a slow 20-second round; waiting starts at completion, not start.
+	last := &model.SystemTask{TaskID: "slow-poll", Type: h.Type(), Status: model.SystemTaskStatusSucceeded, CreatedAt: 1000, UpdatedAt: 1020}
+	require.NoError(t, model.DB.Create(last).Error)
+	s := asyncTaskPollSchedule{}
+	s.refresh(start.Add(21 * time.Second)) // also represents a restarted node
+	assert.True(t, start.Add(24*time.Second).Before(s.nextCheck()))
+	// Account for persisted timestamps being rounded down to seconds.
+	assert.Equal(t, start.Add(26*time.Second), s.nextCheck())
+	s.refresh(start.Add(26 * time.Second))
+	assert.EqualValues(t, 2, countSystemTasks(t, h.Type()))
+	assert.Equal(t, model.SystemTaskStatusPending, s.latest.Status)
+
+	// No catch-up or overlapping row, even after a much later wakeup.
+	s.refresh(start.Add(time.Hour))
+	assert.EqualValues(t, 2, countSystemTasks(t, h.Type()))
+
+	// A second node holding an older terminal snapshot must reread before create.
+	second := asyncTaskPollSchedule{latest: last}
+	second.refresh(start.Add(26 * time.Second))
+	assert.Equal(t, s.latest.TaskID, second.latest.TaskID)
+
+	// Dynamic configuration changes are evaluated on each memory tick.
+	s.latest = last
+	h.interval = 15 * time.Second
+	assert.Equal(t, start.Add(36*time.Second), s.nextCheck())
+	h.interval = 5 * time.Second
+	assert.Equal(t, start.Add(26*time.Second), s.nextCheck())
+	h.interval = 30 * time.Second
+	assert.Equal(t, start.Add(51*time.Second), s.nextCheck())
+}
+
+func TestSystemTaskAsyncPollIdleDisabledAndGlobalCadence(t *testing.T) {
+	truncate(t)
+	poll := &stubScheduledHandler{taskType: model.SystemTaskTypeAsyncTaskPoll, interval: 3 * time.Second}
+	other := &stubScheduledHandler{taskType: model.SystemTaskTypeMidjourneyPoll, enabled: true, interval: 15 * time.Second}
+	withSystemTaskRegistry(t, poll, other)
+	now := time.Unix(1000, 0)
+	s := asyncTaskPollSchedule{}
+	s.refresh(now)
+	assert.Equal(t, now.Add(15*time.Second), s.nextCheck(), "idle discovery stays at 15 seconds")
+	assert.Zero(t, countSystemTasks(t, poll.Type()))
+
+	poll.enabled = true
+	runSystemTaskScheduler()
+	assert.Zero(t, countSystemTasks(t, poll.Type()), "global scheduler does not bypass targeted cadence")
+	assert.EqualValues(t, 1, countSystemTasks(t, other.Type()))
+	s.refresh(now.Add(15 * time.Second))
+	assert.EqualValues(t, 1, countSystemTasks(t, poll.Type()))
+	assert.Equal(t, now.Add(18*time.Second), s.nextCheck(), "active rows are not queried every second")
+	poll.enabled = false
+	s.refresh(now.Add(18 * time.Second))
+	assert.Nil(t, s.latest)
+	assert.EqualValues(t, 1, countSystemTasks(t, poll.Type()), "disable leaves queued work intact")
+}
+
+func TestSystemTaskPollingIntervalConcurrentReads(t *testing.T) {
+	previous := operation_setting.TaskPollingInterval()
+	t.Cleanup(func() { _ = operation_setting.LoadTaskPollingInterval(fmt.Sprint(int(previous.Seconds()))) })
+	values := []string{"3", "5", "15", "300"}
+	var wg sync.WaitGroup
+	for _, value := range values {
+		wg.Go(func() {
+			assert.NoError(t, operation_setting.LoadTaskPollingInterval(value))
+			assert.Contains(t, []time.Duration{3 * time.Second, 5 * time.Second, 15 * time.Second, 300 * time.Second}, operation_setting.TaskPollingInterval())
+		})
+	}
+	wg.Wait()
 }
 
 func TestSystemTaskClaimPassDispatchesByType(t *testing.T) {
