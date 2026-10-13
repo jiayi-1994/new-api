@@ -32,6 +32,30 @@ func RedactUnifiedVideoTaskDTO(task *model.Task, item *dto.TaskDto) {
 	}
 }
 
+// TaskVideoFacts returns the output seconds and resolution tier frozen on a
+// video task at submission (billing facts first, then the scheduling spec).
+// Zero values mean the task carries no such fact.
+func TaskVideoFacts(task *model.Task) (seconds float64, resolution string) {
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		if snap := bc.TieredSnapshot; snap != nil {
+			seconds, _ = snap.UsageFacts["seconds"].(float64)
+			resolution, _ = snap.UsageFacts["resolution"].(string)
+		}
+		if seconds <= 0 {
+			seconds = bc.OtherRatios["seconds"]
+		}
+	}
+	if summary := task.PrivateData.SchedulingSummary; summary != nil && summary.Spec != nil {
+		if seconds <= 0 && summary.Spec.OutputSeconds != nil {
+			seconds = *summary.Spec.OutputSeconds
+		}
+		if resolution == "" {
+			resolution = summary.Spec.Tier
+		}
+	}
+	return max(seconds, 0), videoAuditResolution(resolution)
+}
+
 // BuildUnifiedVideoResponse uses only host lifecycle and frozen sale fields.
 // Provider renderers may include arbitrary metadata and upstream URLs.
 func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {

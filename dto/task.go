@@ -51,16 +51,20 @@ type TaskDto struct {
 	LegacyVideoAvailable bool   `json:"legacy_video_available,omitempty"`
 	// ResultDiscarded marks a synchronous result that was returned inline and
 	// never persisted; the UI must not offer artifact retrieval for it.
-	ResultDiscarded bool            `json:"result_discarded,omitempty"`
-	SubmitTime      int64           `json:"submit_time"`
-	StartTime       int64           `json:"start_time"`
-	FinishTime      int64           `json:"finish_time"`
-	Progress        string          `json:"progress"`
-	Properties      any             `json:"properties"`
-	Username        string          `json:"username,omitempty"`
-	Data            json.RawMessage `json:"data"`
-	AdminInfo       *TaskAdminInfo  `json:"admin_info,omitempty"`
-	RootInfo        *TaskRootInfo   `json:"root_info,omitempty"`
+	ResultDiscarded bool   `json:"result_discarded,omitempty"`
+	SubmitTime      int64  `json:"submit_time"`
+	StartTime       int64  `json:"start_time"`
+	FinishTime      int64  `json:"finish_time"`
+	Progress        string `json:"progress"`
+	Properties      any    `json:"properties"`
+	// Resolution and Seconds are the video output tier and length frozen at
+	// submission; both are omitted for non-video tasks.
+	Resolution string          `json:"resolution,omitempty"`
+	Seconds    float64         `json:"seconds,omitempty"`
+	Username   string          `json:"username,omitempty"`
+	Data       json.RawMessage `json:"data"`
+	AdminInfo  *TaskAdminInfo  `json:"admin_info,omitempty"`
+	RootInfo   *TaskRootInfo   `json:"root_info,omitempty"`
 }
 
 type TaskPluginInfo struct {

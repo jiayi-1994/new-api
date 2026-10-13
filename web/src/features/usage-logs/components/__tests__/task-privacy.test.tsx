@@ -39,6 +39,8 @@ const task: TaskLog = {
   quota: 100,
   submit_time: 1,
   status: 'SUCCESS',
+  resolution: '720p',
+  seconds: 5,
   properties: {
     origin_model_name: 'public-video-model',
     upstream_model_name: 'private-upstream-model',
@@ -105,7 +107,8 @@ test('opening task details in the self view hides backend identifiers while reta
 test('the self task list labels a task with its public model and action instead of its platform', () => {
   renderTask()
 
-  expect(screen.getByText('public-video-model · Text to Video')).toBeVisible()
+  expect(screen.getByText('public-video-model')).toBeVisible()
+  expect(screen.getByText('Text to Video')).toBeVisible()
   expect(screen.getByRole('table')).not.toHaveTextContent(
     'private-video-provider'
   )
@@ -115,6 +118,14 @@ test('the self task list labels a task with its public model and action instead 
   expect(
     screen.queryByRole('columnheader', { name: 'Plugin' })
   ).not.toBeInTheDocument()
+})
+
+test('the task list shows the model, resolution and video length of a video task', () => {
+  renderTask()
+
+  expect(screen.getByRole('columnheader', { name: 'Model' })).toBeVisible()
+  expect(screen.getByText('720p')).toBeVisible()
+  expect(screen.getByText('5s')).toBeVisible()
 })
 
 test('the admin view retains platform, plugin, upstream model and channel diagnostics', async () => {

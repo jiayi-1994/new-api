@@ -162,3 +162,33 @@ func TestBuildTaskPluginViewOmitsPrivatePollState(t *testing.T) {
 	assert.NotContains(t, payload, "poll_failures")
 	assert.NotContains(t, payload, "private_data")
 }
+
+func TestTaskVideoFactsPrefersBillingFactsThenSchedulingSpec(t *testing.T) {
+	five, fifteen := 5.0, 15.0
+	spec := &model.TaskSchedulingSummary{Spec: &model.VideoSpecView{OutputSeconds: &fifteen, Tier: "1080p"}}
+	for _, tc := range []struct {
+		name           string
+		private        model.TaskPrivateData
+		wantSeconds    float64
+		wantResolution string
+	}{
+		{name: "usage facts win", private: model.TaskPrivateData{
+			BillingContext:    &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{UsageFacts: map[string]any{"seconds": five, "resolution": "720p"}}},
+			SchedulingSummary: spec,
+		}, wantSeconds: 5, wantResolution: "720p"},
+		{name: "scheduling spec fills gaps", private: model.TaskPrivateData{SchedulingSummary: spec}, wantSeconds: 15, wantResolution: "1080p"},
+		{name: "legacy other ratio seconds", private: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{OtherRatios: map[string]float64{"seconds": 8}},
+		}, wantSeconds: 8},
+		{name: "unsafe resolution is dropped", private: model.TaskPrivateData{
+			SchedulingSummary: &model.TaskSchedulingSummary{Spec: &model.VideoSpecView{Tier: "https://x.invalid/a"}},
+		}},
+		{name: "non-video task has no facts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seconds, resolution := TaskVideoFacts(&model.Task{PrivateData: tc.private})
+			assert.Equal(t, tc.wantSeconds, seconds)
+			assert.Equal(t, tc.wantResolution, resolution)
+		})
+	}
+}

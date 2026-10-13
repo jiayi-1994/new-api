@@ -495,6 +495,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 		if viewerRole < common.RoleAdminUser {
 			service.RedactUnifiedVideoTaskDTO(task, item)
 		}
+		item.Seconds, item.Resolution = service.TaskVideoFacts(task)
 		item.LegacyVideoAvailable = legacyVideoAvailable(task)
 		item.ResultDiscarded = task.PrivateData.ResultDiscarded
 		if task.Status == model.TaskStatusSuccess {

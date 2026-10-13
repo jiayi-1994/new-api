@@ -334,6 +334,9 @@ export interface TaskLog {
     upstream_model_name?: string
     origin_model_name?: string
   }
+  // Video output tier and length frozen at submission; absent for non-video tasks.
+  resolution?: string
+  seconds?: number
   legacy_video_available?: boolean
   // A synchronous result returned inline and never persisted; artifact
   // retrieval is not offered for it.

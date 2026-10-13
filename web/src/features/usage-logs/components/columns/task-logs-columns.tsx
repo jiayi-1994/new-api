@@ -207,9 +207,7 @@ export function useTaskLogsColumns(
           if (!taskId) {
             return <span className='text-muted-foreground/60 text-xs'>-</span>
           }
-          const taskIdentity = isAdmin
-            ? t(log.platform)
-            : log.properties?.origin_model_name
+          const taskIdentity = isAdmin ? t(log.platform) : null
           return (
             <div className='flex max-w-[170px] flex-col gap-0.5'>
               <StatusBadge
@@ -227,6 +225,53 @@ export function useTaskLogsColumns(
           )
         },
         meta: { mobileTitle: true },
+      },
+      {
+        id: 'model',
+        header: t('Model'),
+        accessorFn: (row) => row.properties?.origin_model_name ?? '',
+        cell: ({ row }) => {
+          const model = row.original.properties?.origin_model_name
+          if (!model) {
+            return <span className='text-muted-foreground/60 text-xs'>-</span>
+          }
+          return (
+            <StatusBadge
+              label={model}
+              copyText={model}
+              variant='neutral'
+              size='sm'
+              className='border-border/60 bg-muted/30 !text-foreground max-w-[170px] truncate rounded-md border px-1.5 py-0.5 font-mono'
+            />
+          )
+        },
+        size: 170,
+      },
+      {
+        id: 'resolution',
+        header: t('Resolution'),
+        accessorFn: (row) => row.resolution ?? '',
+        cell: ({ row }) =>
+          row.original.resolution ? (
+            <span className='font-mono text-xs'>{row.original.resolution}</span>
+          ) : (
+            <span className='text-muted-foreground/60 text-xs'>-</span>
+          ),
+        size: 90,
+      },
+      {
+        id: 'video_seconds',
+        header: t('Video Length'),
+        accessorFn: (row) => row.seconds ?? 0,
+        cell: ({ row }) =>
+          row.original.seconds ? (
+            <span className='font-mono text-xs tabular-nums'>
+              {row.original.seconds}s
+            </span>
+          ) : (
+            <span className='text-muted-foreground/60 text-xs'>-</span>
+          ),
+        size: 90,
       },
       createDurationColumn<TaskLog>({
         submitTimeKey: 'submit_time',
