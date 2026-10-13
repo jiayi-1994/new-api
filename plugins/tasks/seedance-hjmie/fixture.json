@@ -5,16 +5,16 @@
       "hook": "protocols",
       "path": ["openai_video", "decodeRequest"],
       "args": [{
-        "model": "videos-standard",
+        "model": "seedance-2.5",
         "body": {"kind": "json", "value": {
-          "model": "videos-standard", "prompt": "A sunrise", "seconds": "15",
+          "model": "seedance-2.5", "prompt": "A sunrise", "seconds": "15",
           "size": "1920x1080", "referenceImages": ["https://cdn.example/a.png"],
           "referenceVideos": ["https://cdn.example/b.mp4"],
           "referenceAudios": ["https://cdn.example/c.wav"]
         }}
       }],
       "expected": {
-        "kind": "submit", "model": "videos-standard", "action": "reference_to_video",
+        "kind": "submit", "model": "seedance-2.5", "action": "reference_to_video",
         "requestBody": {
           "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
           "images": ["https://cdn.example/a.png"],
@@ -27,10 +27,10 @@
       "name": "explicit 4k and duration",
       "hook": "protocols",
       "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-fast", "body": {"kind": "json", "value": {
-        "model": "videos-fast", "prompt": "A city", "duration": 8, "resolution": "4K", "aspect_ratio": "9:16"
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A city", "duration": 8, "resolution": "4K", "aspect_ratio": "9:16"
       }}}],
-      "expected": {"kind": "submit", "model": "videos-fast", "action": "text_to_video", "requestBody": {
+      "expected": {"kind": "submit", "model": "seedance-2.0", "action": "text_to_video", "requestBody": {
         "prompt": "A city", "duration": 8, "resolution": "4k", "ratio": "9:16"
       }}
     },
@@ -38,11 +38,11 @@
       "name": "Chinese prompt with 4k OpenAI-style fields",
       "hook": "protocols",
       "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-standard", "body": {"kind": "json", "value": {
-        "model": "videos-standard", "prompt": "一只猫在海边奔跑，电影感镜头",
+      "args": [{"model": "seedance-2.5", "body": {"kind": "json", "value": {
+        "model": "seedance-2.5", "prompt": "一只猫在海边奔跑，电影感镜头",
         "seconds": 5, "resolution": "4k", "ratio": "16:9"
       }}}],
-      "expected": {"kind": "submit", "model": "videos-standard", "action": "text_to_video", "requestBody": {
+      "expected": {"kind": "submit", "model": "seedance-2.5", "action": "text_to_video", "requestBody": {
         "prompt": "一只猫在海边奔跑，电影感镜头", "duration": 5,
         "resolution": "4k", "ratio": "16:9"
       }}
@@ -51,11 +51,11 @@
       "name": "multipart text fields and repeated references",
       "hook": "protocols",
       "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "multipart", "fields": {
-        "model": ["videos-mini"], "prompt": ["A lake"], "seconds": ["6"],
+      "args": [{"model": "seedance-2.0", "body": {"kind": "multipart", "fields": {
+        "model": ["seedance-2.0"], "prompt": ["A lake"], "seconds": ["6"],
         "size": ["1280x720"], "images[]": ["https://cdn.example/1.png", "https://cdn.example/2.png"]
       }, "files": []}}],
-      "expected": {"kind": "submit", "model": "videos-mini", "action": "reference_to_video", "requestBody": {
+      "expected": {"kind": "submit", "model": "seedance-2.0", "action": "reference_to_video", "requestBody": {
         "prompt": "A lake", "duration": 6, "resolution": "720p", "ratio": "16:9",
         "images": ["https://cdn.example/1.png", "https://cdn.example/2.png"]
       }}
@@ -63,24 +63,24 @@
     {
       "name": "missing resolution is not silently 720p",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 5
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 5
       }}}],
       "expectedError": "resolution or size is required"
     },
     {
       "name": "unsupported 1024 pixel size is rejected",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 5, "size": "1792x1024"
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 5, "size": "1792x1024"
       }}}],
       "expectedError": "does not map to a supported resolution"
     },
     {
       "name": "conflicting size and resolution is rejected",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 5,
         "size": "1280x720", "resolution": "1080p"
       }}}],
       "expectedError": "size conflicts with resolution"
@@ -88,8 +88,8 @@
     {
       "name": "unknown quality field is reported",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 5,
         "resolution": "720p", "quality": "high"
       }}}],
       "expectedError": "unsupported video parameter: quality"
@@ -97,8 +97,8 @@
     {
       "name": "duplicate duration aliases disagree",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 5,
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 5,
         "duration": 8, "resolution": "720p"
       }}}],
       "expectedError": "conflicting values for seconds/duration"
@@ -106,23 +106,23 @@
     {
       "name": "unbounded duration is rejected before billing",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "json", "value": {
-        "model": "videos-mini", "prompt": "A lake", "seconds": 3601, "resolution": "720p"
+      "args": [{"model": "seedance-2.0", "body": {"kind": "json", "value": {
+        "model": "seedance-2.0", "prompt": "A lake", "seconds": 3601, "resolution": "720p"
       }}}],
       "expectedError": "seconds must be between 1 and 3600"
     },
     {
       "name": "multipart file is rejected because upstream only accepts URLs",
       "hook": "protocols", "path": ["openai_video", "decodeRequest"],
-      "args": [{"model": "videos-mini", "body": {"kind": "multipart", "fields": {
-        "model": ["videos-mini"], "prompt": ["A lake"], "seconds": ["5"], "resolution": ["720p"]
+      "args": [{"model": "seedance-2.0", "body": {"kind": "multipart", "fields": {
+        "model": ["seedance-2.0"], "prompt": ["A lake"], "seconds": ["5"], "resolution": ["720p"]
       }, "files": [{"ref": "request_file:input_reference", "field": "input_reference", "filename": "a.png", "mimeType": "image/png", "size": 3}]}}],
       "expectedError": "file uploads are not supported"
     },
     {
       "name": "build exact upstream JSON payload",
       "hook": "buildSubmitRequest",
-      "args": [{"baseUrl": "https://poxiaoapi001.com/", "authHeader": "Bearer test-key", "model": "videos-standard", "upstreamModel": "videos-standard", "requestBody": {
+      "args": [{"baseUrl": "https://poxiaoapi001.com/", "authHeader": "Bearer test-key", "model": "seedance-2.5", "upstreamModel": "seedance-2.5", "requestBody": {
         "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
         "images": ["https://cdn.example/a.png"], "videos": ["https://cdn.example/b.mp4"],
         "audios": ["https://cdn.example/c.wav"]
@@ -130,7 +130,7 @@
       "expected": {"url": "https://poxiaoapi001.com/v1/videos", "method": "POST", "headers": {
         "Authorization": "Bearer test-key", "Content-Type": "application/json"
       }, "body": {
-        "model": "videos-standard", "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
+        "model": "seedance-2.5", "prompt": "A sunrise", "duration": 15, "resolution": "1080p", "ratio": "16:9",
         "images": ["https://cdn.example/a.png"], "videos": ["https://cdn.example/b.mp4"],
         "audios": ["https://cdn.example/c.wav"]
       }}

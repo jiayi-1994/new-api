@@ -1,6 +1,6 @@
 // Task Plugin API v1 adapter for the Po Xiao public /v1/videos API.
 // The upstream accepts JSON and public media URLs; legacy model names remain supported.
-const MODELS = ["seedance-2.0", "videos-mini", "videos-fast", "videos-standard"];
+const MODELS = ["seedance-2.0", "seedance-2.5"];
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
 const RATIOS = ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"];
 const ALLOWED_FIELDS = [
@@ -19,7 +19,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.8",
+  version: "1.0.9",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",

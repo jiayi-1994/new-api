@@ -15,13 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"aggc", "alibaba", "bytefor", "cangyuan", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "vertex-ai", "vidu", "zongheng"}
+var expectedKeys = []string{"aggc", "alibaba", "bytefor", "cangyuan", "doubao", "google", "hailuo", "jimeng", "kling", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "vertex-ai", "vidu", "vobilemax", "zongheng"}
 
 // responsesKeys are the vendor plugins that also serve OpenAI Responses.
 var responsesKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
 
 // videoOnlyKeys are third-party relays that only speak the OpenAI video protocol.
-var videoOnlyKeys = []string{"aggc", "bytefor", "cangyuan", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sudashui", "zongheng"}
+var videoOnlyKeys = []string{"aggc", "bytefor", "cangyuan", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sudashui", "vobilemax", "zongheng"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -241,7 +241,7 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
 		{"onmi", "e组-sd2.0mini", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "480p", "ratio": "16:9", "n": 1, "generate_audio": false, "images": images, "videos": video, "audios": []any{"https://cdn.example/1.mp3"}}, 10,
 			videosched.Spec{Tier: "480p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
-		{"seedance-hjmie", "videos-fast", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
+		{"seedance-hjmie", "seedance-2.0", map[string]any{"prompt": "cat", "duration": 8, "resolution": "4k", "videos": video}, 8,
 			videosched.Spec{Tier: "4k", References: map[string]int{"video": 1, "image": 0, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"sudashui", "sdas-mg-sd2.5-720p", map[string]any{"prompt": "cat", "duration": 30, "resolution": "720p", "images": images, "videos": video}, 30,
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
@@ -249,6 +249,8 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 			videosched.Spec{Tier: "*", SecondsKind: videosched.KindFixed, References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
 		{"pidoi", "tejiasd-mini-720p", map[string]any{"prompt": "cat", "seconds": 8, "resolution": "480p", "images": images}, 8,
 			videosched.Spec{Tier: "480p", References: map[string]int{"video": 0, "image": 2, "audio": 0, "frame": 0}}},
+		{"vobilemax", "vobilemax-seedance-2.0", map[string]any{"prompt": "cat", "seconds": 4, "size": "720x1280", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.wav"}}, 4,
+			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"zongheng", "XXseedacn2.5", map[string]any{"prompt": "cat", "seconds": 10, "size": "1280x720", "images": images, "videos": video, "start_frame": "https://cdn.example/start.png", "end_frame": "https://cdn.example/end.png"}, 10,
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 2}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 	}
@@ -359,6 +361,302 @@ func TestAggcVideoPluginLifecycle(t *testing.T) {
 			"args":[{"artifactKey":"video","apiKey":"fixture-only-key","data":{"code":0,"data":{"job_id":123,"status":"success","video_url":"https://cdn.example/video.mp4"}},"clientRequest":{"method":"HEAD","headers":{"Authorization":"private-client-token"}}}],
 			"expected":{"url":"https://cdn.example/video.mp4","method":"HEAD","credentialless":true}
 		}
+	]}`))
+	require.NoError(t, err)
+}
+
+func TestVobilemaxVideoPluginLifecycle(t *testing.T) {
+	source, err := Source("vobilemax")
+	require.NoError(t, err)
+	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "vobilemax"})
+	require.NoError(t, err)
+	for _, model := range []string{"vobilemax-seedance-2.0", "vobilemax-seedance-2.5", "vobilemax-kling-v3"} {
+		binding, found := jsplugin.DefaultRegistry.Generation().LookupEndpoint("POST", "/v1/videos", model)
+		require.True(t, found, model)
+		assert.Equal(t, "vobilemax", binding.Plugin.Meta.Key)
+	}
+
+	t.Run("decoded wire request matches billed and scheduled facts", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, fields, normalized string
+		}{
+			{"defaults", `{}`, `{"prompt":"海边日出","seconds":15,"resolution":"720p","ratio":"16:9","images":[],"videos":[],"audios":[]}`},
+			{"standard portrait", `{"seconds":"4","size":"720x1280","n":1,"images":["https://cdn.example/a.png"],"videos":["https://cdn.example/v.mp4","https://cdn.example/v.mp4"],"audios":["https://cdn.example/a.wav"]}`, `{"prompt":"海边日出","seconds":4,"resolution":"720p","ratio":"9:16","images":["https://cdn.example/a.png"],"videos":["https://cdn.example/v.mp4","https://cdn.example/v.mp4"],"audios":["https://cdn.example/a.wav"]}`},
+			{"native options and equivalent aliases", `{"seconds":3,"duration":"3","resolution":"480p","options":{"duration":3,"durationSeconds":3,"resolution":"480p","quality":"480p","ratio":"4:3","aspectRatio":"4:3","count":1},"imageUrls":["https://cdn.example/a.png"],"image_urls":["https://cdn.example/a.png"],"mode":"allReference","sync":false}`, `{"prompt":"海边日出","seconds":3,"resolution":"480p","ratio":"4:3","images":["https://cdn.example/a.png"],"videos":[],"audios":[],"mode":"allReference"}`},
+			{"ultrawide size", `{"seconds":4,"size":"2560x1080","video_urls":["https://cdn.example/v.mp4"],"audioUrls":["https://cdn.example/a.wav"]}`, `{"prompt":"海边日出","seconds":4,"resolution":"1080p","ratio":"21:9","images":[],"videos":["https://cdn.example/v.mp4"],"audios":["https://cdn.example/a.wav"]}`},
+			{"1080p aliases", `{"seconds":4,"size":"1920x1080","resolution":"1080p"}`, `{"prompt":"海边日出","seconds":4,"resolution":"1080p","ratio":"16:9","images":[],"videos":[],"audios":[]}`},
+			{"4k aliases and landscape pixels", `{"seconds":4,"size":"3840x2160","resolution":"4K","options":{"quality":"2160p"}}`, `{"prompt":"海边日出","seconds":4,"resolution":"4k","ratio":"16:9","images":[],"videos":[],"audios":[]}`},
+			{"4k portrait pixels", `{"seconds":4,"size":"2160x3840"}`, `{"prompt":"海边日出","seconds":4,"resolution":"4k","ratio":"9:16","images":[],"videos":[],"audios":[]}`},
+			{"4k size tier", `{"seconds":4,"size":"2160p","resolution":"4k"}`, `{"prompt":"海边日出","seconds":4,"resolution":"4k","ratio":"16:9","images":[],"videos":[],"audios":[]}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input, normalized map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.fields, &input))
+				require.NoError(t, common.UnmarshalJsonStr(tc.normalized, &normalized))
+				input["model"], input["prompt"] = "public-video", "海边日出"
+				before, marshalErr := common.Marshal(input)
+				require.NoError(t, marshalErr)
+				decoded, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+					"model": "public-video", "upstreamModel": "public-video", "body": map[string]any{"kind": "json", "value": input},
+				})
+				require.NoError(t, decodeErr)
+				intent := decoded.(map[string]any)
+				assert.Equal(t, "public-video", intent["model"])
+				encoded, marshalErr := common.Marshal(intent["requestBody"])
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, tc.normalized, string(encoded))
+				ctx := map[string]any{"model": "public-video", "upstreamModel": "vobilemax-seedance-2.0", "requestBody": intent["requestBody"], "baseUrl": "https://vobile.example/", "authHeader": "Bearer fixture-only-key"}
+				built, buildErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+				require.NoError(t, buildErr)
+				body := map[string]any{
+					"model": "doubao-seedance-2-0-260128", "prompt": "海边日出", "seconds": normalized["seconds"], "sync": false, "mode": "allReference",
+					"imageUrls": normalized["images"], "videoUrls": normalized["videos"], "audioUrls": normalized["audios"],
+					"options": map[string]any{"duration": normalized["seconds"], "durationSeconds": normalized["seconds"], "count": 1,
+						"resolution": normalized["resolution"], "quality": normalized["resolution"], "ratio": normalized["ratio"], "aspectRatio": normalized["ratio"]},
+				}
+				want, marshalErr := common.Marshal(map[string]any{"url": "https://vobile.example/v1/videos", "method": "POST", "headers": map[string]string{
+					"Authorization": "Bearer fixture-only-key", "Content-Type": "application/json; charset=utf-8",
+				}, "body": body})
+				require.NoError(t, marshalErr)
+				got, marshalErr := common.Marshal(built)
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, string(want), string(got))
+				usage, usageErr := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+				require.NoError(t, usageErr)
+				got, marshalErr = common.Marshal(usage)
+				require.NoError(t, marshalErr)
+				want, marshalErr = common.Marshal(map[string]any{"seconds": normalized["seconds"], "resolution": normalized["resolution"], "video_input": len(normalized["videos"].([]any)) > 0})
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, string(want), string(got))
+				value, specErr := plugin.Engine.Call(t.Context(), "describeSpec", ctx)
+				require.NoError(t, specErr)
+				parsed, _, parseErr := spec.Parse(value.(map[string]any))
+				require.NoError(t, parseErr)
+				assert.Equal(t, normalized["resolution"], parsed.Tier)
+				assert.Equal(t, normalized["seconds"], *parsed.OutputSeconds)
+				assert.Equal(t, len(normalized["images"].([]any)), parsed.References["image"])
+				assert.Equal(t, len(normalized["audios"].([]any)), parsed.References["audio"])
+				urls := normalized["videos"].([]any)
+				assert.Equal(t, len(urls), parsed.References["video"])
+				require.Len(t, parsed.ReferenceVideoURLs, len(urls))
+				for i, url := range urls {
+					assert.Equal(t, url, parsed.ReferenceVideoURLs[i])
+				}
+				retried, retryErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+				require.NoError(t, retryErr)
+				assert.Equal(t, built, retried)
+				after, marshalErr := common.Marshal(input)
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, string(before), string(after), "hooks must not mutate host inputs or accumulate references")
+			})
+		}
+	})
+
+	t.Run("new models preserve mapped wire parameters and scheduling facts", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, model, upstream, fields, tier, mode string
+			seconds                                   float64
+			images, videos, audios, frames            int
+			ratio                                     string
+		}{
+			{"seedance25 minimum", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":4,"resolution":"480p"}`, "480p", "allReference", 4, 0, 0, 0, 0, "16:9"},
+			{"seedance25 mixed references", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":15,"resolution":"720p","images":["https://cdn.example/1.png"],"videos":["https://cdn.example/1.mp4","https://cdn.example/1.mp4"],"audios":["https://cdn.example/1.wav"]}`, "720p", "allReference", 15, 1, 2, 1, 0, "16:9"},
+			{"seedance25 maximum", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":30,"size":"1920x1080"}`, "1080p", "allReference", 30, 0, 0, 0, 0, "16:9"},
+			{"seedance20 first frame", "vobilemax-seedance-2.0", "doubao-seedance-2-0-260128", `{"seconds":4,"resolution":"1080p","first_image_url":"https://cdn.example/first.png"}`, "1080p", "image2video", 4, 0, 0, 0, 1, "16:9"},
+			{"seedance20 standard frames 4k", "vobilemax-seedance-2.0", "doubao-seedance-2-0-260128", `{"seconds":5,"size":"2160x3840","first_image_url":"https://cdn.example/first.png","last_image_url":"https://cdn.example/last.png"}`, "4k", "firstLastFrame", 5, 0, 0, 0, 2, "9:16"},
+			{"seedance20 native frames", "vobilemax-seedance-2.0", "doubao-seedance-2-0-260128", `{"seconds":5,"resolution":"720p","mode":"firstLastFrame","imageUrls":["https://cdn.example/first.png","https://cdn.example/last.png"],"ratio":"adaptive"}`, "720p", "firstLastFrame", 5, 0, 0, 0, 2, "adaptive"},
+			{"seedance25 first frame default ratio", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":4,"resolution":"480p","first_image_url":"https://cdn.example/first.png"}`, "480p", "image2video", 4, 0, 0, 0, 1, "adaptive"},
+			{"seedance25 standard frames default ratio", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":30,"size":"1080p","first_image_url":"https://cdn.example/first.png","last_image_url":"https://cdn.example/last.png"}`, "1080p", "firstLastFrame", 30, 0, 0, 0, 2, "adaptive"},
+			{"seedance25 native frames explicit ratio", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":15,"resolution":"720p","mode":"firstLastFrame","image_urls":["https://cdn.example/first.png","https://cdn.example/last.png"],"options":{"ratio":"adaptive","aspectRatio":"adaptive"}}`, "720p", "firstLastFrame", 15, 0, 0, 0, 2, "adaptive"},
+			{"seedance25 optional last frame", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":5,"mode":"firstLastFrame","images":["https://cdn.example/first.png"]}`, "720p", "firstLastFrame", 5, 0, 0, 0, 1, "adaptive"},
+			{"seedance images keep reference meaning", "vobilemax-seedance-2.5", "doubao-seedance-2-5-260628", `{"seconds":5,"images":["https://cdn.example/first.png","https://cdn.example/last.png"]}`, "720p", "allReference", 5, 2, 0, 0, 0, "16:9"},
+			{"kling first frame", "vobilemax-kling-v3", "kling-v3", `{"seconds":3,"resolution":"720p","first_image_url":"https://cdn.example/first.png"}`, "720p", "image2video", 3, 0, 0, 0, 1, "16:9"},
+			{"kling native frames", "vobilemax-kling-v3", "kling-v3", `{"seconds":5,"resolution":"1080p","mode":"firstLastFrame","imageUrls":["https://cdn.example/first.png","https://cdn.example/last.png"]}`, "1080p", "firstLastFrame", 5, 0, 0, 0, 2, "16:9"},
+			{"kling standard frames 4k", "vobilemax-kling-v3", "kling-v3", `{"seconds":10,"size":"2160x3840","resolution":"4K","first_image_url":"https://cdn.example/first.png","last_image_url":"https://cdn.example/last.png"}`, "4k", "firstLastFrame", 10, 0, 0, 0, 2, "9:16"},
+			{"kling inferred frames after mapping", "vobilemax-kling-v3", "kling-v3", `{"seconds":15,"size":"4k","images":["https://cdn.example/first.png","https://cdn.example/last.png"]}`, "4k", "firstLastFrame", 15, 0, 0, 0, 2, "16:9"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.fields, &input))
+				input["model"], input["prompt"] = "public-video", "cat"
+				before, err := common.Marshal(input)
+				require.NoError(t, err)
+				// Exercise both initial alias decoding and a selected upstream pin.
+				for _, decodeModel := range []string{"public-video", tc.model, tc.upstream} {
+					decoded, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+						"model": "public-video", "upstreamModel": decodeModel, "body": map[string]any{"kind": "json", "value": input},
+					})
+					require.NoError(t, err)
+					intent := decoded.(map[string]any)
+					assert.Equal(t, "public-video", intent["model"])
+					for _, mappedModel := range []string{tc.model, tc.upstream} {
+						ctx := map[string]any{"model": "public-video", "upstreamModel": mappedModel, "requestBody": intent["requestBody"], "baseUrl": "https://vobile.example", "apiKey": "fixture-only-key"}
+						built, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+						require.NoError(t, err)
+						body := built.(map[string]any)["body"].(map[string]any)
+						assert.Equal(t, tc.upstream, body["model"])
+						assert.Equal(t, tc.mode, body["mode"])
+						assert.EqualValues(t, tc.seconds, body["seconds"])
+						options := body["options"].(map[string]any)
+						assert.Equal(t, tc.tier, options["resolution"])
+						assert.Equal(t, tc.tier, options["quality"])
+						assert.Equal(t, tc.ratio, options["ratio"])
+						assert.Equal(t, tc.ratio, options["aspectRatio"])
+						assert.EqualValues(t, tc.seconds, options["duration"])
+						assert.EqualValues(t, tc.seconds, options["durationSeconds"])
+						if tc.frames > 0 {
+							frames := []any{"https://cdn.example/first.png"}
+							if tc.frames == 2 {
+								frames = append(frames, "https://cdn.example/last.png")
+							}
+							assert.Equal(t, frames, body["imageUrls"])
+						}
+						usage, err := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+						require.NoError(t, err)
+						encoded, err := common.Marshal(usage)
+						require.NoError(t, err)
+						want, err := common.Marshal(map[string]any{"seconds": tc.seconds, "resolution": tc.tier, "video_input": tc.videos > 0})
+						require.NoError(t, err)
+						assert.JSONEq(t, string(want), string(encoded))
+						value, err := plugin.Engine.Call(t.Context(), "describeSpec", ctx)
+						require.NoError(t, err)
+						parsed, _, err := spec.Parse(value.(map[string]any))
+						require.NoError(t, err)
+						assert.Equal(t, tc.seconds, *parsed.OutputSeconds)
+						assert.Equal(t, tc.tier, parsed.Tier)
+						assert.Equal(t, map[string]int{"image": tc.images, "video": tc.videos, "audio": tc.audios, "frame": tc.frames}, parsed.References)
+						require.Len(t, parsed.ReferenceVideoURLs, tc.videos)
+						for i, url := range parsed.ReferenceVideoURLs {
+							assert.Equal(t, body["videoUrls"].([]any)[i], url)
+						}
+						retried, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+						require.NoError(t, err)
+						assert.Equal(t, built, retried)
+					}
+				}
+				after, err := common.Marshal(input)
+				require.NoError(t, err)
+				assert.JSONEq(t, string(before), string(after))
+			})
+		}
+	})
+
+	t.Run("mapped model restrictions cannot be bypassed through aliases or options", func(t *testing.T) {
+		for _, tc := range []struct{ name, model, fields, message string }{
+			{"seedance25 lower bound", "vobilemax-seedance-2.5", `{"seconds":3}`, "between 4 and 30"},
+			{"seedance25 upper bound", "vobilemax-seedance-2.5", `{"options":{"durationSeconds":31}}`, "between 4 and 30"},
+			{"seedance25 4k", "vobilemax-seedance-2.5", `{"size":"3840x2160"}`, "resolution must be 480p, 720p, 1080p"},
+			{"seedance20 too many frames", "vobilemax-seedance-2.0", `{"mode":"firstLastFrame","images":["https://cdn.example/a.png","https://cdn.example/b.png","https://cdn.example/c.png"]}`, "requires one or two images"},
+			{"seedance20 mixed video and frames", "vobilemax-seedance-2.0", `{"first_image_url":"https://cdn.example/a.png","videos":["https://cdn.example/a.mp4"]}`, "do not support reference videos or audio"},
+			{"seedance25 mixed audio and frames", "vobilemax-seedance-2.5", `{"first_image_url":"https://cdn.example/a.png","audios":["https://cdn.example/a.wav"]}`, "do not support reference videos or audio"},
+			{"seedance25 fixed frame ratio", "vobilemax-seedance-2.5", `{"first_image_url":"https://cdn.example/a.png","ratio":"16:9"}`, "frame modes require ratio adaptive"},
+			{"seedance25 nested fixed frame ratio", "vobilemax-seedance-2.5", `{"mode":"firstLastFrame","imageUrls":["https://cdn.example/a.png"],"options":{"aspectRatio":"9:16"}}`, "frame modes require ratio adaptive"},
+			{"seedance25 pixel frame size", "vobilemax-seedance-2.5", `{"first_image_url":"https://cdn.example/a.png","size":"1280x720"}`, "frame modes require ratio adaptive"},
+			{"kling no first frame", "vobilemax-kling-v3", `{}`, "requires one image"},
+			{"kling unsupported seconds", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"options":{"duration":4}}`, "seconds must be 3, 5, 10 or 15"},
+			{"kling 480p", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"resolution":"480p"}`, "resolution must be 720p, 1080p, 4k"},
+			{"kling reference video", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"videos":["https://cdn.example/a.mp4"]}`, "do not support reference videos or audio"},
+			{"kling reference audio", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"audios":["https://cdn.example/a.wav"]}`, "do not support reference videos or audio"},
+			{"kling all reference mode", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"mode":"allReference"}`, "Kling requires"},
+			{"kling too many frames", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png","https://cdn.example/b.png","https://cdn.example/c.png"]}`, "requires one or two images"},
+			{"kling mixed frame sources", "vobilemax-kling-v3", `{"images":["https://cdn.example/a.png"],"first_image_url":"https://cdn.example/b.png"}`, "conflict with images"},
+			{"kling last without first", "vobilemax-kling-v3", `{"last_image_url":"https://cdn.example/b.png"}`, "requires first_image_url"},
+			{"kling invalid frame URL", "vobilemax-kling-v3", `{"first_image_url":"file:///a.png"}`, "public http(s) URL"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.fields, &input))
+				input["model"], input["prompt"] = "public-video", "cat"
+				_, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+					"model": "public-video", "upstreamModel": tc.model, "body": map[string]any{"kind": "json", "value": input},
+				})
+				require.ErrorContains(t, err, tc.message)
+				for _, hook := range []string{"extractUsage", "describeSpec", "buildSubmitRequest"} {
+					_, err := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "public-video", "upstreamModel": tc.model,
+						"requestBody": input, "baseUrl": "https://vobile.example", "apiKey": "fixture-only-key"})
+					require.ErrorContains(t, err, tc.message, hook)
+				}
+			})
+		}
+	})
+
+	t.Run("invalid input and channel overrides fail before quoting or submitting", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, fields, message string
+		}{
+			{"zero", `{"seconds":0}`, "between 1 and 3600"},
+			{"negative", `{"seconds":-1}`, "between 1 and 3600"},
+			{"fraction", `{"seconds":1.5}`, "integer seconds"},
+			{"boolean", `{"seconds":true}`, "integer seconds"},
+			{"null", `{"seconds":null}`, "integer seconds"},
+			{"overflow", `{"seconds":18446744073686646784}`, "between 1 and 3600"},
+			{"nested duration", `{"options":{"duration":3601}}`, "between 1 and 3600"},
+			{"nested alias", `{"options":{"durationSeconds":0}}`, "between 1 and 3600"},
+			{"duration conflict", `{"seconds":4,"options":{"duration":8}}`, "conflicting values"},
+			{"multiple outputs", `{"n":2}`, "n must be 1"},
+			{"nested output count", `{"options":{"count":2}}`, "count must be 1"},
+			{"unavailable tier", `{"resolution":"8k"}`, "480p, 720p, 1080p or 4k"},
+			{"4k size conflict", `{"size":"3840x2160","resolution":"1080p"}`, "size conflicts with resolution"},
+			{"size conflict", `{"size":"1280x720","resolution":"1080p"}`, "size conflicts with resolution"},
+			{"ratio conflict", `{"size":"720x1280","ratio":"16:9"}`, "size conflicts with ratio"},
+			{"nested tier conflict", `{"resolution":"480p","options":{"quality":"720p"}}`, "conflicting values"},
+			{"unrecognized dimensions", `{"size":"1000x720"}`, "unsupported aspect ratio"},
+			{"malformed references", `{"images":[42]}`, "public http(s) URLs"},
+			{"reference object", `{"videos":{"url":"https://cdn.example/v.mp4"}}`, "array"},
+			{"reference disagreement", `{"videos":["https://cdn.example/a.mp4"],"videoUrls":["https://cdn.example/b.mp4"]}`, "conflicting values"},
+			{"URL credentials", `{"audios":["https://user:password@cdn.example/a.wav"]}`, "without credentials"},
+			{"URL scheme", `{"images":["data:image/png;base64,AA=="]}`, "public http(s) URLs"},
+			{"blank prompt", `{"prompt":" "}`, "non-empty string"},
+			{"conflicting frame mode", `{"first_image_url":"https://cdn.example/a.png","mode":"allReference"}`, "require image2video or firstLastFrame mode"},
+			{"last frame", `{"last_image_url":"https://cdn.example/a.png"}`, "last_image_url requires first_image_url"},
+			{"sync request", `{"sync":true}`, "sync must be false"},
+			{"unverified mode", `{"mode":"videoExtend"}`, "mode must be"},
+			{"client reference duration", `{"ref_video_seconds":0}`, "reference duration hints are not accepted"},
+			{"hidden multiplier", `{"metadata":{"duration":99999}}`, "unsupported video parameter"},
+			{"unknown option", `{"options":{"seed":42}}`, "unsupported options parameter"},
+			{"null options", `{"options":null}`, "options must be an object"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.fields, &input))
+				input["model"] = "vobilemax-seedance-2.0"
+				if _, exists := input["prompt"]; !exists {
+					input["prompt"] = "cat"
+				}
+				_, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": input["model"], "body": map[string]any{"kind": "json", "value": input}})
+				require.ErrorContains(t, err, tc.message)
+				for _, hook := range []string{"extractUsage", "describeSpec", "buildSubmitRequest"} {
+					_, err = plugin.Engine.Call(t.Context(), hook, map[string]any{"model": input["model"], "requestBody": input, "baseUrl": "https://vobile.example", "apiKey": "fixture-only-key"})
+					require.ErrorContains(t, err, tc.message, hook)
+				}
+			})
+		}
+	})
+
+	_, err = jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{"name":"quoted queued task is accepted without treating zero cost as free","hook":"parseSubmitResponse","args":[{},{"statusCode":200,"body":{"id":"cgt_fixture","status":"queued","seconds":null,"progress":0,"vobile":{"creditCost":"0.000000","quote":{"payable_amount":"4000","currency":"CREDIT"}}}}],"expected":{"taskId":"cgt_fixture","taskData":{"id":"cgt_fixture","status":"queued","seconds":null,"progress":0,"vobile":{"creditCost":"0.000000","quote":{"payable_amount":"4000","currency":"CREDIT"}}}}},
+		{"name":"explicit rejection","hook":"parseSubmitResponse","args":[{},{"body":{"error":{"code":"no_capacity","message":"busy"}}}],"expected":{"rejected":{"reason":"no_capacity: busy"}}},
+		{"name":"ambiguous missing id does not authorize retry","hook":"parseSubmitResponse","args":[{},{"body":{"status":"failed"}}],"expectedError":"no task id"},
+		{"name":"numeric id is not silently converted","hook":"parseSubmitResponse","args":[{},{"body":{"id":42}}],"expectedError":"invalid task id"},
+		{"name":"failed accepted task settles through immediate failure","hook":"parseSubmitResponse","args":[{},{"body":{"id":"cgt_fixture","status":"failed","error":{"code":"invalid_prompt","message":"invalid prompt"}}}],"expected":{"taskId":"cgt_fixture","taskData":{"id":"cgt_fixture","status":"failed","error":{"code":"invalid_prompt","message":"invalid prompt"}},"immediate":{"status":"FAILURE","reason":"invalid_prompt: invalid prompt"}}},
+		{"name":"immediate success retains artifact","hook":"parseSubmitResponse","args":[{},{"body":{"id":"cgt_fixture","status":"completed","url":"https://cdn.example/v.mp4"}}],"expected":{"taskId":"cgt_fixture","taskData":{"id":"cgt_fixture","status":"completed","url":"https://cdn.example/v.mp4"},"immediate":{"status":"SUCCESS","progress":"100%"}}},
+		{"name":"query uses persisted upstream id","hook":"buildQueryRequest","args":[{"baseUrl":"https://vobile.example/","apiKey":"fixture-only-key","taskId":"cgt/a"}],"expected":{"url":"https://vobile.example/v1/videos/cgt%2Fa","method":"GET","headers":{"Authorization":"Bearer fixture-only-key"}}},
+		{"name":"queued progress","hook":"parseTaskResult","args":[{},{"status":"queued","progress":0}],"expected":{"status":"QUEUED","progress":"0%"}},
+		{"name":"archiving remains in progress even with zero progress","hook":"parseTaskResult","args":[{},{"status":"in_progress","progress":0,"vobile":{"stage":"archiving"}}],"expected":{"status":"IN_PROGRESS","progress":"0%"}},
+		{"name":"completed","hook":"parseTaskResult","args":[{},{"status":"completed","url":"https://cdn.example/v.mp4"}],"expected":{"status":"SUCCESS","progress":"100%"}},
+		{"name":"missing video cannot be charged as success","hook":"parseTaskResult","args":[{},{"status":"completed"}],"expected":{"status":"UNKNOWN","reason":"completed task has no downloadable video URL"}},
+		{"name":"unknown state does not run forever","hook":"parseTaskResult","args":[{},{"status":"constructor"}],"expected":{"status":"UNKNOWN","reason":"unrecognized upstream task status"}},
+		{"name":"invalid body","hook":"parseTaskResult","args":[{},null],"expected":{"status":"UNKNOWN","reason":"invalid upstream task response"}},
+		{"name":"credit cost is not output seconds or host currency","hook":"extractUsageOnComplete","args":[{},{"status":"SUCCESS"},{"seconds":null,"vobile":{"creditCost":"4000.000000","balanceAfter":"18000.000000"}}],"expected":{}},
+		{"name":"artifact available","hook":"listArtifacts","args":[{"status":"SUCCESS","data":{"url":"https://cdn.example/v.mp4"}}],"expected":[{"key":"video","type":"video","mimeType":"video/mp4"}]},
+		{"name":"unfinished artifact unavailable","hook":"listArtifacts","args":[{"status":"IN_PROGRESS","data":{"url":"https://cdn.example/v.mp4"}}],"expected":[]},
+		{"name":"OSS download is credentialless","hook":"buildContentRequest","args":[{"artifactKey":"video","apiKey":"fixture-only-key","data":{"url":"https://cdn.example/v.mp4?fixture=1"},"clientRequest":{"method":"HEAD","headers":{"Authorization":"private-client-key"}}}],"expected":{"url":"https://cdn.example/v.mp4?fixture=1","method":"HEAD","credentialless":true}},
+		{"name":"credentials in download URL rejected","hook":"buildContentRequest","args":[{"artifactKey":"video","data":{"url":"https://user:pass@cdn.example/v.mp4"}}],"expectedError":"no downloadable video URL"},
+		{"name":"unrecognized artifact","hook":"buildContentRequest","args":[{"artifactKey":"thumbnail","data":{"url":"https://cdn.example/v.mp4"}}],"expectedError":"artifact_not_found"},
+		{"name":"presenter excludes account and credit details","hook":"protocols","path":["openai_video","render"],"args":[{},{"status":"SUCCESS","data":{"id":"private-id","size":"1280x720","url":"https://cdn.example/v.mp4","thumbnail_url":"https://cdn.example/a.png","vobile":{"account_id":"private-account","creditCost":"4000","balanceAfter":"18000"}}}],"expected":{"size":"1280x720","url":"https://cdn.example/v.mp4","thumbnail_url":"https://cdn.example/a.png"}},
+		{"name":"unsupported mapped model","hook":"describeSpec","args":[{"model":"vobilemax-seedance-2.0","upstreamModel":"wrong-model","requestBody":{"prompt":"cat"}}],"expectedError":"unsupported Vobilemax upstream model"},
+		{"name":"multipart files rejected","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"body":{"kind":"multipart","fields":{},"files":[]}}],"expectedError":"file uploads are not supported"},
+		{"name":"moderation infrastructure failure remains upstream","hook":"classifyFailure","args":["content_moderation: service unavailable"],"expected":"upstream"}
 	]}`))
 	require.NoError(t, err)
 }
