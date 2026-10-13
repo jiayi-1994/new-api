@@ -24,7 +24,7 @@ for (const body of [
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 
 test("one output is accepted in JSON and multipart without changing the submitted request", () => {
-  const request = { model: "seedance-2.0", prompt: "a cat", seconds: 8, resolution: "720p" };
+  const request = { model: "videos-fast", prompt: "a cat", seconds: 8, resolution: "720p" };
   for (const kind of ["json", "multipart"]) {
     const decode = (n) => {
       const value = { ...request };
@@ -73,7 +73,7 @@ test("describeSpec agrees with the submitted body and reserved usage for every d
 
 test("describeSpec counts each reference kind from the final body", () => {
   const value = {
-    model: "seedance-2.0", prompt: "a cat", duration: 8, resolution: "2160p",
+    model: "videos-fast", prompt: "a cat", duration: 8, resolution: "2160p",
     referenceImages: ["https://cdn.example/1.png", "https://cdn.example/2.png"],
     reference_videos: ["https://cdn.example/1.mp4"], audios: ["https://cdn.example/1.mp3"],
   };
@@ -91,7 +91,7 @@ test("describeSpec counts each reference kind from the final body", () => {
 });
 
 test("describeSpec and submission apply the same mapped-model validation", () => {
-  const value = { model: "seedance-2.0", prompt: "a cat", duration: 8, resolution: "720p" };
+  const value = { model: "videos-fast", prompt: "a cat", duration: 8, resolution: "720p" };
   const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, body: { kind: "json", value } });
   for (const identity of [
     { model: value.model, upstreamModel: "unsupported-mapped-model" },
@@ -104,8 +104,8 @@ test("describeSpec and submission apply the same mapped-model validation", () =>
   }
 
   for (const identity of [
-    { model: value.model, upstreamModel: "seedance-2.5" },
-    { model: "client-alias", upstreamModel: "seedance-2.5" },
+    { model: value.model, upstreamModel: "videos-standard" },
+    { model: "client-alias", upstreamModel: "videos-standard" },
   ]) {
     const ctx = { ...identity, requestBody: intent.requestBody, usagePurpose: "spec" };
     assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
@@ -114,20 +114,20 @@ test("describeSpec and submission apply the same mapped-model validation", () =>
 
 test("a public alias decodes before channel selection and submits the selected real model", () => {
   const value = { model: "video-unified", prompt: "a cat", seconds: 8, size: "1280x720" };
-  for (const upstreamModel of [undefined, "seedance-2.5"]) {
+  for (const upstreamModel of [undefined, "videos-standard"]) {
     const intent = plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel, body: { kind: "json", value } });
     assert.equal(intent.model, value.model);
-    const ctx = { model: value.model, upstreamModel: "seedance-2.5", requestBody: intent.requestBody };
+    const ctx = { model: value.model, upstreamModel: "videos-standard", requestBody: intent.requestBody };
     assert.deepEqual(plugin.describeSpec(ctx), submittedSpec(ctx));
     const submitted = plugin.buildSubmitRequest({ ...ctx, baseUrl: "https://api.hjmie.cc.cd", apiKey: "fixture-only-key" });
-    assert.equal(submitted.body.model, "seedance-2.5");
+    assert.equal(submitted.body.model, "videos-standard");
     assert.equal(submitted.body.duration, 8);
     assert.equal(submitted.body.resolution, "720p");
   }
   assert.throws(() => plugin.protocols.openai_video.decodeRequest({ model: value.model, upstreamModel: "unknown", body: { kind: "json", value } }), /unsupported upstream video model/);
 });
 
-const REQUEST = { model: "seedance-2.0", prompt: "a cat", duration: 8, resolution: "720p" };
+const REQUEST = { model: "videos-fast", prompt: "a cat", duration: 8, resolution: "720p" };
 const BASE_URL = "https://poxiaoapi001.com";
 
 test("the Po Xiao public model submits all three public reference types without a legacy mapping", () => {
