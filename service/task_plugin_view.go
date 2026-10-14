@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 
@@ -54,6 +55,44 @@ func TaskVideoFacts(task *model.Task) (seconds float64, resolution string) {
 		}
 	}
 	return max(seconds, 0), videoAuditResolution(resolution)
+}
+
+// TaskVideoInputFacts projects only recorded reference facts for the dashboard.
+// Missing history stays unknown; reference seconds are measured, not billable seconds.
+func TaskVideoInputFacts(task *model.Task) (mode string, referenceSeconds *float64) {
+	if summary := task.PrivateData.SchedulingSummary; summary != nil && summary.Spec != nil {
+		spec := summary.Spec
+		referenceSeconds = spec.InputVideoSeconds
+		if spec.References != nil {
+			switch {
+			case spec.References["video"] > 0:
+				// A video reference takes precedence over accompanying images or frames.
+				mode = "reference_to_video"
+			case spec.References["image"] > 0 || spec.References["frame"] > 0:
+				mode = "image_to_video"
+			default:
+				mode = "text_to_video"
+			}
+			if spec.References["video"] == 0 {
+				zero := 0.0
+				referenceSeconds = &zero
+			}
+		}
+	}
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.TieredSnapshot != nil {
+		if seconds, ok := bc.TieredSnapshot.UsageFacts["input_video_seconds"].(float64); ok {
+			referenceSeconds = &seconds
+		}
+	}
+	if referenceSeconds != nil {
+		seconds := *referenceSeconds
+		if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
+			referenceSeconds = nil
+		} else if seconds > 0 {
+			mode = "reference_to_video"
+		}
+	}
+	return
 }
 
 // BuildUnifiedVideoResponse uses only host lifecycle and frozen sale fields.

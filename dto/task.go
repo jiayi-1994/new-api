@@ -43,6 +43,7 @@ type TaskDto struct {
 	UserId               int    `json:"user_id"`
 	Group                string `json:"group"`
 	ChannelId            int    `json:"channel_id"`
+	ChannelName          string `json:"channel_name,omitempty"`
 	Quota                int    `json:"quota"`
 	Action               string `json:"action"`
 	Status               string `json:"status"`
@@ -59,12 +60,14 @@ type TaskDto struct {
 	Properties      any    `json:"properties"`
 	// Resolution and Seconds are the video output tier and length frozen at
 	// submission; both are omitted for non-video tasks.
-	Resolution string          `json:"resolution,omitempty"`
-	Seconds    float64         `json:"seconds,omitempty"`
-	Username   string          `json:"username,omitempty"`
-	Data       json.RawMessage `json:"data"`
-	AdminInfo  *TaskAdminInfo  `json:"admin_info,omitempty"`
-	RootInfo   *TaskRootInfo   `json:"root_info,omitempty"`
+	Resolution       string          `json:"resolution,omitempty"`
+	Seconds          float64         `json:"seconds,omitempty"`
+	VideoMode        string          `json:"video_mode,omitempty"`
+	ReferenceSeconds *float64        `json:"reference_seconds,omitempty"`
+	Username         string          `json:"username,omitempty"`
+	Data             json.RawMessage `json:"data"`
+	AdminInfo        *TaskAdminInfo  `json:"admin_info,omitempty"`
+	RootInfo         *TaskRootInfo   `json:"root_info,omitempty"`
 }
 
 type TaskPluginInfo struct {

@@ -321,6 +321,7 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
+  channel_name?: string
   group: string
   quota: number
   submit_time: number // seconds
@@ -337,6 +338,9 @@ export interface TaskLog {
   // Video output tier and length frozen at submission; absent for non-video tasks.
   resolution?: string
   seconds?: number
+  video_mode?: 'text_to_video' | 'image_to_video' | 'reference_to_video'
+  // Measured input video duration; absent when it was not recorded.
+  reference_seconds?: number
   legacy_video_available?: boolean
   // A synchronous result returned inline and never persisted; artifact
   // retrieval is not offered for it.

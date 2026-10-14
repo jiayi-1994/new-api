@@ -211,6 +211,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     data: logs as Record<string, unknown>[],
     columns: columns as ColumnDef<Record<string, unknown>>[],
     columnFilters,
+    initialColumnVisibility:
+      logCategory === 'task' ? { reference_seconds: false } : undefined,
     columnVisibilityStorageKey: getColumnVisibilityStorageKey(
       logCategory,
       viewAccess

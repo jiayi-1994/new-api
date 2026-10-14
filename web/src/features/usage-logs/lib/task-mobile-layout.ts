@@ -28,6 +28,8 @@ export const TASK_MOBILE_SUMMARY_FIELDS: readonly TaskMobileSummaryField[] = [
   { id: 'plugin', label: 'Plugin' },
   { id: 'channel_id', label: 'Channel', primaryOnly: true },
   { id: 'model', label: 'Model' },
+  { id: 'generation_type', label: 'Generation type' },
+  { id: 'reference_seconds', label: 'Reference seconds' },
   { id: 'resolution', label: 'Resolution' },
   { id: 'video_seconds', label: 'Video Length' },
   { id: 'duration', label: 'Duration', primaryOnly: true },

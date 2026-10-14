@@ -25,8 +25,9 @@ import { useTranslation } from 'react-i18next'
 
 import { StatusBadge } from '@/components/status-badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { formatTimestampToDate } from '@/lib/format'
+import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
@@ -86,7 +87,8 @@ export function useTaskLogsColumns(
   isAdmin: boolean,
   isRoot: boolean
 ): ColumnDef<TaskLog>[] {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   return useMemo(() => {
     const columns: ColumnDef<TaskLog>[] = [
       {
@@ -117,7 +119,10 @@ export function useTaskLogsColumns(
 
     if (isAdmin) {
       columns.push(
-        createChannelColumn<TaskLog>({ headerLabel: t('Channel') }),
+        createChannelColumn<TaskLog>({
+          headerLabel: t('Channel'),
+          getChannelName: (log) => log.channel_name,
+        }),
         {
           id: 'user',
           header: t('User'),
@@ -217,10 +222,11 @@ export function useTaskLogsColumns(
                 size='sm'
                 className='border-border/60 bg-muted/30 !text-foreground max-w-full truncate rounded-md border px-1.5 py-0.5 font-mono'
               />
-              <span className='text-muted-foreground/60 truncate text-[11px]'>
-                {taskIdentity ? `${taskIdentity} · ` : null}
-                {t(taskActionMapper.getLabel(log.action))}
-              </span>
+              {taskIdentity ? (
+                <span className='text-muted-foreground/60 truncate text-[11px]'>
+                  {taskIdentity}
+                </span>
+              ) : null}
             </div>
           )
         },
@@ -246,6 +252,44 @@ export function useTaskLogsColumns(
           )
         },
         size: 170,
+      },
+      {
+        id: 'generation_type',
+        header: t('Generation type'),
+        accessorFn: (row) => row.video_mode || row.action,
+        cell: ({ row }) => {
+          const log = row.original
+          let label = t(taskActionMapper.getLabel(log.action, '-'))
+          switch (log.video_mode) {
+            case 'text_to_video':
+              label = t('Text to Video')
+              break
+            case 'image_to_video':
+              label = t('Image to Video')
+              break
+            case 'reference_to_video':
+              label = t('Video reference generation')
+              break
+          }
+          return <span className='text-xs'>{label}</span>
+        },
+        size: 120,
+      },
+      {
+        accessorKey: 'reference_seconds',
+        header: t('Reference seconds'),
+        cell: ({ row }) => {
+          const seconds = row.original.reference_seconds
+          if (seconds == null || !Number.isFinite(seconds) || seconds < 0) {
+            return <span className='text-muted-foreground/60 text-xs'>-</span>
+          }
+          return (
+            <span className='font-mono text-xs tabular-nums'>
+              {formatNumber(seconds, locale)}s
+            </span>
+          )
+        },
+        size: 100,
       },
       {
         id: 'resolution',
@@ -325,5 +369,5 @@ export function useTaskLogsColumns(
     )
 
     return columns
-  }, [t, isAdmin, isRoot])
+  }, [t, locale, isAdmin, isRoot])
 }

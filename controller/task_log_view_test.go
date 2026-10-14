@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,6 +21,81 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaskLogChannelNamesAreAdminOnlyAndFollowChannelUpdates(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("name", "破晓站").Error)
+	other := &model.Channel{Id: 2, Name: "备用渠道", Key: "private-channel-key"}
+	require.NoError(t, model.DB.Create(other).Error)
+	tasks := []*model.Task{task, {ChannelId: other.Id}, {ChannelId: task.ChannelId}, {ChannelId: 404}, {}}
+	for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser, common.RoleRootUser} {
+		views := tasksToDto(tasks, false, role)
+		require.Len(t, views, len(tasks))
+		for i, view := range views {
+			encoded, err := common.Marshal(view)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "private-channel-key")
+			if role < common.RoleAdminUser {
+				assert.NotContains(t, string(encoded), "channel_name")
+			} else {
+				assert.Equal(t, []string{"破晓站", "备用渠道", "破晓站", "", ""}[i], view.ChannelName)
+				assert.Equal(t, tasks[i].ChannelId, view.ChannelId)
+			}
+		}
+	}
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("name", "破晓站新名称").Error)
+	assert.Equal(t, "破晓站新名称", tasksToDto(tasks, false, common.RoleAdminUser)[0].ChannelName)
+	require.NoError(t, model.DB.Delete(other).Error)
+	deleted := tasksToDto(tasks, false, common.RoleAdminUser)[1]
+	assert.Empty(t, deleted.ChannelName)
+	assert.Equal(t, other.Id, deleted.ChannelId)
+}
+
+func TestTaskLogVideoInputsPreserveKnownAndUnknownFacts(t *testing.T) {
+	measured, billed, zero, invalid := 2.25, 10.0, 0.0, math.NaN()
+	for _, tc := range []struct {
+		name    string
+		spec    *model.VideoSpecView
+		facts   map[string]any
+		mode    string
+		seconds any
+	}{
+		{name: "historical task stays unknown"},
+		{name: "text video without references", spec: &model.VideoSpecView{References: map[string]int{}}, mode: "text_to_video", seconds: zero},
+		{name: "image video has no input video duration", spec: &model.VideoSpecView{References: map[string]int{"image": 1}}, mode: "image_to_video", seconds: zero},
+		{name: "first and last frames are image inputs", spec: &model.VideoSpecView{References: map[string]int{"frame": 2}}, mode: "image_to_video", seconds: zero},
+		{name: "audio alone does not mean reference video", spec: &model.VideoSpecView{References: map[string]int{"audio": 1}}, mode: "text_to_video", seconds: zero},
+		{name: "video reference with no measured duration", spec: &model.VideoSpecView{References: map[string]int{"video": 1}}, mode: "reference_to_video"},
+		{name: "image and video references prioritize video even without measured duration", spec: &model.VideoSpecView{References: map[string]int{"image": 1, "video": 1}}, mode: "reference_to_video"},
+		{name: "measured input duration from scheduling", spec: &model.VideoSpecView{References: map[string]int{"video": 1}, InputVideoSeconds: &measured}, mode: "reference_to_video", seconds: measured},
+		{name: "frozen measured duration wins over scheduling and billable duration", spec: &model.VideoSpecView{References: map[string]int{"image": 1, "video": 1}, InputVideoSeconds: &billed}, facts: map[string]any{"input_video_seconds": measured, "input_video_billable_seconds": billed}, mode: "reference_to_video", seconds: measured},
+		{name: "measured video duration overrides an incomplete image spec", spec: &model.VideoSpecView{References: map[string]int{"image": 1}}, facts: map[string]any{"input_video_seconds": measured}, mode: "reference_to_video", seconds: measured},
+		{name: "billing facts recover reference video without scheduling", facts: map[string]any{"input_video_seconds": measured}, mode: "reference_to_video", seconds: measured},
+		{name: "zero video duration does not imply no reference images", facts: map[string]any{"input_video_seconds": zero}, seconds: zero},
+		{name: "invalid duration stays unknown", spec: &model.VideoSpecView{References: map[string]int{"video": 1}, InputVideoSeconds: &invalid}, mode: "reference_to_video"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{TaskID: "public-video", Action: "GENERATE"}
+			if tc.spec != nil {
+				task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{Spec: tc.spec}
+			}
+			if tc.facts != nil {
+				task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{UsageFacts: tc.facts}}
+			}
+			for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser} {
+				view := tasksToDto([]*model.Task{task}, false, role)[0]
+				encoded, err := common.Marshal(view)
+				require.NoError(t, err)
+				var payload map[string]any
+				require.NoError(t, common.Unmarshal(encoded, &payload))
+				assert.Equal(t, tc.mode, view.VideoMode)
+				assert.NotContains(t, payload, "has_reference")
+				assert.Equal(t, tc.seconds, payload["reference_seconds"])
+				assert.NotContains(t, payload, "private_data")
+			}
+		})
+	}
+}
 
 func TestUnifiedVideoTaskViewsHideUpstreamDetails(t *testing.T) {
 	task := setupGenericTaskTest(t)

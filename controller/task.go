@@ -471,6 +471,20 @@ func GetTaskRequestBody(c *gin.Context) {
 }
 
 func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskDto {
+	var channelNames map[int]string
+	if viewerRole >= common.RoleAdminUser {
+		channelIDs := types.NewSet[int]()
+		for _, task := range tasks {
+			if task.ChannelId > 0 {
+				channelIDs.Add(task.ChannelId)
+			}
+		}
+		var err error
+		channelNames, err = model.GetChannelNamesByIds(channelIDs.Items())
+		if err != nil {
+			common.SysError("failed to load task channel names: " + err.Error())
+		}
+	}
 	var userIDMap map[int]*model.UserBase
 	if fillUser {
 		userIDMap = make(map[int]*model.UserBase)
@@ -496,6 +510,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 			service.RedactUnifiedVideoTaskDTO(task, item)
 		}
 		item.Seconds, item.Resolution = service.TaskVideoFacts(task)
+		item.VideoMode, item.ReferenceSeconds = service.TaskVideoInputFacts(task)
 		item.LegacyVideoAvailable = legacyVideoAvailable(task)
 		item.ResultDiscarded = task.PrivateData.ResultDiscarded
 		if task.Status == model.TaskStatusSuccess {
@@ -505,6 +520,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 			}
 		}
 		if viewerRole >= common.RoleAdminUser {
+			item.ChannelName = channelNames[task.ChannelId]
 			adminInfo := &dto.TaskAdminInfo{}
 			if execution := task.PrivateData.Execution; execution != nil {
 				adminInfo.RequestID = execution.RequestID

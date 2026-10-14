@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils'
 
 import { formatDuration } from '../../lib/format'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { useUsageLogsContext } from '../usage-logs-provider'
 
 /**
  * Cache tooltip component for token display
@@ -161,32 +162,39 @@ export function createDurationColumn<T>(config: {
 }
 
 /**
- * Create a channel column (admin only) - #id badge matching common logs
+ * Create a channel column (admin only), optionally including the channel name.
  */
 export function createChannelColumn<T>(config: {
   accessorKey?: string
   headerLabel: string
+  getChannelName?: (row: T) => string | undefined
 }): ColumnDef<T> {
-  const { accessorKey = 'channel_id', headerLabel } = config
+  const { accessorKey = 'channel_id', headerLabel, getChannelName } = config
 
   return {
     accessorKey,
     header: ({ column }) => (
       <DataTableColumnHeader column={column} title={headerLabel} />
     ),
-    cell: ({ row }) => {
+    cell: function ChannelCell({ row }) {
+      const { sensitiveVisible } = useUsageLogsContext()
       const channelId = row.getValue(accessorKey) as number
       if (!channelId) {
         return <span className='text-muted-foreground/60 text-xs'>-</span>
       }
+      const channelName = getChannelName?.(row.original)?.trim()
+      const label = channelName
+        ? `${sensitiveVisible ? channelName : '••••'}(#${channelId})`
+        : `#${channelId}`
       return (
         <StatusBadge
-          label={`#${channelId}`}
+          label={label}
           autoColor={String(channelId)}
           copyText={String(channelId)}
           size='sm'
           showDot={false}
-          className='font-mono'
+          title={label}
+          className={channelName ? 'max-w-[220px]' : 'font-mono'}
         />
       )
     },
