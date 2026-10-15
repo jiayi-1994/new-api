@@ -144,6 +144,37 @@ test('generation type distinguishes video references, images and text without a 
   expect(screen.queryByText('2.25s')).not.toBeInTheDocument()
 })
 
+test('ordinary plugin tasks display canonical and legacy generation actions without a scheduling spec', async () => {
+  const cases = [
+    ['text_to_video', 'Text to Video'],
+    ['image_to_video', 'Image to Video'],
+    ['reference_to_video', 'Reference Video'],
+    ['first_tail_to_video', 'First/Last Frame to Video'],
+    ['remix', 'Video Remix'],
+    ['textGenerate', 'Text to Video'],
+  ] as const
+  await renderTasks(
+    cases.map(([action], index) => ({
+      ...task,
+      id: index + 10,
+      task_id: `ordinary-${action}`,
+      action,
+      video_mode: undefined,
+      reference_seconds: undefined,
+      seconds: 15,
+      resolution: '720p',
+    }))
+  )
+  for (const [action, label] of cases) {
+    const row = screen.getByRole('row', {
+      name: new RegExp(`ordinary-${action}`),
+    })
+    expect(within(row).getByText(label)).toBeVisible()
+    expect(within(row).getByText('720p')).toBeVisible()
+    expect(within(row).getByText('15s')).toBeVisible()
+  }
+})
+
 test('reference seconds can be enabled in View and remain visible after remounting', async () => {
   const user = userEvent.setup()
   const view = await renderTasks()

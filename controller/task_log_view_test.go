@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,74 @@ func TestTaskLogChannelNamesAreAdminOnlyAndFollowChannelUpdates(t *testing.T) {
 	deleted := tasksToDto(tasks, false, common.RoleAdminUser)[1]
 	assert.Empty(t, deleted.ChannelName)
 	assert.Equal(t, other.Id, deleted.ChannelId)
+}
+
+func TestTaskLogOrdinaryVideoRequestDisplayFacts(t *testing.T) {
+	seed := setupGenericTaskTest(t)
+	var tasks []*model.Task
+	for index, tc := range []struct {
+		name, body, contentType, action string
+		seconds                         float64
+		resolution, mode                string
+	}{
+		{"per-call JSON", `{"model":"public-video","prompt":"private prompt","seconds":"15","resolution":"720p"}`, "application/json", constant.TaskActionTextToVideo, 15, "720p", "text_to_video"},
+		{"canvas metadata and image", `{"duration":5,"metadata":{"resolution":"1080p","content":[{"type":"image_url","image_url":{"url":"https://private.example/image.png"}}]}}`, "application/json", constant.TaskActionReferenceToVideo, 5, "1080p", "image_to_video"},
+		{"video reference takes precedence", `{"seconds":8,"size":"720x1280","images":["https://private.example/image.png"],"videos":["https://private.example/video.mp4"]}`, "application/json", constant.TaskActionReferenceToVideo, 8, "720p", "reference_to_video"},
+		{"multipart saved fields", "model=public-video\nprompt=private prompt\nseconds=10\nresolution=2160p\ninput_reference=[file image.png, 200 bytes]\n", "multipart/form-data; boundary=original", constant.TaskActionImageToVideo, 10, "4k", "image_to_video"},
+		{"nested parameters", `{"parameters":{"duration":6,"resolution":"480p"},"input":{"first_image_url":"https://private.example/image.png"}}`, "application/json", constant.TaskActionReferenceToVideo, 6, "480p", "image_to_video"},
+		{"missing saved request", "", "application/json", constant.TaskActionTextToVideo, 0, "", ""},
+		{"truncated saved request", `{"seconds":15,"resolution":`, "application/json", constant.TaskActionTextToVideo, 0, "", ""},
+		{"invalid display quantities", `{"seconds":18446744073686646784,"resolution":"https://private.example/leak"}`, "application/json", constant.TaskActionTextToVideo, 0, "", "text_to_video"},
+		{"conflicting scalar aliases", `{"seconds":5,"duration":10,"resolution":"720p","metadata":{"resolution":"1080p"}}`, "application/json", constant.TaskActionTextToVideo, 0, "", "text_to_video"},
+		{"non-video task is not interpreted", `{"seconds":15,"resolution":"720p"}`, "application/json", "MUSIC", 0, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{TaskID: fmt.Sprintf("display-%d", index), UserId: seed.UserId, Action: tc.action, Platform: "seedance-hjmie", Quota: 123,
+				PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{PerCallBilling: true, OtherRatios: map[string]float64{"requests": 1}}}}
+			require.NoError(t, model.DB.Create(task).Error)
+			tasks = append(tasks, task)
+			if tc.body != "" {
+				require.NoError(t, model.DB.Create(&model.TaskRequestBody{TaskRowID: task.ID, ContentType: tc.contentType, Body: tc.body}).Error)
+			}
+			for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser} {
+				view := tasksToDto([]*model.Task{task}, false, role)[0]
+				assert.Equal(t, tc.seconds, view.Seconds)
+				assert.Equal(t, tc.resolution, view.Resolution)
+				assert.Equal(t, tc.mode, view.VideoMode)
+				assert.Nil(t, view.ReferenceSeconds, "request fields cannot invent measured reference seconds")
+				assert.Equal(t, 123, view.Quota)
+				encoded, err := common.Marshal(view)
+				require.NoError(t, err)
+				assert.NotContains(t, string(encoded), "private prompt")
+				assert.NotContains(t, string(encoded), "private.example")
+			}
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.Equal(t, map[string]float64{"requests": 1}, persisted.PrivateData.BillingContext.OtherRatios)
+			assert.Nil(t, persisted.PrivateData.BillingContext.TieredSnapshot)
+		})
+	}
+	// A mixed page must match request bodies by task row, including missing bodies.
+	views := tasksToDto(tasks, false, common.RoleCommonUser)
+	require.Len(t, views, len(tasks))
+	assert.Equal(t, 15.0, views[0].Seconds)
+	assert.Equal(t, "1080p", views[1].Resolution)
+	assert.Equal(t, "reference_to_video", views[2].VideoMode)
+	assert.Empty(t, views[5].Resolution)
+	assert.Zero(t, views[len(views)-1].Seconds, "non-video tasks must remain excluded in a mixed page")
+
+	// Existing snapshots remain authoritative, even when the saved client body differs.
+	seed.Action = constant.TaskActionTextToVideo
+	seed.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+		UsageFacts: map[string]any{"seconds": 7.0, "resolution": "480p", "input_video_seconds": 2.5},
+	}}
+	require.NoError(t, model.DB.Create(&model.TaskRequestBody{TaskRowID: seed.ID, ContentType: "application/json", Body: `{"seconds":15,"resolution":"1080p"}`}).Error)
+	view := tasksToDto([]*model.Task{seed}, false, common.RoleCommonUser)[0]
+	assert.Equal(t, 7.0, view.Seconds)
+	assert.Equal(t, "480p", view.Resolution)
+	assert.Equal(t, "reference_to_video", view.VideoMode)
+	require.NotNil(t, view.ReferenceSeconds)
+	assert.Equal(t, 2.5, *view.ReferenceSeconds)
 }
 
 func TestTaskLogVideoInputsPreserveKnownAndUnknownFacts(t *testing.T) {

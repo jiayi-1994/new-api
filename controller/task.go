@@ -499,6 +499,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 		}
 	}
 	result := make([]*dto.TaskDto, len(tasks))
+	var missingVideoFacts []int64
 	for i, task := range tasks {
 		if fillUser {
 			if user, ok := userIDMap[task.UserId]; ok {
@@ -563,6 +564,22 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 			}
 		}
 		result[i] = item
+		switch item.Action {
+		case constant.TaskActionTextToVideo, constant.TaskActionImageToVideo, constant.TaskActionFirstTailToVideo, constant.TaskActionReferenceToVideo, constant.TaskActionRemix:
+			if task.ID > 0 && (item.Seconds <= 0 || item.Resolution == "" || item.VideoMode == "") {
+				missingVideoFacts = append(missingVideoFacts, task.ID)
+			}
+		}
+	}
+	requestBodies, err := model.GetTaskRequestBodiesByTaskIDs(missingVideoFacts)
+	if err != nil {
+		common.SysError("failed to load task video display facts: " + err.Error())
+		return result
+	}
+	for i, task := range tasks {
+		if record := requestBodies[task.ID]; record != nil {
+			service.ApplyTaskVideoRequestFacts(result[i], record)
+		}
 	}
 	return result
 }

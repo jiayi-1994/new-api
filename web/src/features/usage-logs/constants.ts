@@ -288,6 +288,11 @@ export const MJ_SUBMIT_RESULT_MAPPINGS: Record<string, StatusMapping> = {
  * Task action type mappings
  */
 export const TASK_ACTION_MAPPINGS: Record<string, StatusMapping> = {
+  image_to_video: { label: 'Image to Video', variant: 'blue' },
+  text_to_video: { label: 'Text to Video', variant: 'blue' },
+  first_tail_to_video: { label: 'First/Last Frame to Video', variant: 'blue' },
+  reference_to_video: { label: 'Reference Video', variant: 'blue' },
+  remix: { label: 'Video Remix', variant: 'blue' },
   [TASK_ACTIONS.MUSIC]: { label: 'Generate Music', variant: 'neutral' },
   [TASK_ACTIONS.LYRICS]: { label: 'Generate Lyrics', variant: 'pink' },
   [TASK_ACTIONS.GENERATE]: { label: 'Image to Video', variant: 'blue' },
