@@ -114,8 +114,9 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	}
 
 	actualGroupRatio := groupRatio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
+	if modelGroupRatio, ok := ratio_setting.GetGroupModelRatio(relayInfo.UsingGroup, relayInfo.OriginModelName); ok {
+		actualGroupRatio = modelGroupRatio
+	} else if userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup); ok {
 		actualGroupRatio = userGroupRatio
 	}
 

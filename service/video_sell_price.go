@@ -209,7 +209,7 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 // every call because auto groups change it between attempts.
 func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlugin, clientModel, mappedModel string, body any, action string) videosched.SellPrice {
 	if sales, unified := GetVideoSalesFacts(c); unified {
-		return unifiedVideoSell(c, group, sales)
+		return unifiedVideoSell(c, group, clientModel, sales)
 	}
 	cache, _ := c.Value(contextKeyVideoSellCache).(map[string]videosched.SellPrice)
 	if cache == nil {
@@ -228,7 +228,7 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 	if sell.Kind != videosched.SellKnown {
 		return sell
 	}
-	usd := sell.USD * VideoEffectiveGroupRatio(c, group)
+	usd := sell.USD * VideoEffectiveGroupRatio(c, group, clientModel)
 	// A sale past the single-request quota ceiling saturates, and submission
 	// pre-consume rejects a saturated quota, so it can never be sold.
 	if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
@@ -239,11 +239,11 @@ func EstimateVideoSell(c *gin.Context, group string, plugin *jsplugin.LoadedPlug
 
 // unifiedVideoSell is a unified sale in group, the same for every candidate.
 // A sale whose input video is not measured yet has no price.
-func unifiedVideoSell(c *gin.Context, group string, sales VideoSalesFacts) videosched.SellPrice {
+func unifiedVideoSell(c *gin.Context, group, clientModel string, sales VideoSalesFacts) videosched.SellPrice {
 	if !sales.Ready() {
 		return videosched.SellPrice{Kind: videosched.SellUnknown}
 	}
-	usd := sales.USD() * VideoEffectiveGroupRatio(c, group)
+	usd := sales.USD() * VideoEffectiveGroupRatio(c, group, clientModel)
 	if _, err := common.QuotaRoundStrict(usd * common.QuotaPerUnit); err != nil {
 		return videosched.SellPrice{Kind: videosched.SellUnknown}
 	}
@@ -374,10 +374,14 @@ func videoUsageContext(c *gin.Context, clientModel, mappedModel string, body any
 	})
 }
 
-// VideoEffectiveGroupRatio is the group ratio submission charges a request in
-// group: the user group's special ratio for it when one exists, else the
-// group's own ratio.
-func VideoEffectiveGroupRatio(c *gin.Context, group string) float64 {
+// VideoEffectiveGroupRatio is the group ratio submission charges a request
+// for clientModel in group, matching helper.HandleGroupRatio: the group model
+// ratio when one exists, else the user group's special ratio for group, else
+// the group's own ratio.
+func VideoEffectiveGroupRatio(c *gin.Context, group, clientModel string) float64 {
+	if ratio, ok := ratio_setting.GetGroupModelRatio(group, clientModel); ok {
+		return ratio
+	}
 	ratio, special := ratio_setting.GetGroupGroupRatio(common.GetContextKeyString(c, constant.ContextKeyUserGroup), group)
 	if !special {
 		ratio = ratio_setting.GetGroupRatio(group)

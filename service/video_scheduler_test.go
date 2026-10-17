@@ -1697,7 +1697,7 @@ func TestUnifiedVideoSaleFreezesMeasuredInputVideo(t *testing.T) {
 		// 10 × 0.56 + 8.25 × 0.20; the purchase quote and the sale share one read.
 		assertSells(t, c, 7.25)
 		fetched := mediaRequests()
-		assert.InDelta(t, 14.5, unifiedVideoSell(c, "vip", sales).USD, 1e-9, "the group ratio applies once to the total")
+		assert.InDelta(t, 14.5, unifiedVideoSell(c, "vip", "", sales).USD, 1e-9, "the group ratio applies once to the total")
 
 		AssembleVideoDecision(c, scheduling, "default", "videos-fast", []*model.Channel{channel}, 1)
 		assert.Equal(t, fetched, mediaRequests(), "a retry reuses the frozen input")
@@ -1733,7 +1733,7 @@ func TestUnifiedVideoSaleFreezesMeasuredInputVideo(t *testing.T) {
 		// (10 + 7) × 0.6048: the whole order at the with-video price, the same
 		// number the submission expression charges.
 		assertSells(t, c, 10.2816)
-		assert.InDelta(t, 20.5632, unifiedVideoSell(c, "vip", sales).USD, 1e-9, "the group ratio applies once to the whole order")
+		assert.InDelta(t, 20.5632, unifiedVideoSell(c, "vip", "", sales).USD, 1e-9, "the group ratio applies once to the whole order")
 	})
 
 	t.Run("no input video freezes zero without reading media", func(t *testing.T) {
@@ -1820,7 +1820,7 @@ func TestUnifiedVideoSaleFreezesMeasuredInputVideo(t *testing.T) {
 			{ID: 3, Spec: incomplete},
 			{ID: 4, Excluded: "disabled"},
 		}
-		freezeUnifiedVideoInput(c, "default", candidates)
+		freezeUnifiedVideoInput(c, "default", "", candidates)
 		assert.Empty(t, candidates[0].Excluded)
 		assert.InDelta(t, 6.2, candidates[0].Sell.USD, 1e-9)
 		assert.Equal(t, "spec does not match unified sale", candidates[1].Excluded)
