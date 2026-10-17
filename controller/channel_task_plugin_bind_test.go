@@ -15,6 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/pkg/videosched"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -484,6 +486,70 @@ func TestVideoScheduleSimulateAndSchedulable(t *testing.T) {
 	response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", string(encoded))
 	assert.Equal(t, false, response["success"])
 	assert.Contains(t, response["message"], "window_seconds")
+
+	// A declared reference video length is priced like a measured one, and
+	// the simulator never fetches the declared URL.
+	t.Run("reference video durations", func(t *testing.T) {
+		withReference := `{"video_scheduling":{"quality":0.5,"models":{"videos-fast":{"mode":"per_second","prices":{"720p":0.05},"references":{"video":{"*":{"mode":"per_input_second","value":0.01}}}}}}}`
+		require.NoError(t, model.DB.Model(&model.Channel{}).Where("id IN ?", []int{7701, 7702}).Update("settings", withReference).Error)
+		model.InitChannelCache()
+		const address = "https://simulate.invalid/reference.mp4"
+		withVideo := func(durations map[string]any) func(map[string]any) {
+			return func(body map[string]any) {
+				body["request_body"] = map[string]any{"model": "videos-fast", "prompt": "cat", "seconds": 8, "size": "1280x720", "videos": []string{address}}
+				if durations != nil {
+					body["reference_video_durations"] = durations
+				}
+			}
+		}
+		row := func(data map[string]any) map[string]any {
+			for _, candidate := range data["candidates"].([]any) {
+				if candidate := candidate.(map[string]any); candidate["id"] == float64(7702) {
+					return candidate
+				}
+			}
+			return nil
+		}
+		declared := row(simulate(withVideo(map[string]any{address: 6})))
+		require.NotNil(t, declared)
+		assert.Equal(t, float64(6), declared["spec"].(map[string]any)["input_video_seconds"])
+		assert.InDelta(t, 0.06, declared["reference_cost_usd"], 1e-9, "6 input seconds at $0.01")
+		assert.InDelta(t, 0.46, declared["cost_usd"], 1e-9)
+
+		// A unified sale prices the declared input video on the sell side too,
+		// and every plugin reads the reference video from the public videos field.
+		billingConfig := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+		oldSales := billingConfig.VideoSales
+		t.Cleanup(func() { billingConfig.VideoSales = oldSales })
+		billingConfig.VideoSales = map[string]billing_setting.VideoSalesModel{
+			"videos-fast": {Resolutions: map[string]billing_setting.VideoSalesTier{
+				"720p": {USDPerSecond: .1, InputVideoUSDPerSecond: .2, Seconds: []int{8}},
+			}},
+		}
+		unified := simulate(withVideo(map[string]any{address: 6}))
+		ratio := unified["group_ratio"].(float64)
+		for _, candidate := range unified["candidates"].([]any) {
+			row := candidate.(map[string]any)
+			if row["id"] == float64(7703) {
+				continue
+			}
+			spec := row["spec"].(map[string]any)
+			assert.Equal(t, float64(1), spec["references"].(map[string]any)["video"], row["plugin"])
+			assert.Equal(t, float64(6), spec["input_video_seconds"], row["plugin"])
+			assert.InDelta(t, (8*.1+6*.2)*ratio, row["sell_usd"], 1e-9, row["plugin"])
+			excluded, _ := row["excluded"].(string)
+			assert.NotContains(t, excluded, "unified", row["plugin"])
+		}
+
+		for _, durations := range []map[string]any{{address: 0}, {address: 3601}, {"": 5}} {
+			body := map[string]any{"group": "default", "entry": "protocol", "protocol": "openai_video"}
+			withVideo(durations)(body)
+			encoded, err := common.Marshal(body)
+			require.NoError(t, err)
+			response := videoScheduleAdminRequest(t, SimulateVideoSchedule, http.MethodPost, "/api/channel/video_schedule/simulate", string(encoded))
+			assert.Equal(t, false, response["success"], durations)
+		}
+	})
 
 	schedulable := videoScheduleAdminRequest(t, GetVideoSchedulable, http.MethodGet, "/api/channel/video_schedule/schedulable?plugin=seedance-hjmie", "")
 	require.Equal(t, true, schedulable["success"])

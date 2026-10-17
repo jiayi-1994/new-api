@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -188,10 +189,13 @@ type videoScheduleSimulateRequest struct {
 		Channels map[int]int    `json:"channels"`
 		Groups   map[string]int `json:"groups"`
 	} `json:"inflight_override"`
-	SlotOverride   map[int]int                               `json:"slot_override"`
-	ConfigSnapshot *operation_setting.VideoSchedulingSetting `json:"config_snapshot"`
-	Seed           *uint64                                   `json:"seed"`
-	Now            string                                    `json:"now"` // RFC3339
+	SlotOverride map[int]int `json:"slot_override"`
+	// ReferenceVideoDurations declares the length of reference video URLs in
+	// request_body, which are then priced without being fetched.
+	ReferenceVideoDurations map[string]float64                        `json:"reference_video_durations"`
+	ConfigSnapshot          *operation_setting.VideoSchedulingSetting `json:"config_snapshot"`
+	Seed                    *uint64                                   `json:"seed"`
+	Now                     string                                    `json:"now"` // RFC3339
 }
 
 // SimulateVideoSchedule scores a request exactly as live traffic would: the
@@ -217,6 +221,15 @@ func SimulateVideoSchedule(c *gin.Context) {
 	case len(req.RequestBody) == 0:
 		common.ApiErrorMsg(c, "request_body is required")
 		return
+	case len(req.ReferenceVideoDurations) > 16:
+		common.ApiErrorMsg(c, "reference_video_durations accepts at most 16 URLs")
+		return
+	}
+	for address, seconds := range req.ReferenceVideoDurations {
+		if address == "" || !(seconds > 0) || seconds > relaycommon.MaxTaskDurationSeconds {
+			common.ApiErrorMsg(c, "reference_video_durations needs non-empty URLs with seconds within (0,"+strconv.Itoa(relaycommon.MaxTaskDurationSeconds)+"]")
+			return
+		}
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	if req.Now != "" {
@@ -346,6 +359,7 @@ func SimulateVideoSchedule(c *gin.Context) {
 		sc.Set("group", req.UserGroup)
 		// The entry decides takeover/shadow under the same setting that scores.
 		common.SetContextKey(sc, constant.ContextKeyVideoSchedSetting, setting)
+		service.SeedVideoReferenceDurations(sc, req.ReferenceVideoDurations)
 		sc.Next()
 	}
 

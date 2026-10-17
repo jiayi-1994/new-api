@@ -488,6 +488,8 @@ export type VideoScheduleSimulateRequest = {
   health_override?: Record<string, unknown>
   inflight_override?: Record<string, unknown>
   slot_override?: Record<string, number>
+  /** Reference video URLs in request_body and their declared length in seconds; never fetched. */
+  reference_video_durations?: Record<string, number>
   config_snapshot?: VideoSchedulingSetting
   seed?: number
   now?: string

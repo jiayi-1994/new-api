@@ -55,10 +55,7 @@ func resolveVideoInputSeconds(c *gin.Context, spec *videosched.Spec, cost videos
 	return nil
 }
 
-// measureVideoInputSeconds totals the movie-header durations of urls, each
-// occurrence counted. Purchase quotes and unified sales share its per-URL
-// cache and request budget, so no URL is read twice in one request.
-func measureVideoInputSeconds(c *gin.Context, urls []string) (float64, error) {
+func requestVideoReferenceMetadata(c *gin.Context) *videoReferenceMetadata {
 	cache, _ := c.Value(videoReferenceMetadataKey).(*videoReferenceMetadata)
 	if cache == nil {
 		cache = &videoReferenceMetadata{
@@ -67,6 +64,25 @@ func measureVideoInputSeconds(c *gin.Context, urls []string) (float64, error) {
 		}
 		c.Set(videoReferenceMetadataKey, cache)
 	}
+	return cache
+}
+
+// SeedVideoReferenceDurations answers the request's input video measurement
+// for urls from durations instead of fetching them. Only the scheduling
+// simulator uses it, so a declared reference video length is priced exactly as
+// a measured one; callers bound each duration first.
+func SeedVideoReferenceDurations(c *gin.Context, durations map[string]float64) {
+	cache := requestVideoReferenceMetadata(c)
+	for address, seconds := range durations {
+		cache.results[address] = videoReferenceDuration{seconds: seconds}
+	}
+}
+
+// measureVideoInputSeconds totals the movie-header durations of urls, each
+// occurrence counted. Purchase quotes and unified sales share its per-URL
+// cache and request budget, so no URL is read twice in one request.
+func measureVideoInputSeconds(c *gin.Context, urls []string) (float64, error) {
+	cache := requestVideoReferenceMetadata(c)
 	ctx, cancel := context.WithDeadline(c.Request.Context(), cache.deadline)
 	defer cancel()
 	total := 0.0

@@ -57,6 +57,7 @@ import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { OperationsSettings, VideoSchedulingSetting } from '../types'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import { VideoScheduleMatrixDialog } from './video-schedule-matrix-dialog'
 import { VideoScheduleSimulatorDialog } from './video-schedule-simulator-dialog'
 
 const PREFIX = 'video_scheduling_setting.'
@@ -435,6 +436,31 @@ export function VideoSchedulingSettingsSection(props: {
     { value: 'stability_cost_v2', label: t('Stability and cost') },
   ]
 
+  const getConfigSnapshot = () => {
+    const result = videoSchedulingSchema.safeParse({
+      ...form.getValues(),
+      // The simulator rejects a window that differs from the live one.
+      window_seconds: formDefaults.window_seconds,
+    })
+    if (!result.success) {
+      const invalidFields: FieldErrors<VideoSchedulingFormValues> = {}
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as keyof VideoSchedulingFormValues
+        const error = { type: issue.code, message: issue.message }
+        form.setError(field, error)
+        Object.assign(invalidFields, { [field]: error })
+      }
+      revealInvalidFields(invalidFields)
+      throw new Error(
+        t('Correct the invalid scheduling settings before simulating')
+      )
+    }
+    return {
+      ...result.data,
+      capacity_groups: parseCapacityGroups(result.data.capacity_groups) ?? {},
+    }
+  }
+
   return (
     <SettingsSection title={t('Video Smart Scheduling')}>
       <Form {...form}>
@@ -771,33 +797,10 @@ export function VideoSchedulingSettingsSection(props: {
           />
         </SettingsForm>
       </Form>
-      <VideoScheduleSimulatorDialog
-        getConfigSnapshot={() => {
-          const result = videoSchedulingSchema.safeParse({
-            ...form.getValues(),
-            // The simulator rejects a window that differs from the live one.
-            window_seconds: formDefaults.window_seconds,
-          })
-          if (!result.success) {
-            const invalidFields: FieldErrors<VideoSchedulingFormValues> = {}
-            for (const issue of result.error.issues) {
-              const field = issue.path[0] as keyof VideoSchedulingFormValues
-              const error = { type: issue.code, message: issue.message }
-              form.setError(field, error)
-              Object.assign(invalidFields, { [field]: error })
-            }
-            revealInvalidFields(invalidFields)
-            throw new Error(
-              t('Correct the invalid scheduling settings before simulating')
-            )
-          }
-          return {
-            ...result.data,
-            capacity_groups:
-              parseCapacityGroups(result.data.capacity_groups) ?? {},
-          }
-        }}
-      />
+      <div className='flex flex-wrap gap-2'>
+        <VideoScheduleSimulatorDialog getConfigSnapshot={getConfigSnapshot} />
+        <VideoScheduleMatrixDialog getConfigSnapshot={getConfigSnapshot} />
+      </div>
     </SettingsSection>
   )
 }
