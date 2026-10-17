@@ -126,17 +126,6 @@ func GetGroupModelRatio(group, modelName string) (float64, bool) {
 	return ratio, true
 }
 
-// GetGroupModelRatioAny is GetGroupModelRatio for the first of modelNames
-// that has a ratio, so a request matches by its requested or billing name.
-func GetGroupModelRatioAny(group string, modelNames ...string) (float64, bool) {
-	for _, name := range modelNames {
-		if ratio, ok := GetGroupModelRatio(group, name); ok {
-			return ratio, true
-		}
-	}
-	return -1, false
-}
-
 func GroupModelRatio2JSONString() string {
 	return groupModelRatioMap.MarshalJSONString()
 }
@@ -147,7 +136,7 @@ func UpdateGroupModelRatioByJSONString(jsonStr string) error {
 
 func CheckGroupModelRatio(jsonStr string) error {
 	check := make(map[string]map[string]float64)
-	if err := json.Unmarshal([]byte(jsonStr), &check); err != nil {
+	if err := common.Unmarshal([]byte(jsonStr), &check); err != nil {
 		return err
 	}
 	for group, models := range check {

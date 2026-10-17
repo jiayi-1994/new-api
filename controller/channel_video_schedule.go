@@ -20,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -334,6 +335,7 @@ func SimulateVideoSchedule(c *gin.Context) {
 		if choice.Best != nil {
 			recommended = choice.Best.ID
 		}
+		_, hasGroupModelRatio := ratio_setting.GetGroupModelRatio(req.Group, modelName)
 		result = gin.H{
 			"selection_policy":  setting.SelectionPolicy,
 			"slot_occupancy":    input.SlotOccupancy,
@@ -342,6 +344,7 @@ func SimulateVideoSchedule(c *gin.Context) {
 			"group":             req.Group,
 			"model":             modelName,
 			"group_ratio":       service.VideoEffectiveGroupRatio(sc, req.Group, modelName),
+			"group_model_ratio": hasGroupModelRatio,
 			"recommended":       recommended,
 			"probe":             choice.Probe,
 			"explore":           choice.Explore,
