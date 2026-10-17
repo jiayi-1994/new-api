@@ -61,6 +61,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", info.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	if info.PriceData.GroupRatioInfo.HasModelRatio {
+		other.SetPublic("group_model_ratio", true)
+	}
 	if info.IsModelMapped {
 		other.SetPublic("is_model_mapped", true)
 		if snap := info.TieredBillingSnapshot; snap != nil && snap.SalesSource == billingexpr.SalesSourceVideoRequest {
@@ -422,7 +425,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
 
 	var finalGroupRatio float64
-	if hasUserGroupRatio {
+	if modelGroupRatio, ok := ratio_setting.GetGroupModelRatio(group, modelName); ok {
+		finalGroupRatio = modelGroupRatio
+	} else if hasUserGroupRatio {
 		finalGroupRatio = userGroupRatio
 	} else {
 		finalGroupRatio = groupRatio

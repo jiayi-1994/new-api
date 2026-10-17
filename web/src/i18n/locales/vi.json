@@ -7279,6 +7279,9 @@
     "{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed": "Đã mô phỏng {{done}}/{{total}} · {{ok}} bình thường · {{config}} lỗi cấu hình · {{loss}} lỗ · {{none}} không có kênh · {{unserved}} không bán · {{error}} thất bại",
     "No problems found": "Không phát hiện vấn đề",
     "Not served in this group": "Nhóm này không bán",
-    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} quy cách không được bộ điều phối trực tiếp tiếp quản (tắt, chế độ bóng hoặc chưa liệt kê); lưu lượng thực vẫn chọn kênh theo cách thông thường"
+    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} quy cách không được bộ điều phối trực tiếp tiếp quản (tắt, chế độ bóng hoặc chưa liệt kê); lưu lượng thực vẫn chọn kênh theo cách thông thường",
+    "Group model ratios": "Hệ số mô hình theo nhóm",
+    "Nested JSON: group →": "JSON lồng nhau: nhóm →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "thay thế hệ số nhóm cho mô hình đó trong nhóm đó. Các mô hình không có mục vẫn dùng hệ số nhóm thông thường."
   }
 }

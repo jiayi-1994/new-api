@@ -25,6 +25,11 @@ var defaultGroupGroupRatio = map[string]map[string]float64{
 
 var groupGroupRatioMap = types.NewRWMap[string, map[string]float64]()
 
+// groupModelRatioMap overrides the group ratio for a single model in a
+// group: {"group": {"model": ratio}}. A model without an entry keeps the
+// group's normal ratio.
+var groupModelRatioMap = types.NewRWMap[string, map[string]float64]()
+
 var defaultGroupSpecialUsableGroup = map[string]map[string]string{}
 
 type GroupRatioSetting struct {
@@ -103,6 +108,56 @@ func GroupGroupRatio2JSONString() string {
 
 func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
 	return types.LoadFromJsonString(groupGroupRatioMap, jsonStr)
+}
+
+// GetGroupModelRatio is the ratio configured for modelName in group, if any.
+func GetGroupModelRatio(group, modelName string) (float64, bool) {
+	if group == "" || modelName == "" {
+		return -1, false
+	}
+	models, ok := groupModelRatioMap.Get(group)
+	if !ok {
+		return -1, false
+	}
+	ratio, ok := models[modelName]
+	if !ok {
+		return -1, false
+	}
+	return ratio, true
+}
+
+// GetGroupModelRatioAny is GetGroupModelRatio for the first of modelNames
+// that has a ratio, so a request matches by its requested or billing name.
+func GetGroupModelRatioAny(group string, modelNames ...string) (float64, bool) {
+	for _, name := range modelNames {
+		if ratio, ok := GetGroupModelRatio(group, name); ok {
+			return ratio, true
+		}
+	}
+	return -1, false
+}
+
+func GroupModelRatio2JSONString() string {
+	return groupModelRatioMap.MarshalJSONString()
+}
+
+func UpdateGroupModelRatioByJSONString(jsonStr string) error {
+	return types.LoadFromJsonString(groupModelRatioMap, jsonStr)
+}
+
+func CheckGroupModelRatio(jsonStr string) error {
+	check := make(map[string]map[string]float64)
+	if err := json.Unmarshal([]byte(jsonStr), &check); err != nil {
+		return err
+	}
+	for group, models := range check {
+		for modelName, ratio := range models {
+			if ratio < 0 {
+				return errors.New("group model ratio must be not less than 0: " + group + "/" + modelName)
+			}
+		}
+	}
+	return nil
 }
 
 func CheckGroupRatio(jsonStr string) error {

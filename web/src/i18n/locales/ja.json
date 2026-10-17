@@ -7279,6 +7279,9 @@
     "{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed": "{{done}}/{{total}} 件をシミュレーション · 正常 {{ok}} · 設定の問題 {{config}} · 赤字 {{loss}} · チャネルなし {{none}} · 未提供 {{unserved}} · 失敗 {{error}}",
     "No problems found": "問題は見つかりませんでした",
     "Not served in this group": "このグループでは未提供",
-    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} 件の仕様はライブスケジューラに引き継がれていません（オフ、シャドー、または未登録）。実トラフィックは通常のチャネル選択でルーティングされます"
+    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} 件の仕様はライブスケジューラに引き継がれていません（オフ、シャドー、または未登録）。実トラフィックは通常のチャネル選択でルーティングされます",
+    "Group model ratios": "グループ別モデル倍率",
+    "Nested JSON: group →": "ネストされたJSON: グループ →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "そのグループ内の該当モデルのグループ倍率を置き換えます。未設定のモデルは通常のグループ倍率のままです。"
   }
 }

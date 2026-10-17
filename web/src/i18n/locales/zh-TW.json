@@ -7279,6 +7279,9 @@
     "{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed": "已模擬 {{done}}/{{total}} · 正常 {{ok}} · 設定問題 {{config}} · 虧損 {{loss}} · 無管道 {{none}} · 未售賣 {{unserved}} · 失敗 {{error}}",
     "No problems found": "未發現問題",
     "Not served in this group": "此分組未售賣",
-    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "有 {{count}} 個規格未被線上排程接管（關閉、影子模式或未在模型清單中），線上流量仍依一般管道選擇路由"
+    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "有 {{count}} 個規格未被線上排程接管（關閉、影子模式或未在模型清單中），線上流量仍依一般管道選擇路由",
+    "Group model ratios": "分組模型倍率",
+    "Nested JSON: group →": "嵌套 JSON：分組 →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "為該分組下的該模型單獨替換分組倍率，未設定的模型仍使用原分組倍率。"
   }
 }

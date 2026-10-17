@@ -7279,6 +7279,9 @@
     "{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed": "{{done}}/{{total}} simulés · {{ok}} OK · {{config}} problèmes de configuration · {{loss}} pertes · {{none}} sans canal · {{unserved}} non vendus · {{error}} échecs",
     "No problems found": "Aucun problème détecté",
     "Not served in this group": "Non vendu dans ce groupe",
-    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} ventes ne sont pas prises en charge par le planificateur en production (désactivé, fantôme ou non listé) ; le trafic réel suit la sélection de canal ordinaire"
+    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} ventes ne sont pas prises en charge par le planificateur en production (désactivé, fantôme ou non listé) ; le trafic réel suit la sélection de canal ordinaire",
+    "Group model ratios": "Ratios de modèle par groupe",
+    "Nested JSON: group →": "JSON imbriqué : groupe →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "remplace le ratio de groupe pour ce modèle dans ce groupe. Les modèles sans entrée gardent le ratio de groupe normal."
   }
 }

@@ -7279,6 +7279,9 @@
     "{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed": "Смоделировано {{done}}/{{total}} · ОК: {{ok}} · проблем конфигурации: {{config}} · убытков: {{loss}} · без канала: {{none}} · не продаётся: {{unserved}} · ошибок: {{error}}",
     "No problems found": "Проблем не найдено",
     "Not served in this group": "Не продаётся в этой группе",
-    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} продаж не обрабатываются планировщиком (выключен, теневой режим или модель не в списке); реальный трафик идёт обычным выбором канала"
+    "{{count}} sales are not taken over by the live scheduler (off, shadow or not listed); live traffic routes them by ordinary channel selection": "{{count}} продаж не обрабатываются планировщиком (выключен, теневой режим или модель не в списке); реальный трафик идёт обычным выбором канала",
+    "Group model ratios": "Коэффициенты моделей по группам",
+    "Nested JSON: group →": "Вложенный JSON: группа →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "заменяет коэффициент группы для этой модели в этой группе. Модели без записи используют обычный коэффициент группы."
   }
 }

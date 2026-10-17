@@ -588,7 +588,7 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		input.Candidates = append(input.Candidates, candidate)
 		input.Probe[channel.Id] = probe
 	}
-	freezeUnifiedVideoInput(c, group, input.Candidates)
+	freezeUnifiedVideoInput(c, group, modelName, input.Candidates)
 	for _, candidate := range input.Candidates {
 		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 && setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
 			continue
@@ -622,7 +622,7 @@ const contextKeyVideoSalesInputUnmeasurable = "video_sales_input_unmeasurable"
 // sale, so the price never depends on which channel is scored, tried or
 // retried. Candidates that cannot be priced are excluded rather than left
 // with an unknown sell, which a permissive UnknownSellPolicy could admit.
-func freezeUnifiedVideoInput(c *gin.Context, group string, candidates []videosched.Candidate) {
+func freezeUnifiedVideoInput(c *gin.Context, group, clientModel string, candidates []videosched.Candidate) {
 	sales, unified := GetVideoSalesFacts(c)
 	if !unified || !sales.ChargesInputVideo() {
 		return
@@ -674,7 +674,7 @@ func freezeUnifiedVideoInput(c *gin.Context, group string, candidates []videosch
 			candidates[i].Excluded = "spec does not match unified sale"
 			continue
 		}
-		candidates[i].Sell = unifiedVideoSell(c, group, sales)
+		candidates[i].Sell = unifiedVideoSell(c, group, clientModel, sales)
 	}
 }
 

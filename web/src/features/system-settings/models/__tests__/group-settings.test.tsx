@@ -39,6 +39,7 @@ const defaults = {
   TopupGroupRatio: '{"vip":1.2}',
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
   GroupGroupRatio: '{}',
+  GroupModelRatio: '{}',
   AutoGroups: '["default","vip"]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
@@ -50,6 +51,7 @@ const schema = z.object({
   TopupGroupRatio: z.string(),
   UserUsableGroups: z.string(),
   GroupGroupRatio: z.string(),
+  GroupModelRatio: z.string(),
   AutoGroups: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
@@ -79,6 +81,29 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('saves group model ratios edited in the pricing section', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    const editor = screen.getByRole('textbox', { name: 'Group model ratios' })
+    const ratios = '{"vip":{"seedance-2.0":0.73,"seedance-2.5":0.8}}'
+    fireEvent.input(editor, { target: { value: ratios } })
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].GroupModelRatio).toBe(ratios)
+  })
+
+  it('hides group model ratios outside the pricing section', async () => {
+    const user = userEvent.setup()
+    render(<Fixture />)
+    await user.click(screen.getByRole('tab', { name: 'Auto group order' }))
+    expect(
+      screen.queryByRole('textbox', { name: 'Group model ratios' })
+    ).not.toBeInTheDocument()
+  })
+
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)
@@ -162,7 +187,9 @@ describe('group settings workspace', () => {
     expect(screen.getByRole('button', { name: 'Move vip up' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Move vip down' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(onSave.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -205,7 +232,9 @@ describe('group settings workspace', () => {
     )
     expect(screen.getByText('Not in pricing table')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(JSON.parse(onSave.mock.calls[0][0].AutoGroups)).toEqual([
       'vip',
@@ -247,7 +276,9 @@ describe('group settings workspace', () => {
       { target: { value: '0' } }
     )
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(
         screen.getByRole('tab', { name: 'Auto group order' })
