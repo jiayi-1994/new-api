@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
@@ -45,6 +46,9 @@ export const ModelCardGrid = memo(function ModelCardGrid(
 ) {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
+  const showPerformanceMetrics = usePricingPreferencesStore(
+    (state) => state.showPerformanceMetrics
+  )
   const pageSize = DEFAULT_PRICING_PAGE_SIZE
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const totalPages = Math.max(1, Math.ceil(props.models.length / pageSize))
@@ -53,6 +57,7 @@ export const ModelCardGrid = memo(function ModelCardGrid(
   const perfQuery = useQuery({
     queryKey: ['perf-metrics-summary', 24],
     queryFn: async () => requireServerSuccess(await getPerfMetricsSummary(24)),
+    enabled: showPerformanceMetrics,
     staleTime: 60 * 1000,
     retry: false,
   })
@@ -91,6 +96,7 @@ export const ModelCardGrid = memo(function ModelCardGrid(
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
             perf={perfMap.get(model.model_name || '')}
+            showPerformanceMetrics={showPerformanceMetrics}
             onClick={props.onModelClick}
           />
         ))}

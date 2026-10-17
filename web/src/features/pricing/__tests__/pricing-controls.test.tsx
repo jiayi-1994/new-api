@@ -16,16 +16,52 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { api } from '@/lib/api'
+import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
+
+import { ModelCardGrid } from '../components/model-card-grid'
 import { PricingSidebar } from '../components/pricing-sidebar'
 import {
   PricingToolbar,
   type PricingToolbarProps,
 } from '../components/pricing-toolbar'
 import type { PricingModel } from '../types'
+
+let queryClient: QueryClient
+
+beforeEach(() => {
+  usePricingPreferencesStore.setState(
+    usePricingPreferencesStore.getInitialState()
+  )
+  localStorage.removeItem('model-pricing-preferences')
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  })
+})
+
+afterEach(() => {
+  queryClient.clear()
+  usePricingPreferencesStore.setState(
+    usePricingPreferencesStore.getInitialState()
+  )
+  localStorage.removeItem('model-pricing-preferences')
+})
+
+function cardModel(id: number): PricingModel {
+  return {
+    id,
+    model_name: `model-${id}`,
+    quota_type: 0,
+    model_ratio: 1,
+    completion_ratio: 1,
+    enable_groups: ['default'],
+  }
+}
 
 function toolbarProps(): PricingToolbarProps {
   return {
@@ -61,6 +97,90 @@ function toolbarProps(): PricingToolbarProps {
 }
 
 describe('pricing controls', () => {
+  it('hides every card metric with the toolbar toggle and restores them with the keyboard while retaining details', async () => {
+    const props = toolbarProps()
+    const user = userEvent.setup()
+    const onModelClick = vi.fn()
+    queryClient.setQueryData(['perf-metrics-summary', 24], {
+      success: true,
+      data: { models: [] },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PricingToolbar {...props} />
+        <ModelCardGrid
+          models={[cardModel(1), cardModel(2)]}
+          onModelClick={onModelClick}
+        />
+      </QueryClientProvider>
+    )
+    const toggle = screen.getByRole('button', {
+      name: 'Show performance metrics',
+    })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      screen.getAllByLabelText('Performance metrics for the last 24 hours')
+    ).toHaveLength(2)
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      screen.queryByLabelText('Performance metrics for the last 24 hours')
+    ).not.toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Details' })[0])
+    expect(onModelClick).toHaveBeenCalledWith('model-1')
+    toggle.focus()
+    await user.keyboard(' ')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      screen.getAllByLabelText('Performance metrics for the last 24 hours')
+    ).toHaveLength(2)
+  })
+
+  it('restores the hidden preference from browser storage without requesting card metrics', async () => {
+    const props = toolbarProps()
+    const user = userEvent.setup()
+    const request = vi.spyOn(api, 'get')
+    const { unmount } = render(<PricingToolbar {...props} />)
+    await user.click(
+      screen.getByRole('button', { name: 'Show performance metrics' })
+    )
+    const stored = localStorage.getItem('model-pricing-preferences')
+    expect(stored).not.toBeNull()
+    unmount()
+    usePricingPreferencesStore.setState(
+      usePricingPreferencesStore.getInitialState()
+    )
+    localStorage.setItem('model-pricing-preferences', stored ?? '')
+    await act(() => usePricingPreferencesStore.persist.rehydrate())
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PricingToolbar {...props} />
+        <ModelCardGrid models={[cardModel(1)]} onModelClick={vi.fn()} />
+      </QueryClientProvider>
+    )
+    expect(
+      screen.getByRole('button', { name: 'Show performance metrics' })
+    ).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      screen.queryByLabelText('Performance metrics for the last 24 hours')
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Details' })).toBeEnabled()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('defaults to showing metrics when restoring older currency-only preferences', async () => {
+    localStorage.setItem(
+      'model-pricing-preferences',
+      JSON.stringify({ state: { currency: 'site' }, version: 0 })
+    )
+    await act(() => usePricingPreferencesStore.persist.rehydrate())
+    render(<PricingToolbar {...toolbarProps()} />)
+    expect(
+      screen.getByRole('button', { name: 'Show performance metrics' })
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(usePricingPreferencesStore.getState().currency).toBe('site')
+  })
+
   it('counts each model once per filter and updates counts when the catalog changes', () => {
     const props = toolbarProps()
     const base: PricingModel = {
@@ -179,6 +299,9 @@ describe('pricing controls', () => {
     await user.keyboard('{Enter}')
     expect(props.onViewModeChange).toHaveBeenCalledWith('table')
     rerender(<PricingToolbar {...props} viewMode='table' />)
+    expect(
+      screen.queryByRole('button', { name: 'Show performance metrics' })
+    ).not.toBeInTheDocument()
     expect(tableButton).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Card view' })).toHaveAttribute(
       'aria-pressed',

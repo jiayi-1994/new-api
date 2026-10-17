@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ArrowUpDown, Check, Filter } from 'lucide-react'
+import { Activity, ArrowUpDown, Check, Filter } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -42,8 +42,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Toggle } from '@/components/ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
+import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 
 import { getSortLabels, type SortOption, type ViewMode } from '../constants'
 import type { PricingModel, PricingVendor, TokenUnit } from '../types'
@@ -83,6 +85,12 @@ export interface PricingToolbarProps {
 export function PricingToolbar(props: PricingToolbarProps) {
   const { t } = useTranslation()
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
+  const showPerformanceMetrics = usePricingPreferencesStore(
+    (state) => state.showPerformanceMetrics
+  )
+  const setShowPerformanceMetrics = usePricingPreferencesStore(
+    (state) => state.setShowPerformanceMetrics
+  )
   const sortLabels = getSortLabels(t)
 
   return (
@@ -183,6 +191,19 @@ export function PricingToolbar(props: PricingToolbarProps) {
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {props.viewMode === 'card' && (
+            <Toggle
+              variant='outline'
+              size='sm'
+              pressed={showPerformanceMetrics}
+              onPressedChange={setShowPerformanceMetrics}
+              className='h-8 gap-1.5 px-3 text-xs'
+            >
+              <Activity aria-hidden className='size-3.5' />
+              {t('Show performance metrics')}
+            </Toggle>
+          )}
 
           <DataTableViewModeToggle
             value={props.viewMode}
