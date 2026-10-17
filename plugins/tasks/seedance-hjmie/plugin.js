@@ -1,7 +1,22 @@
 // Task Plugin API v1 adapter for the Po Xiao public /v1/videos API.
 // The upstream accepts JSON and public media URLs; legacy model names remain supported.
-const MODELS = ["seedance-2.0", "seedance-2.5", "videos-mini", "videos-fast", "videos-standard"];
+const REQUEST_BILLING_MODELS = ["sd-2-c5", "sd-2-c4","seedance2.0特价1","seedance2.0特价2"];
+const MODELS = ["seedance-2.0", "seedance-2.5", "videos-mini", "videos-fast", "videos-standard", ...REQUEST_BILLING_MODELS];
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
+const USAGE_SCHEMA = {
+  seconds: {
+    type: "number",
+    unit: "second",
+    description: { en: "Video generation unit price", zh: "视频生成单价" },
+  },
+  resolution: {
+    enum: RESOLUTIONS,
+    description: { en: "Output video resolution", zh: "输出视频分辨率" },
+  },
+};
+const USAGE_EXAMPLES = RESOLUTIONS.map(function (resolution) {
+  return { label: resolution + " · 5s", facts: { seconds: 5, resolution } };
+});
 const RATIOS = ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"];
 const ALLOWED_FIELDS = [
   "model", "prompt", "seconds", "duration", "size", "video_size", "n",
@@ -9,17 +24,20 @@ const ALLOWED_FIELDS = [
   "images", "videos", "audios", "referenceImages", "referenceVideos",
   "referenceAudios", "reference_images", "reference_videos",
   "reference_audios", "image", "input_reference", "first_image_url", "last_image_url", "first_image", "last_image",
+  "image_urls", "video_urls", "audio_urls", "generate_audio", "metadata",
 ];
 const MEDIA_FIELDS = [
   "images", "videos", "audios", "referenceImages", "referenceVideos",
   "referenceAudios", "reference_images", "reference_videos", "reference_audios",
+  "image_urls", "video_urls", "audio_urls",
 ];
+const METADATA_FIELDS = ["content", "seconds", "duration", "resolution", "video_resolution", "ratio", "aspect_ratio", "aspectRatio", "size", "video_size", "generate_audio"];
 
 export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.9",
+  version: "1.0.12",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -30,23 +48,23 @@ export const meta = {
   models: MODELS,
   fetchMode: "per_task",
   protocols: ["openai_video"],
-  usageSchema: {
-    seconds: {
-      type: "number",
-      unit: "second",
-      description: { en: "Video generation unit price", zh: "视频生成单价" },
+  usageSchema: USAGE_SCHEMA,
+  usageExamples: USAGE_EXAMPLES,
+  usageProfiles: [{
+    models: REQUEST_BILLING_MODELS,
+    schema: {
+      ...USAGE_SCHEMA,
+      requests: {
+        type: "number",
+        unit: "count",
+        unitLabel: { en: "request", zh: "次" },
+        description: { en: "Video request unit price", zh: "视频请求单价" },
+      },
     },
-    resolution: {
-      enum: RESOLUTIONS,
-      description: { en: "Output video resolution", zh: "输出视频分辨率" },
-    },
-  },
-  usageExamples: [
-    { label: "480p · 5s", facts: { seconds: 5, resolution: "480p" } },
-    { label: "720p · 5s", facts: { seconds: 5, resolution: "720p" } },
-    { label: "1080p · 5s", facts: { seconds: 5, resolution: "1080p" } },
-    { label: "4k · 5s", facts: { seconds: 5, resolution: "4k" } },
-  ],
+    examples: USAGE_EXAMPLES.map(function (example) {
+      return { label: example.label, facts: { ...example.facts, requests: 1 } };
+    }),
+  }],
 };
 
 function has(object, name) {
@@ -102,13 +120,20 @@ function seconds(value, field) {
   return parsed;
 }
 
-function scalarAlias(input, names, parse) {
+function boolean(value, field) {
+  if (typeof value !== "boolean") throw new Error(field + " must be a boolean");
+  return value;
+}
+
+function scalarAlias(input, names, parse, metadata = {}) {
   let found;
-  for (const name of names) {
-    if (!has(input, name)) continue;
-    const value = parse(input[name], name);
-    if (found !== undefined && found !== value) throw new Error("conflicting values for " + names.join("/"));
-    found = value;
+  for (const source of [input, metadata]) {
+    for (const name of names) {
+      if (!has(source, name)) continue;
+      const value = parse(source[name], name);
+      if (found !== undefined && found !== value) throw new Error("conflicting values for " + names.join("/"));
+      found = value;
+    }
   }
   return found;
 }
@@ -126,29 +151,34 @@ function frameURLs(input) {
   return frames;
 }
 
-function mediaURLs(input, names, label) {
+function mediaURLs(input, names, label, mirrors = {}) {
   let selected;
-  for (const name of names) {
-    if (!has(input, name)) continue;
-    if (selected !== undefined) throw new Error("provide only one " + label + " field: " + names.join("/"));
-    let value = input[name];
-    if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string" && value[0].trim().startsWith("[")) {
-      value = value[0];
-    }
-    if (typeof value === "string") {
-      if (value.trim().startsWith("[")) {
-        try { value = JSON.parse(value); } catch (_error) { throw new Error(name + " must be a URL array"); }
-      } else {
-        value = [value];
+  // Equivalent canvas mirrors represent one list. Preserve order and repeated
+  // URLs within that list because each submitted reference is independently counted.
+  for (const source of [input, mirrors]) {
+    for (const name of names) {
+      if (!has(source, name)) continue;
+      let value = source[name];
+      if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string" && value[0].trim().startsWith("[")) {
+        value = value[0];
       }
-    }
-    if (!Array.isArray(value)) throw new Error(name + " must be a URL array");
-    selected = value.map(function (url) {
-      if (typeof url !== "string" || !/^https?:\/\/[^\s/?#@]+(?:[/?#][^\s]*)?$/i.test(url.trim())) {
-        throw new Error(name + " entries must be public http(s) URLs");
+      if (typeof value === "string") {
+        if (value.trim().startsWith("[")) {
+          try { value = JSON.parse(value); } catch (_error) { throw new Error(name + " must be a URL array"); }
+        } else {
+          value = [value];
+        }
       }
-      return url.trim();
-    });
+      if (!Array.isArray(value)) throw new Error(name + " must be a URL array");
+      const urls = value.map(function (url) {
+        if (typeof url !== "string" || !/^https?:\/\/[^\s/?#@]+(?:[/?#][^\s]*)?$/i.test(url.trim())) {
+          throw new Error(name + " entries must be public http(s) URLs");
+        }
+        return url.trim();
+      });
+      if (selected !== undefined && JSON.stringify(selected) !== JSON.stringify(urls)) throw new Error("conflicting " + label + " fields: " + names.join("/"));
+      selected = urls;
+    }
   }
   return selected || [];
 }
@@ -170,6 +200,9 @@ function decodedFields(body) {
     if (!Array.isArray(values) || !values.length) throw new Error(name + " requires a value");
     if (!MEDIA_FIELDS.includes(name) && values.length !== 1) throw new Error(name + " must be provided once");
     input[name] = MEDIA_FIELDS.includes(name) ? values : values[0];
+    if (name === "metadata" || name === "generate_audio") {
+      try { input[name] = JSON.parse(values[0]); } catch (_error) { throw new Error(name + " contains invalid JSON"); }
+    }
   }
   return input;
 }
@@ -180,6 +213,34 @@ function normalize(ctx) {
   for (const name of Object.keys(input)) {
     if (!ALLOWED_FIELDS.includes(name)) throw new Error("unsupported video parameter: " + name);
   }
+  const metadata = has(input, "metadata") ? input.metadata : {};
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("metadata must be an object");
+  for (const name of Object.keys(metadata)) {
+    if (!METADATA_FIELDS.includes(name)) throw new Error("unsupported metadata parameter: " + name);
+  }
+  const content = has(metadata, "content") ? metadata.content : [];
+  if (!Array.isArray(content)) throw new Error("metadata.content must be an array");
+  const references = {};
+  for (const item of content) {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !["image_url", "video_url", "audio_url"].includes(item.type)) {
+      throw new Error("unsupported metadata.content type; use image_url, video_url or audio_url");
+    }
+    const kind = item.type.slice(0, -4);
+    if (has(item, "role") && item.role !== "reference_" + kind) throw new Error("unsupported metadata.content role: " + item.role);
+    for (const name of Object.keys(item)) {
+      if (!["type", "role", item.type].includes(name)) throw new Error("unsupported metadata.content parameter: " + name);
+    }
+    const media = item[item.type];
+    if (!media || typeof media !== "object" || Array.isArray(media) || Object.keys(media).length !== 1 || !has(media, "url")) {
+      throw new Error("metadata.content " + item.type + " must contain only url");
+    }
+    if (typeof media.url !== "string" || !/^https?:\/\/[^\s/?#@]+(?:[/?#][^\s]*)?$/i.test(media.url.trim())) {
+      throw new Error("metadata.content entries must be public http(s) URLs");
+    }
+    const field = kind + "s";
+    if (!has(references, field)) references[field] = [];
+    references[field].push(media.url);
+  }
   const model = input.model;
   if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
   if (ctx.model && model !== ctx.model) throw new Error("model does not match the selected model");
@@ -188,25 +249,31 @@ function normalize(ctx) {
   if (ctx.upstreamModel) upstreamModel(ctx);
   if (typeof input.prompt !== "string" || !input.prompt.trim()) throw new Error("prompt is required");
 
-  const duration = scalarAlias(input, ["seconds", "duration"], seconds);
+  const duration = scalarAlias(input, ["seconds", "duration"], seconds, metadata);
   if (duration === undefined) throw new Error("seconds or duration is required");
 
-  let selected = scalarAlias(input, ["resolution", "video_resolution"], resolution);
-  let selectedRatio = scalarAlias(input, ["ratio", "aspect_ratio", "aspectRatio"], ratio);
-  for (const name of ["size", "video_size"]) {
-    if (!has(input, name)) continue;
-    const mapped = size(input[name], name);
-    if (selected !== undefined && selected !== mapped.resolution) throw new Error("size conflicts with resolution");
-    if (mapped.ratio && selectedRatio !== undefined && selectedRatio !== mapped.ratio) throw new Error("size conflicts with ratio");
-    selected = mapped.resolution;
-    if (mapped.ratio) selectedRatio = mapped.ratio;
+  let selected = scalarAlias(input, ["resolution", "video_resolution"], resolution, metadata);
+  let selectedRatio = scalarAlias(input, ["ratio", "aspect_ratio", "aspectRatio"], ratio, metadata);
+  for (const source of [input, metadata]) {
+    for (const name of ["size", "video_size"]) {
+      if (!has(source, name)) continue;
+      const mapped = size(source[name], name);
+      if (selected !== undefined && selected !== mapped.resolution) throw new Error("size conflicts with resolution");
+      if (mapped.ratio && selectedRatio !== undefined && selectedRatio !== mapped.ratio) throw new Error("size conflicts with ratio");
+      selected = mapped.resolution;
+      if (mapped.ratio) selectedRatio = mapped.ratio;
+    }
   }
   if (selected === undefined) throw new Error("resolution or size is required; refusing an implicit 720p default");
 
-  const images = mediaURLs(input, ["images", "referenceImages", "reference_images", "image", "input_reference"], "image reference");
-  const videos = mediaURLs(input, ["videos", "referenceVideos", "reference_videos"], "video reference");
-  const audios = mediaURLs(input, ["audios", "referenceAudios", "reference_audios"], "audio reference");
+  const images = mediaURLs(input, ["images", "image_urls", "referenceImages", "reference_images", "image", "input_reference"], "image reference", references);
+  const videos = mediaURLs(input, ["videos", "video_urls", "referenceVideos", "reference_videos"], "video reference", references);
+  const audios = mediaURLs(input, ["audios", "audio_urls", "referenceAudios", "reference_audios"], "audio reference", references);
   const requestBody = { prompt: input.prompt, duration, resolution: selected };
+  // Preserve the canvas switch without a default; this is independent of
+  // reference audio and does not establish the upstream model's audio support.
+  const generateAudio = scalarAlias(input, ["generate_audio"], boolean, metadata);
+  if (generateAudio !== undefined) requestBody.generate_audio = generateAudio;
   if (selectedRatio) requestBody.ratio = selectedRatio;
   if (images.length) requestBody.images = images;
   if (videos.length) requestBody.videos = videos;
@@ -246,6 +313,7 @@ export function buildSubmitRequest(ctx) {
     resolution: resolution(input.resolution, "resolution"),
   };
   if (input.ratio !== undefined) body.ratio = ratio(input.ratio, "ratio");
+  if (has(input, "generate_audio")) body.generate_audio = boolean(input.generate_audio, "generate_audio");
   for (const name of ["images", "videos", "audios"]) {
     if (input[name] !== undefined) body[name] = mediaURLs(input, [name], name);
   }
@@ -282,10 +350,19 @@ export function parseSubmitResponse(_ctx, response) {
 
 export function extractUsage(ctx) {
   const input = ctx.requestBody || {};
-  return {
+  const facts = {
     seconds: seconds(input.duration, "duration"),
     resolution: resolution(input.resolution, "resolution"),
   };
+  // Match the host's upstream-first profile selection and client-model fallback.
+  // A submission creates one video; completion retains this reserved count.
+  if (REQUEST_BILLING_MODELS.includes(ctx.upstreamModel) || REQUEST_BILLING_MODELS.includes(ctx.model)) {
+    facts.requests = 1;
+    // Legacy per-call prices multiply all numeric facts. Keep duration only
+    // for expressions so a fixed request price is not multiplied by seconds.
+    if (ctx.usagePurpose === "billing_ratios") delete facts.seconds;
+  }
+  return facts;
 }
 
 function reportedResolution(data) {

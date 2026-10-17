@@ -1,9 +1,25 @@
 // Task Plugin API v1 for https://newapi.megabyai.cc/video-docs.
 // Self-contained: install this file in an official New API instance.
-const MODELS = ["videos-mini", "videos-fast", "videos-standard", "seedance-2.0", "sd-2-720p"];
 // 分辨率开关：仅保留要开放的档位，至少保留一个；删去后重新上传插件并保存价格。
 // 官方插件无法读取后台价格，价格留空/填 0 不会禁用；此列表同步控制校验和展示。
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
+// Model capabilities from Mega's supplied catalog. Media limits are images/videos/audios.
+// The catalog does not specify duration bounds; keep the existing host safety ceiling.
+const MODEL_LIMITS = {
+  "seedance-2.0": { resolutions: ["480p", "720p", "1080p", "4k"], media: [9, 3, 3] },
+  "seedance-2.0-fast": { resolutions: ["480p", "720p"], media: [9, 3, 3] },
+  "seedance-2.0-mini": { resolutions: ["480p", "720p"], media: [9, 3, 3] },
+  "seedance-2.5": { resolutions: ["480p", "720p", "1080p"], media: [30, 10, 10] },
+  "sd-2.0-480p": { resolutions: ["480p"], media: [9, 3, 3] },
+  "sd-2.0-720p": { resolutions: ["720p"], media: [9, 3, 3] },
+  "sd-2.0-1080p": { resolutions: ["1080p"], media: [9, 3, 3] },
+  "sd-2.0-4k": { resolutions: ["4k"], media: [9, 3, 3] },
+  "sd-mini-480p": { resolutions: ["480p"], media: [9, 3, 3] },
+  "sd-mini-720p": { resolutions: ["720p"], media: [9, 3, 3] },
+  "sd-2.5-720p": { resolutions: ["720p"], media: [30, 10, 10] },
+};
+// Retain legacy IDs and their behavior for existing channel mappings.
+const MODELS = ["videos-mini", "videos-fast", "videos-standard", "sd-2-720p"].concat(Object.keys(MODEL_LIMITS));
 const RATIOS = ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"];
 const MAX_SECONDS = 3600; // Official host ceiling for usage fields with unit "second".
 const MAX_REFERENCES = 128;
@@ -29,7 +45,7 @@ export const meta = {
   apiVersion: 1,
   key: "megabyai",
   name: "Mega Video",
-  version: "2.1.7",
+  version: "2.2.0",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through the Mega API", zh: "通过 Mega API 生成视频" },
   icon: "text:M",
@@ -229,7 +245,7 @@ function canonicalClientInput(input) {
 }
 
 // Decode, forwarding and usage extraction share the exact same validated values.
-function videoParams(input) {
+function videoParams(input, model) {
   if (!isObject(input)) throw new Error("video request must be an object");
   if (has(input, "n") && input.n !== 1 && input.n !== "1") throw new Error("n must be 1");
   for (const name of Object.keys(input)) {
@@ -248,9 +264,15 @@ function videoParams(input) {
     selectedResolution = size.resolution;
     if (size.ratio) selectedRatio = size.ratio;
   }
+  const modelName = typeof model === "string" ? model.trim() : "";
+  const limits = has(MODEL_LIMITS, modelName) ? MODEL_LIMITS[modelName] : null;
+  // A fixed-tier model provides an unambiguous resolution; never overwrite an explicit one.
+  if (selectedResolution === undefined && limits && limits.resolutions.length === 1) selectedResolution = resolution(limits.resolutions[0], "resolution");
   if (selectedResolution === undefined) throw new Error("resolution or size is required; no implicit 720p default");
+  if (limits && !limits.resolutions.includes(selectedResolution)) throw new Error(modelName + " resolution must be one of " + limits.resolutions.join(", "));
   const [images, videos, audios] = REFERENCE_KINDS.map(function (kind) { return mediaURLs(input, kind.aliases); });
   if (images.length + videos.length + audios.length > MAX_REFERENCES) throw new Error("at most " + MAX_REFERENCES + " reference URLs are allowed");
+  if (limits && (images.length > limits.media[0] || videos.length > limits.media[1] || audios.length > limits.media[2])) throw new Error(modelName + " reference limits are " + limits.media.join("/") + " images/videos/audios");
   const output = { prompt: input.prompt, duration: seconds, resolution: selectedResolution };
   if (selectedRatio !== undefined) output.ratio = selectedRatio;
   if (images.length) output.referenceImages = images;
@@ -338,7 +360,7 @@ function videoURLs(body) {
 export function buildSubmitRequest(ctx) {
   const model = ctx.upstreamModel || ctx.model;
   if (typeof model !== "string" || !model.trim()) throw new Error("upstream model is required");
-  const body = Object.assign({ model: model.trim() }, videoParams(ctx.requestBody));
+  const body = Object.assign({ model: model.trim() }, videoParams(ctx.requestBody, model));
   return {
     url: baseURL(ctx) + "/v1/videos",
     method: "POST",
@@ -348,7 +370,7 @@ export function buildSubmitRequest(ctx) {
 }
 
 export function extractUsage(ctx) {
-  const params = videoParams(ctx.requestBody);
+  const params = videoParams(ctx.requestBody, ctx.upstreamModel || ctx.model);
   // Both prices apply to the same validated output duration, never client-supplied usage.
   return { seconds: params.duration, surcharge_seconds: params.duration, resolution: params.resolution };
 }
@@ -356,7 +378,7 @@ export function extractUsage(ctx) {
 // Scheduling facts for the host's purchase-cost quote; never billing usage.
 // surcharge_seconds is part of the per-second base price, not a reference fact.
 export function describeSpec(ctx) {
-  const params = videoParams(ctx.requestBody);
+  const params = videoParams(ctx.requestBody, ctx.upstreamModel || ctx.model);
   return {
     spec_version: 2,
     reference_video_urls: params.referenceVideos || [],
@@ -453,7 +475,7 @@ export const protocols = {
       if (typeof input.model !== "string" || !input.model.trim()) throw new Error("model is required");
       const model = input.model.trim();
       if (ctx.model && model !== ctx.model) throw new Error("model does not match the selected channel model");
-      const requestBody = videoParams(canonicalClientInput(input));
+      const requestBody = videoParams(canonicalClientInput(input), ctx.upstreamModel || model);
       const hasReferences = requestBody.referenceImages || requestBody.referenceVideos || requestBody.referenceAudios;
       return { kind: "submit", model, action: hasReferences ? "reference_to_video" : "text_to_video", requestBody };
     },

@@ -31,6 +31,7 @@ const FIELDS = [
   "resolution",
   "ratio",
   "aspect_ratio",
+  "generate_audio",
   "n",
   "options",
   "mode",
@@ -43,7 +44,7 @@ export const meta = {
   apiVersion: 1,
   key: "vobilemax",
   name: "Vobilemax",
-  version: "1.2.0",
+  version: "1.2.1",
   author: { name: "jiayi-1994" },
   icon: "text:V",
   description: { en: "Video generation through the Vobilemax API", zh: "通过 Vobilemax 接口生成视频" },
@@ -162,6 +163,10 @@ function videoRequest(input, model) {
     if (sizeRatio !== undefined) aspect = sizeRatio;
   }
   const output = { prompt: input.prompt, seconds: duration === undefined ? 15 : duration, resolution: tier || "720p" };
+  if (has(input, "generate_audio")) {
+    if (typeof input.generate_audio !== "boolean") throw new Error("generate_audio must be a boolean");
+    output.generate_audio = input.generate_audio;
+  }
   for (const names of MEDIA) {
     let urls;
     for (const name of names) {
@@ -257,7 +262,7 @@ function authHeaders(ctx) {
 export function buildSubmitRequest(ctx) {
   const model = videoModel(ctx.upstreamModel || ctx.model, true);
   const params = videoRequest(ctx.requestBody, model);
-  return {
+  const request = {
     url: baseURL(ctx) + "/v1/videos",
     method: "POST",
     headers: Object.assign(authHeaders(ctx), { "Content-Type": "application/json; charset=utf-8" }),
@@ -284,6 +289,11 @@ export function buildSubmitRequest(ctx) {
       // No ref_video_seconds: it is not the output duration, nor a trusted client fact.
     },
   };
+  // Preserve the canvas flag, including false, without inventing a default.
+  // The current Vobilemax facade accepts this extra field but does not map it
+  // to a native audio control, so forwarding it does not guarantee audio behavior.
+  if (has(params, "generate_audio")) request.body.generate_audio = params.generate_audio;
+  return request;
 }
 
 export function extractUsage(ctx) {
