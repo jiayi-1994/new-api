@@ -328,7 +328,7 @@ func SimulateVideoSchedule(c *gin.Context) {
 			"decision":          service.VideoSchedDecisionFrom(sc),
 			"group":             req.Group,
 			"model":             modelName,
-			"group_ratio":       service.VideoEffectiveGroupRatio(sc, req.Group),
+			"group_ratio":       service.VideoEffectiveGroupRatio(sc, req.Group, modelName),
 			"recommended":       recommended,
 			"probe":             choice.Probe,
 			"explore":           choice.Explore,

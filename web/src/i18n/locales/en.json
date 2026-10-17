@@ -7252,6 +7252,9 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Group model ratios": "Group model ratios",
+    "Nested JSON: group →": "Nested JSON: group →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio."
   }
 }

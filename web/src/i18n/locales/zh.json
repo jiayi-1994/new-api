@@ -7252,6 +7252,9 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Group model ratios": "分组模型倍率",
+    "Nested JSON: group →": "嵌套 JSON：分组 →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "为该分组下的该模型单独替换分组倍率，未配置的模型仍使用原分组倍率。"
   }
 }

@@ -11,6 +11,8 @@ type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64
 	HasSpecialRatio   bool
+	// HasModelRatio marks GroupRatio as coming from the group model ratio.
+	HasModelRatio bool
 }
 
 type PriceData struct {

@@ -53,6 +53,13 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
+	// a group model ratio is the most specific and wins over both group ratios
+	if modelRatio, ok := ratio_setting.GetGroupModelRatio(relayInfo.UsingGroup, relayInfo.OriginModelName); ok {
+		groupRatioInfo.GroupRatio = modelRatio
+		groupRatioInfo.HasModelRatio = true
+		return groupRatioInfo
+	}
+
 	// check user group special ratio
 	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
 	if ok {

@@ -7252,6 +7252,9 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Group model ratios": "グループ別モデル倍率",
+    "Nested JSON: group →": "ネストされたJSON: グループ →",
+    "replaces the group ratio for that model in that group. Models without an entry keep the normal group ratio.": "そのグループ内の該当モデルのグループ倍率を置き換えます。未設定のモデルは通常のグループ倍率のままです。"
   }
 }
