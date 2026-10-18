@@ -135,13 +135,21 @@ func UpdateGroupModelRatioByJSONString(jsonStr string) error {
 }
 
 func CheckGroupModelRatio(jsonStr string) error {
-	check := make(map[string]map[string]float64)
+	// Pointers distinguish an explicit 0 (free) from JSON null, which the
+	// decoder would otherwise silently turn into a zero ratio.
+	check := make(map[string]map[string]*float64)
 	if err := common.Unmarshal([]byte(jsonStr), &check); err != nil {
 		return err
 	}
 	for group, models := range check {
+		if models == nil {
+			return errors.New("group model ratio must be an object of model ratios: " + group)
+		}
 		for modelName, ratio := range models {
-			if ratio < 0 {
+			if ratio == nil {
+				return errors.New("group model ratio must be a number: " + group + "/" + modelName)
+			}
+			if *ratio < 0 {
 				return errors.New("group model ratio must be not less than 0: " + group + "/" + modelName)
 			}
 		}

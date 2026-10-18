@@ -241,6 +241,11 @@ func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
 	assert.NotContains(t, other, "expr_b64")
 	assert.NotContains(t, other, "matched_tier")
 	assert.NotContains(t, other, "usage_facts")
+	assert.NotContains(t, other, "group_model_ratio")
+
+	task.PrivateData.BillingContext.GroupModelRatio = true
+	assert.Equal(t, true, taskBillingOther(task).Snapshot()["group_model_ratio"],
+		"settle and refund logs keep the ratio source frozen at submission")
 }
 
 func TestTaskBillingOtherIncludesTieredSnapshotAndKeepsUsageFactsNested(t *testing.T) {

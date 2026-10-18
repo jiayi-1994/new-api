@@ -30,4 +30,7 @@ func TestCheckGroupModelRatio(t *testing.T) {
 	assert.NoError(t, CheckGroupModelRatio(`{"vip":{"m":0}}`))
 	assert.Error(t, CheckGroupModelRatio(`{"vip":{"m":-1}}`))
 	assert.Error(t, CheckGroupModelRatio(`{"vip":0.5}`), "a ratio must be nested under a model")
+	assert.Error(t, CheckGroupModelRatio(`{"vip":{"m":null}}`), "null is not a free model")
+	assert.Error(t, CheckGroupModelRatio(`{"vip":null}`), "a group needs model ratios")
+	assert.Error(t, CheckGroupModelRatio(`{"vip":{"m":"0.5"}}`), "a ratio must be a number")
 }
