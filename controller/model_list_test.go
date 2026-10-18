@@ -172,6 +172,117 @@ func pricingByModelName(pricings []model.Pricing) map[string]model.Pricing {
 	return byName
 }
 
+func TestGetPricingReturnsEffectiveModelGroupRatiosWithoutSharingUserPrices(t *testing.T) {
+	originalDB, originalLogDB := model.DB, model.LOG_DB
+	originalRedis, originalMemoryCache := common.RedisEnabled, common.MemoryCacheEnabled
+	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	originalGroups := ratio_setting.GroupRatio2JSONString()
+	originalGroupGroups := ratio_setting.GroupGroupRatio2JSONString()
+	originalGroupModels := ratio_setting.GroupModelRatio2JSONString()
+	originalUsable := setting.UserUsableGroups2JSONString()
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = originalDB, originalLogDB
+		common.RedisEnabled, common.MemoryCacheEnabled = originalRedis, originalMemoryCache
+		common.SetDatabaseTypes(originalMainType, originalLogType)
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(originalGroupGroups))
+		require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(originalGroupModels))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsable))
+		model.InvalidatePricingCache()
+	})
+	db := setupModelListControllerTestDB(t)
+	common.MemoryCacheEnabled = false
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"sd73/80":1,"sd20-73折":0.73,"private":0.1}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"sd73/80":{"sd73/80":0.9}}`))
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"sd73/80":{"seedance-2.0":0.73,"seedance-2.5":0.8,"free-model":0},"private":{"seedance-2.5":0.1}}`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"sd73/80":"User group","sd20-73折":"Alternative"}`))
+	require.NoError(t, db.Create(&model.User{Id: 1901, Username: "pricing-ratio-user", Group: "sd73/80", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 1901, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Name: "pricing-ratio", Group: "sd73/80", Models: "seedance-2.0,seedance-2.5,free-model,fallback-model"}).Error)
+	for _, name := range []string{"seedance-2.0", "seedance-2.5", "free-model", "fallback-model"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "sd73/80", Model: name, ChannelId: 1901, Enabled: true}).Error)
+		require.NoError(t, db.Create(&model.Ability{Group: "private", Model: name, ChannelId: 1901, Enabled: true}).Error)
+	}
+	require.NoError(t, db.Create(&model.Ability{Group: "private", Model: "private-only", ChannelId: 1901, Enabled: true}).Error)
+	model.InvalidatePricingCache()
+	cachedBefore, err := common.Marshal(model.GetPricing())
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name      string
+		userID    int
+		userGroup string
+		fallback  float64
+	}{
+		{name: "signed in", userID: 1901, userGroup: "sd73/80", fallback: 0.9},
+		{name: "anonymous after signed in", fallback: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/pricing", nil)
+			if tc.userID != 0 {
+				ctx.Set("id", tc.userID)
+			}
+			GetPricing(ctx)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var payload struct {
+				Success    bool               `json:"success"`
+				UserGroup  string             `json:"user_group"`
+				GroupRatio map[string]float64 `json:"group_ratio"`
+				Data       []struct {
+					ModelName  string             `json:"model_name"`
+					GroupRatio map[string]float64 `json:"group_ratio"`
+					Groups     []string           `json:"enable_groups"`
+				} `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+			require.True(t, payload.Success)
+			assert.Equal(t, tc.userGroup, payload.UserGroup)
+			assert.Equal(t, tc.fallback, payload.GroupRatio["sd73/80"])
+			assert.NotContains(t, payload.GroupRatio, "private")
+			require.Len(t, payload.Data, 4)
+			want := map[string]float64{"seedance-2.0": 0.73, "seedance-2.5": 0.8, "free-model": 0, "fallback-model": tc.fallback}
+			for _, item := range payload.Data {
+				assert.Equal(t, []string{"sd73/80"}, item.Groups, item.ModelName)
+				require.Contains(t, item.GroupRatio, "sd73/80", item.ModelName)
+				assert.Equal(t, want[item.ModelName], item.GroupRatio["sd73/80"], item.ModelName)
+				assert.NotContains(t, item.GroupRatio, "private")
+			}
+		})
+	}
+	cachedAfter, err := common.Marshal(model.GetPricing())
+	require.NoError(t, err)
+	assert.JSONEq(t, string(cachedBefore), string(cachedAfter))
+}
+
+func TestPricingGroupVisibility(t *testing.T) {
+	catalog := []model.Pricing{
+		{ModelName: "shared", EnableGroup: []string{"default", "vip", "private"}},
+		{ModelName: "universal", EnableGroup: []string{"all"}},
+		{ModelName: "private-only", EnableGroup: []string{"private"}},
+	}
+	for _, tc := range []struct {
+		name   string
+		groups map[string]string
+		want   []model.Pricing
+	}{
+		{name: "default viewer", groups: map[string]string{"default": "Default"}, want: []model.Pricing{
+			{ModelName: "shared", EnableGroup: []string{"default"}},
+			{ModelName: "universal", EnableGroup: []string{"default"}},
+		}},
+		{name: "other viewer retains shared catalog", groups: map[string]string{"vip": "VIP"}, want: []model.Pricing{
+			{ModelName: "shared", EnableGroup: []string{"vip"}},
+			{ModelName: "universal", EnableGroup: []string{"vip"}},
+		}},
+		{name: "no usable groups", want: []model.Pricing{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, filterPricingByUsableGroups(catalog, tc.groups))
+		})
+	}
+	assert.Equal(t, []string{"default", "vip", "private"}, catalog[0].EnableGroup)
+	assert.Equal(t, []string{"all"}, catalog[1].EnableGroup)
+}
+
 func decodeUserModelsResponse(t *testing.T, recorder *httptest.ResponseRecorder) []string {
 	t.Helper()
 

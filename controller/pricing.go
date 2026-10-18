@@ -2,8 +2,8 @@ package controller
 
 import (
 	"maps"
+	"slices"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -21,16 +21,22 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 
 	filtered := make([]model.Pricing, 0, len(pricing))
 	for _, item := range pricing {
-		if common.StringsContains(item.EnableGroup, "all") {
-			filtered = append(filtered, item)
-			continue
-		}
-		for _, group := range item.EnableGroup {
-			if _, ok := usableGroup[group]; ok {
-				filtered = append(filtered, item)
-				break
+		// Allocate a new slice so one viewer cannot change the shared catalog.
+		groups := make([]string, 0, len(item.EnableGroup))
+		if slices.Contains(item.EnableGroup, "all") {
+			groups = slices.Sorted(maps.Keys(usableGroup))
+		} else {
+			for _, group := range item.EnableGroup {
+				if _, ok := usableGroup[group]; ok {
+					groups = append(groups, group)
+				}
 			}
 		}
+		if len(groups) == 0 {
+			continue
+		}
+		item.EnableGroup = groups
+		filtered = append(filtered, item)
 	}
 	return filtered
 }
@@ -63,12 +69,22 @@ func GetPricing(c *gin.Context) {
 			delete(groupRatio, group)
 		}
 	}
+	// Pricing is cached globally; keep the viewer's effective ratios on the response copies.
+	for i := range pricing {
+		pricing[i].GroupRatio = maps.Clone(groupRatio)
+		for usingGroup := range pricing[i].GroupRatio {
+			if ratio, ok := ratio_setting.GetGroupModelRatio(usingGroup, pricing[i].ModelName); ok {
+				pricing[i].GroupRatio[usingGroup] = ratio
+			}
+		}
+	}
 
 	c.JSON(200, gin.H{
 		"success":            true,
 		"data":               pricing,
 		"vendors":            model.GetVendors(),
 		"group_ratio":        groupRatio,
+		"user_group":         group,
 		"usable_group":       usableGroup,
 		"supported_endpoint": model.GetSupportedEndpointMap(),
 		"auto_groups":        service.GetUserAutoGroup(group),

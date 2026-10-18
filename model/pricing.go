@@ -43,6 +43,7 @@ type Pricing struct {
 	AudioRatio             *float64                             `json:"audio_ratio,omitempty"`
 	AudioCompletionRatio   *float64                             `json:"audio_completion_ratio,omitempty"`
 	EnableGroup            []string                             `json:"enable_groups"`
+	GroupRatio             map[string]float64                   `json:"group_ratio,omitempty"`
 	SupportedEndpointTypes []constant.EndpointType              `json:"supported_endpoint_types"`
 	BillingMode            string                               `json:"billing_mode,omitempty"`
 	VideoSales             *billing_setting.VideoSalesModel     `json:"video_sales,omitempty"`

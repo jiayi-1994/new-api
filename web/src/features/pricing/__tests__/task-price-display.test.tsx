@@ -35,6 +35,7 @@ import { ModelDetailsContent } from '../components/model-details'
 import { ModelPriceCell } from '../components/model-price-cell'
 import { VideoSalesPriceTable } from '../components/video-sales-price-table'
 import { QUOTA_TYPES, SORT_OPTIONS } from '../constants'
+import { usePricingData } from '../hooks/use-pricing-data'
 import { getBillingModeLabelKey } from '../lib/billing-mode'
 import { getDynamicPricingSummary } from '../lib/dynamic-price'
 import { filterByQuotaType, sortModels } from '../lib/filters'
@@ -136,6 +137,133 @@ const unifiedVideo: PricingModel = {
     },
   ],
 }
+
+it('shows the viewer model discount from the pricing response instead of the cheapest other group', async () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  const retail = {
+    ...unifiedVideo,
+    model_name: 'seedance-2.5',
+    enable_groups: ['sd73/80', 'sd20-73折'],
+    group_ratio: { 'sd73/80': 0.8, 'sd20-73折': 0.73 },
+    video_sales: {
+      resolutions: { '480p': { usd_per_second: 0.672525, seconds: [5] } },
+    },
+  }
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/pricing') {
+      return {
+        data: {
+          success: true,
+          data: [retail],
+          vendors: [],
+          user_group: 'sd73/80',
+          group_ratio: { 'sd73/80': 1, 'sd20-73折': 0.73 },
+          usable_group: {
+            'sd73/80': { desc: '', ratio: 1 },
+            'sd20-73折': { desc: '', ratio: 0.73 },
+          },
+          supported_endpoint: {},
+          auto_groups: [],
+        },
+      }
+    }
+    return { data: { success: true, data: {} } }
+  })
+  function ViewerPrice(props: { selectedGroup?: string }) {
+    const data = usePricingData()
+    if (!data.models[0]) return null
+    return (
+      <ModelPriceCell
+        model={data.models[0]}
+        options={{ selectedGroup: props.selectedGroup }}
+      />
+    )
+  }
+  try {
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <ViewerPrice />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByText('0.53802')).toBeVisible()
+    expect(screen.queryByText('0.490943')).not.toBeInTheDocument()
+    rerender(
+      <QueryClientProvider client={client}>
+        <ViewerPrice selectedGroup='sd20-73折' />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByText('0.490943')).toBeVisible()
+    rerender(
+      <QueryClientProvider client={client}>
+        <ViewerPrice selectedGroup='sd73/80' />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByText('0.53802')).toBeVisible()
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
+
+it('uses effective model ratios for group detail prices while preserving the base price and a free override', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  const retail = {
+    ...unifiedVideo,
+    model_name: 'seedance-2.5',
+    enable_groups: ['sd73/80', 'free'],
+    group_ratio: { 'sd73/80': 0.8, free: 0 },
+    video_sales: {
+      resolutions: { '480p': { usd_per_second: 0.672525, seconds: [5] } },
+    },
+  }
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <ModelDetailsContent
+          model={retail}
+          groupRatio={{ 'sd73/80': 1, free: 1 }}
+          usableGroup={{
+            'sd73/80': { desc: '', ratio: 1 },
+            free: { desc: '', ratio: 1 },
+          }}
+          endpointMap={{}}
+          autoGroups={[]}
+          priceRate={1}
+          usdExchangeRate={1}
+          tokenUnit='M'
+        />
+      </QueryClientProvider>
+    )
+    const base = screen.getByRole('table', { name: 'Base Price' })
+    expect(within(base).getByText('$0.672525')).toBeVisible()
+    const groups = screen.getByRole('table', { name: 'Pricing by Group' })
+    expect(
+      within(groups).getByRole('row', {
+        name: 'sd73/80 480p $0.53802 No extra charge 5',
+      })
+    ).toBeVisible()
+    expect(
+      within(groups).getByRole('row', {
+        name: 'free 480p $0 No extra charge 5',
+      })
+    ).toBeVisible()
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
+})
 
 it('classifies unified retail models independently of legacy quota and provider prices', () => {
   expect(isTokenBasedModel(unifiedVideo)).toBe(false)
