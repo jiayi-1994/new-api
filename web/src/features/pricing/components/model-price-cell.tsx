@@ -120,17 +120,33 @@ export function ModelPriceCell(props: {
         </span>
       )
     }
+    const tokenPriced = props.model.video_sales?.pricing_unit === 'token'
     metrics = tiers.map((tier) => ({
       label: tier.resolution,
-      value: formatVideoSalesPrice(tier.usd_per_second, {
-        ...options,
-        groupRatio: getDisplayGroupRatio(props.model, options.selectedGroup),
-        showCurrencySymbol: false,
-      }),
+      value: formatVideoSalesPrice(
+        tokenPriced ? (tier.usd_per_million_tokens ?? 0) : tier.usd_per_second,
+        {
+          ...options,
+          groupRatio: getDisplayGroupRatio(props.model, options.selectedGroup),
+          showCurrencySymbol: false,
+        }
+      ),
     }))
-    caption = `${currencyLabel} / ${t('second')}`
+    caption = tokenPriced
+      ? t('{{currency}} / {{unit}} tokens', {
+          currency: currencyLabel,
+          unit: '1M',
+        })
+      : `${currencyLabel} / ${t('second')}`
     // The output price alone is not the full cost when input video is charged.
-    if (tiers.some((tier) => (tier.input_video_usd_per_second ?? 0) > 0)) {
+    if (
+      tiers.some(
+        (tier) =>
+          ((tokenPriced
+            ? tier.with_video_usd_per_million_tokens
+            : tier.input_video_usd_per_second) ?? 0) > 0
+      )
+    ) {
       const inputNote = props.model.video_sales?.official_reference_billing
         ? t('whole order repriced with reference video')
         : t('plus input video fee')

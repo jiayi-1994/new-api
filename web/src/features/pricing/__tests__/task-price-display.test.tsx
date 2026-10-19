@@ -40,7 +40,14 @@ import { getBillingModeLabelKey } from '../lib/billing-mode'
 import { getDynamicPricingSummary } from '../lib/dynamic-price'
 import { filterByQuotaType, sortModels } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
-import { videoInputSecondPrice, videoInputTokenPrice } from '../lib/price'
+import {
+  VIDEO_TOKEN_DIMENSIONS,
+  VIDEO_TOKEN_RATIOS,
+  videoSecondPrice,
+  videoTokenPrice,
+  videoTokens,
+  videoTokenSaleUSD,
+} from '../lib/price'
 import { getTaskPricingDisplayTiers } from '../lib/task-matrix-display'
 import {
   hasSimpleTaskPricing,
@@ -341,9 +348,10 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
         name: '720p $0.06 No extra charge 5, 10, 15',
       })
     ).toBeVisible()
+    // Per-second sales show the reference price per second, never tokens.
     expect(
       within(base).getByRole('row', {
-        name: '1080p $0.12 $4 / 1M tokens 48,600 tokens per second 5, 10',
+        name: '1080p $0.12 $0.1944 / second 5, 10',
       })
     ).toBeVisible()
     const groups = screen.getByRole('table', { name: 'Pricing by Group' })
@@ -354,7 +362,7 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
     ).toBeVisible()
     expect(
       within(groups).getByRole('row', {
-        name: 'premium 1080p $0.24 $8 / 1M tokens 48,600 tokens per second 5, 10',
+        name: 'premium 1080p $0.24 $0.3888 / second 5, 10',
       })
     ).toBeVisible()
     expect(
@@ -362,11 +370,7 @@ it('shows unified per-resolution sales prices in cards, lists, and group detail 
         name: 'free 720p $0 No extra charge 5, 10, 15',
       })
     ).toBeVisible()
-    expect(
-      screen.getAllByText(
-        'Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)'
-      ).length
-    ).toBeGreaterThan(0)
+    expect(screen.queryByText(/Tokens =/)).not.toBeInTheDocument()
     expect(screen.queryByText('Legacy provider')).not.toBeInTheDocument()
     expect(screen.queryByText('Raw expression')).not.toBeInTheDocument()
     expect(screen.queryByText('Token-based')).not.toBeInTheDocument()
@@ -404,10 +408,7 @@ it('prices reference video per second on tiers without an official token rate', 
     expect(
       screen.getByRole('row', { name: '540p $0.06 $0.1 / second 5' })
     ).toBeVisible()
-    expect(screen.queryByText(/tokens per second/)).not.toBeInTheDocument()
-    expect(
-      screen.queryByText(/Reference video tokens =/)
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/tokens/)).not.toBeInTheDocument()
     expect(screen.queryByText(/2\/3 of the output/)).not.toBeInTheDocument()
   } finally {
     useSystemConfigStore.getState().setConfig({ currency: previous })
@@ -452,7 +453,7 @@ it('labels the with-reference order price when the model bills the official way'
     ).not.toBeInTheDocument()
     expect(
       screen.getByRole('row', {
-        name: '720p $1 $28 / 1M tokens 21,600 tokens per second 5, 10, 15',
+        name: '720p $1 $0.6048 / second 5, 10, 15',
       })
     ).toBeVisible()
     expect(
@@ -465,11 +466,161 @@ it('labels the with-reference order price when the model bills the official way'
   }
 })
 
-it('converts a reference video token price to its per-second price and back', () => {
-  expect(videoInputSecondPrice(3, 10_044)).toBe(0.030132)
-  expect(videoInputTokenPrice(0.030132, 10_044)).toBe(3)
-  expect(videoInputSecondPrice(4, 21_600)).toBe(0.0864)
-  expect(videoInputTokenPrice(0.0864, 21_600)).toBe(4)
+it('converts a token price to its 16:9 per-second price and back', () => {
+  expect(videoSecondPrice(3, 10_044)).toBe(0.030132)
+  expect(videoTokenPrice(0.030132, 10_044)).toBe(3)
+  expect(videoSecondPrice(46, 21_600)).toBe(0.9936)
+  expect(videoTokenPrice(0.9936, 21_600)).toBe(46)
+})
+
+it('keeps the official size tables identical to the server and prices the Ark calculator cases', () => {
+  // Same cells as setting/billing_setting/tiered_billing_test.go.
+  const shared = {
+    '720p': '1280x720 1112x834 960x960 834x1112 720x1280 1470x630',
+    '1080p': '1920x1080 1664x1248 1440x1440 1248x1664 1080x1920 2206x946',
+  }
+  const expected: Record<string, Record<string, string>> = {
+    'seedance-2.0': {
+      '480p': '864x496 752x560 640x640 560x752 496x864 992x432',
+      ...shared,
+      '4k': '3840x2160 3326x2494 2880x2880 2494x3326 2160x3840 4398x1886',
+    },
+    'seedance-2.5': {
+      '480p': '854x480 752x560 640x640 560x752 480x854 992x432',
+      ...shared,
+    },
+  }
+  const actual = Object.fromEntries(
+    Object.entries(VIDEO_TOKEN_DIMENSIONS).map(([profile, tiers]) => [
+      profile,
+      Object.fromEntries(
+        Object.entries(tiers).map(([tier, sizes]) => [
+          tier,
+          sizes.map(([width, height]) => `${width}x${height}`).join(' '),
+        ])
+      ),
+    ])
+  )
+  expect(actual).toEqual(expected)
+  expect(VIDEO_TOKEN_RATIOS).toEqual([
+    '16:9',
+    '4:3',
+    '1:1',
+    '3:4',
+    '9:16',
+    '21:9',
+  ])
+
+  // PLAN §1, measured in the Ark console calculator; tokens are never rounded.
+  expect(videoTokens(854, 480, 5)).toBe(48_037.5)
+  expect(videoTokens(1112, 834, 5)).toBe(108_680.625)
+  expect(videoTokens(1112, 834, 9)).toBe(195_625.125)
+  expect(videoTokens(864, 496, 5)).toBe(50_220)
+  expect(videoTokens(3840, 2160, 5)).toBe(972_000)
+  // 15 s output + max(5, 10) s reference = 25 s = 540,000 tokens × 42 / 1M.
+  expect(
+    videoTokenSaleUSD({
+      outputTokens: videoTokens(1280, 720, 15),
+      inputTokens: videoTokens(1280, 720, 10),
+      usdPerMillionTokens: 46,
+      withVideoUSDPerMillionTokens: 42,
+      official: true,
+    })
+  ).toBeCloseTo(22.68, 10)
+  // Added fee: output at the no-reference price plus reference tokens.
+  expect(
+    videoTokenSaleUSD({
+      outputTokens: videoTokens(1280, 720, 5),
+      inputTokens: videoTokens(1280, 720, 4),
+      usdPerMillionTokens: 46,
+      withVideoUSDPerMillionTokens: 28,
+      official: false,
+    })
+  ).toBeCloseTo(4.968 + 2.4192, 10)
+})
+
+it('shows token-priced sales per 1M tokens with an output example that applies the group ratio', () => {
+  const previous = useSystemConfigStore.getState().config.currency
+  useSystemConfigStore.getState().setConfig({
+    currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
+  })
+  try {
+    const tokenVideo: PricingModel = {
+      ...unifiedVideo,
+      video_sales: {
+        official_reference_billing: true,
+        pricing_unit: 'token',
+        resolutions: {
+          '720p': {
+            usd_per_second: 0,
+            usd_per_million_tokens: 46.3,
+            with_video_usd_per_million_tokens: 42,
+            seconds: [5, 15],
+          },
+        },
+      },
+    }
+    render(
+      <>
+        <VideoSalesPriceTable
+          model={tokenVideo}
+          options={{}}
+          groups={['premium']}
+          groupRatio={{ premium: 2 }}
+        />
+        <ModelPriceCell
+          model={tokenVideo}
+          options={{ selectedGroup: 'default' }}
+        />
+      </>
+    )
+    expect(
+      screen.getByRole('columnheader', { name: 'No-reference price' })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('row', {
+        name: 'premium 720p $92.6 / 1M tokens $84 / 1M tokens 5, 15',
+      })
+    ).toBeVisible()
+    // 108,000 tokens × 46.3 / 1M × 2.
+    expect(
+      screen.getByText(/720p 16:9 × 5 s ≈ 108,000 tokens ≈ \$10\.0008/)
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'USD / 1M tokens · whole order repriced with reference video'
+      )
+    ).toBeVisible()
+    expect(screen.getByText('46.3')).toBeVisible()
+
+    // Sorting compares the 16:9 per-second equivalent: $1 / 1M at 720p is $0.0216 / s.
+    const cheapTokens: PricingModel = {
+      ...tokenVideo,
+      model_name: 'cheap-tokens',
+      video_sales: {
+        pricing_unit: 'token',
+        resolutions: {
+          '720p': {
+            usd_per_second: 0,
+            usd_per_million_tokens: 1,
+            seconds: [5],
+          },
+        },
+      },
+    }
+    const perSecond: PricingModel = {
+      ...unifiedVideo,
+      model_name: 'per-second',
+      video_sales: {
+        resolutions: { '720p': { usd_per_second: 0.03, seconds: [5] } },
+      },
+    }
+    expect(
+      sortModels([perSecond, cheapTokens], SORT_OPTIONS.PRICE_LOW)
+    ).toEqual([cheapTokens, perSecond])
+  } finally {
+    useSystemConfigStore.getState().setConfig({ currency: previous })
+  }
 })
 
 it('omits the input video hint when no tier charges input video', () => {

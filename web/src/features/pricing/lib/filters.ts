@@ -26,6 +26,7 @@ import {
 import type { PricingModel } from '../types'
 import { hasTaskUsageSchema } from './dynamic-price'
 import { isVideoSalesModel } from './model-helpers'
+import { videoSecondPrice, videoTokensPerSecond } from './price'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -115,8 +116,19 @@ export function filterByEndpointType(
  */
 function getModelPrice(model: PricingModel): number {
   if (isVideoSalesModel(model)) {
-    const prices = Object.values(model.video_sales?.resolutions ?? {}).map(
-      (tier) => tier.usd_per_second
+    const sales = model.video_sales
+    // Token prices sort by their 16:9 per-second equivalent, comparable across units.
+    const prices = Object.entries(sales?.resolutions ?? {}).map(
+      ([resolution, tier]) => {
+        if (sales?.pricing_unit !== 'token') return tier.usd_per_second
+        const rate = videoTokensPerSecond(
+          resolution,
+          sales.dimension_profile ?? 'seedance-2.0'
+        )
+        return rate === null
+          ? Number.POSITIVE_INFINITY
+          : videoSecondPrice(tier.usd_per_million_tokens ?? 0, rate)
+      }
     )
     return prices.length > 0 ? Math.min(...prices) : Number.POSITIVE_INFINITY
   }

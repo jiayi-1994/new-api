@@ -190,12 +190,15 @@ function VideoSalesSettingsForm(props: {
                 name: '',
                 disabled: true,
                 officialReferenceBilling: false,
+                pricingUnit: 'second',
+                dimensionProfile: 'seedance-2.0',
                 tiers: [
                   {
                     resolution: '720p',
                     price: '',
                     inputPrice: '0',
-                    inputTokenPrice: '0',
+                    tokenPrice: '',
+                    withVideoTokenPrice: '0',
                     seconds: '5, 10, 15',
                   },
                 ],

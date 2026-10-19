@@ -194,6 +194,9 @@ type TaskSchedulingSummary struct {
 	AttemptSeq    int            `json:"attempt_seq,omitempty"`
 	Probe         bool           `json:"probe,omitempty"`
 	Spec          *VideoSpecView `json:"spec,omitempty"`
+	// CostUSD is the selected channel's purchase cost quoted at submission;
+	// nil when the channel has no price for the request.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // VideoSpecView summarizes the spec a candidate's plugin described: output

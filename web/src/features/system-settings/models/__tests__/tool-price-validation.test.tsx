@@ -237,17 +237,15 @@ describe('unified video sales validation and persistence', () => {
         name: 'Bill orders with reference video the official way',
       })
     ).toBeChecked()
+    // Per-second pricing shows the with-reference price per second, never tokens.
     expect(
       screen.getByRole('textbox', {
-        name: 'With-reference order price per 1M tokens (USD)',
+        name: 'With-reference order price per second (USD)',
       })
-    ).toHaveValue('28')
+    ).toHaveValue('0.6048')
     expect(
       screen.getByText(
-        (_, element) =>
-          element?.tagName === 'DIV' &&
-          element.textContent ===
-            'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × $28 / 1M tokens (21,600 tokens per second)'
+        'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × $0.6048 per second'
       )
     ).toBeVisible()
     // Official mode never offers a free with-reference price.
@@ -292,18 +290,18 @@ describe('unified video sales validation and persistence', () => {
     expect(toggle).not.toBeChecked()
     await user.click(toggle)
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
-    const tokenPrice = screen.getByRole('textbox', {
-      name: 'With-reference order price per 1M tokens (USD)',
+    const withReferencePrice = screen.getByRole('textbox', {
+      name: 'With-reference order price per second (USD)',
     })
     expect(
       await screen.findByText(
         'Official reference billing needs a positive with-reference price'
       )
     ).toBeVisible()
-    expect(tokenPrice).toHaveAttribute('aria-invalid', 'true')
+    expect(withReferencePrice).toHaveAttribute('aria-invalid', 'true')
     expect(put).not.toHaveBeenCalled()
 
-    fireEvent.change(tokenPrice, { target: { value: '28' } })
+    fireEvent.change(withReferencePrice, { target: { value: '0.6048' } })
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
@@ -823,7 +821,7 @@ describe('unified video sales validation and persistence', () => {
     ).toHaveValue('0.06')
   })
 
-  test('loads a legacy tier as a free token price, blocks a cleared token price and saves its per-second equivalent', async () => {
+  test('loads a legacy tier with free input video, blocks a cleared input price and saves it per second', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
       data: { success: true, data: { items: [], total: 0 } },
     })
@@ -840,28 +838,28 @@ describe('unified video sales validation and persistence', () => {
       />
     )
     const user = userEvent.setup()
-    const tokenPrice = screen.getByRole('textbox', {
-      name: 'Reference video price per 1M tokens (USD)',
+    const inputPrice = screen.getByRole('textbox', {
+      name: 'Input video price per second (USD)',
     })
-    expect(tokenPrice).toHaveValue('0')
+    expect(inputPrice).toHaveValue('0')
     expect(screen.getByText('Input video: no extra charge')).toBeVisible()
 
-    fireEvent.change(tokenPrice, { target: { value: '' } })
+    fireEvent.change(inputPrice, { target: { value: '' } })
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     expect(
       await screen.findByText(
         'Input video price must be 0 or more; 0 means no extra charge'
       )
     ).toBeVisible()
-    expect(tokenPrice).toHaveAttribute('aria-invalid', 'true')
+    expect(inputPrice).toHaveAttribute('aria-invalid', 'true')
     expect(put).not.toHaveBeenCalled()
 
-    fireEvent.change(tokenPrice, { target: { value: '4' } })
+    fireEvent.change(inputPrice, { target: { value: '0.0864' } })
     expect(screen.getByText('720p × 10 seconds = $5.6')).toBeVisible()
     expect(
-      screen.getByText('Plus reference video: $4 / 1M tokens')
+      screen.getByText('Plus input video: $0.0864 per second')
     ).toBeVisible()
-    expect(screen.getByText('(21,600 tokens per second)')).toBeVisible()
+    expect(screen.queryByText(/tokens/)).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
@@ -874,7 +872,7 @@ describe('unified video sales validation and persistence', () => {
     )
   })
 
-  test('keeps the token price across token tiers and the per-second price across other tiers', async () => {
+  test('switching to token pricing prefills 16:9 token prices, refuses tiers without an official size and saves the token sale', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
       data: { success: true, data: { items: [], total: 0 } },
     })
@@ -885,11 +883,12 @@ describe('unified video sales validation and persistence', () => {
       <VideoSalesFixture
         value={JSON.stringify({
           'video-main': {
+            official_reference_billing: true,
             resolutions: {
               '720p': {
-                usd_per_second: 0.56,
-                input_video_usd_per_second: 0.0864,
-                seconds: [10],
+                usd_per_second: 0.9936,
+                input_video_usd_per_second: 0.6048,
+                seconds: [5, 15],
               },
               '540p': {
                 usd_per_second: 0.3,
@@ -902,46 +901,108 @@ describe('unified video sales validation and persistence', () => {
       />
     )
     const user = userEvent.setup()
-    const resolutions = screen.getAllByRole('textbox', { name: 'Resolution' })
-    expect(
-      screen.getByRole('textbox', {
-        name: 'Reference video price per 1M tokens (USD)',
-      })
-    ).toHaveValue('4')
-    expect(
-      screen.getByRole('textbox', {
-        name: 'Input video price per second (USD)',
-      })
-    ).toHaveValue('0.1')
+    await user.click(screen.getByRole('combobox', { name: 'Pricing unit' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Per 1M tokens' })
+    )
 
-    // Typing passes through "1080", which has no token rate.
-    fireEvent.change(resolutions[0], { target: { value: '1080' } })
-    fireEvent.change(resolutions[0], { target: { value: '1080p' } })
-    // 540p → 720p converts the per-second price instead of dropping it.
-    fireEvent.change(resolutions[1], { target: { value: '720p' } })
-    const tokenPrices = screen.getAllByRole('textbox', {
-      name: 'Reference video price per 1M tokens (USD)',
+    // 0.9936 / 21,600 tokens per second = $46 / 1M; 0.6048 → $28 / 1M.
+    const table = screen.getByRole('table', {
+      name: 'Sale tiers for video-main',
     })
-    expect(tokenPrices[0]).toHaveValue('4')
-    expect(tokenPrices[1]).toHaveValue('4.62962962963')
+    const [row720, row540] = within(table).getAllByRole('row').slice(1)
+    expect(
+      within(row720).getByRole('textbox', {
+        name: 'No-reference price per 1M tokens (USD)',
+      })
+    ).toHaveValue('46')
+    expect(
+      within(row720).getByRole('textbox', {
+        name: 'With-reference order price per 1M tokens (USD)',
+      })
+    ).toHaveValue('28')
+    expect(
+      within(row720).getByText('720p 16:9 × 5 s = 108,000 tokens = $4.968')
+    ).toBeVisible()
+    // 15 s output + 5 s reference bills 25 s = 540,000 tokens; the editor's
+    // equal-length example bills 5 + 5 s = 216,000 tokens × $28 / 1M.
+    expect(
+      within(row720).getByText('With a 5 s reference: 216,000 tokens = $6.048')
+    ).toBeVisible()
+    // 540p has no official size, so it stays empty and cannot be saved.
+    expect(
+      within(row540).getByRole('textbox', {
+        name: 'No-reference price per 1M tokens (USD)',
+      })
+    ).toHaveValue('')
+    await user.click(screen.getByRole('button', { name: 'Save video sales' }))
+    expect(
+      await within(row540).findByText(
+        'Token pricing supports only 480p, 720p, 1080p and 4k'
+      )
+    ).toBeVisible()
+    expect(put).not.toHaveBeenCalled()
 
+    await user.click(
+      screen.getByRole('button', { name: 'Remove resolution 540p' })
+    )
     await user.click(screen.getByRole('button', { name: 'Save video sales' }))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     const request = put.mock.calls[0][1] as { value: string }
-    const saved = JSON.parse(request.value)['video-main'].resolutions
-    expect(saved['1080p'].input_video_usd_per_second).toBe(0.1944)
-    expect(saved['720p'].input_video_usd_per_second).toBe(0.1)
-    expect(saved['720p']).not.toHaveProperty('inputTokenPrice')
+    expect(JSON.parse(request.value)['video-main']).toEqual({
+      disabled: false,
+      official_reference_billing: true,
+      pricing_unit: 'token',
+      resolutions: {
+        '720p': {
+          usd_per_second: 0,
+          usd_per_million_tokens: 46,
+          with_video_usd_per_million_tokens: 28,
+          seconds: [5, 15],
+        },
+      },
+    })
 
-    fireEvent.change(
-      screen.getAllByRole('textbox', { name: 'Resolution' })[0],
-      { target: { value: '540p' } }
-    )
+    // Switching back prefills the per-second prices from the token prices.
+    await user.click(screen.getByRole('combobox', { name: 'Pricing unit' }))
+    await user.click(await screen.findByRole('option', { name: 'Per second' }))
+    expect(
+      screen.getByRole('textbox', { name: 'Price per second (USD)' })
+    ).toHaveValue('0.9936')
     expect(
       screen.getByRole('textbox', {
-        name: 'Input video price per second (USD)',
+        name: 'With-reference order price per second (USD)',
       })
-    ).toHaveValue('0.1944')
+    ).toHaveValue('0.6048')
+  })
+
+  test('loads a seedance-2.5 token model and refuses 4k', () => {
+    const schema = createVideoSalesFormSchema((key) => key)
+    const values = videoSalesFormValues({
+      'video-25': {
+        pricing_unit: 'token',
+        dimension_profile: 'seedance-2.5',
+        resolutions: {
+          '480p': {
+            usd_per_second: 0,
+            usd_per_million_tokens: 70,
+            with_video_usd_per_million_tokens: 0,
+            seconds: [5],
+          },
+        },
+      },
+    })
+    expect(values.models[0]).toMatchObject({
+      pricingUnit: 'token',
+      dimensionProfile: 'seedance-2.5',
+    })
+    expect(schema.safeParse(values).success).toBe(true)
+    values.models[0].tiers[0].resolution = '4k'
+    const result = schema.safeParse(values)
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.message)).toContain(
+      'Seedance 2.5 has no 4k output'
+    )
   })
 
   test('rejects case-folded names, duplicate 4k aliases, unsupported tiers, and duration bounds', () => {
@@ -955,14 +1016,16 @@ describe('unified video sales validation and persistence', () => {
         resolution: '2160p',
         price: '0.1',
         inputPrice: '0',
-        inputTokenPrice: '0',
+        tokenPrice: '',
+        withVideoTokenPrice: '0',
         seconds: '5',
       },
       {
         resolution: '4k',
         price: '0.2',
         inputPrice: '0',
-        inputTokenPrice: '0',
+        tokenPrice: '',
+        withVideoTokenPrice: '0',
         seconds: '5',
       },
     ]
@@ -972,7 +1035,8 @@ describe('unified video sales validation and persistence', () => {
         resolution: '720p',
         price: '0.1',
         inputPrice: '0',
-        inputTokenPrice: '0',
+        tokenPrice: '',
+        withVideoTokenPrice: '0',
         seconds: '5',
       },
     ]

@@ -24,7 +24,9 @@ import {
   splitBillingExprAndRequestRules,
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
+import { getCurrencyDisplay } from '@/lib/currency'
 
+import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
 import { buildQuotaAuditOperation } from './quota-audit-operation'
@@ -167,6 +169,23 @@ export function parseLogOther(other: string): LogOtherData | null {
     console.error('Failed to parse log other field:', error)
     return null
   }
+}
+
+/**
+ * Profit of one log row in USD: sale revenue minus the purchase cost booked
+ * under admin_info.cost_usd. A refund row carries negative revenue and reverses
+ * the cost, so the rows of one task sum to its profit. Null when the row has
+ * no recorded cost (unpriced channel or a request outside video scheduling).
+ */
+export function getLogProfitUSD(
+  log: Pick<UsageLog, 'type' | 'quota'>,
+  other: LogOtherData | null
+): number | null {
+  const cost = other?.admin_info?.cost_usd
+  const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
+  if (typeof cost !== 'number' || !(quotaPerUnit > 0)) return null
+  const revenue = log.quota / quotaPerUnit
+  return (log.type === LOG_TYPE_ENUM.REFUND ? -revenue : revenue) - cost
 }
 
 export function getReasoningEffortVariant(

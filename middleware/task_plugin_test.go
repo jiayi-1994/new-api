@@ -936,13 +936,37 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 	multipartRequest.Header.Set("Content-Type", writer.FormDataContentType())
 
 	const sales = `{"video-sales-model":{"resolutions":{"720p":{"usd_per_second":0.02,"seconds":[15]},"1080p":{"usd_per_second":0.04,"seconds":[5]}}}}`
+	const tokenSales = `{"video-sales-model":{"pricing_unit":"token","resolutions":{"720p":{"usd_per_million_tokens":46.3,"with_video_usd_per_million_tokens":42,"seconds":[5]}}}}`
+	const tokenSales25 = `{"video-sales-model":{"pricing_unit":"token","dimension_profile":"seedance-2.5","resolutions":{"480p":{"usd_per_million_tokens":46.3,"seconds":[5]}}}}`
+	tokenFacts := func(width, height int) *service.VideoSalesFacts {
+		return &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 5, Resolution: "720p", PricingUnit: "token", Width: width, Height: height, FPS: 24, USDPerMillionTokens: 46.3, WithVideoUSDPerMillionTokens: 42}
+	}
 	for _, tc := range []struct {
 		name, sales string
 		corrupt     bool
 		request     *http.Request
 		wantStatus  int
 		want        *service.VideoSalesFacts
+		wantTokens  float64
 	}{
+		// Sizes are tiered by short edge like the executing plugins: 960x960 is
+		// "960p", so a 1:1 720p order is requested with resolution + ratio.
+		{name: "token: a non-16:9 size is tiered by its short edge", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"size":"960x960"}`), wantStatus: http.StatusBadRequest},
+		{name: "token: missing ratio takes 16:9", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"720p"}`),
+			wantStatus: http.StatusNoContent, want: tokenFacts(1280, 720), wantTokens: 108000},
+		{name: "token: ratio looks up the official size", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"720p","aspect_ratio":"9:16"}`),
+			wantStatus: http.StatusNoContent, want: tokenFacts(720, 1280), wantTokens: 108000},
+		{name: "token: 4:3 tokens stay fractional", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"720p","ratio":"4:3"}`),
+			wantStatus: http.StatusNoContent, want: tokenFacts(1112, 834), wantTokens: 108680.625},
+		{name: "token: adaptive takes 16:9", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"720p","ratio":"adaptive"}`),
+			wantStatus: http.StatusNoContent, want: tokenFacts(1280, 720)},
+		{name: "token: size is billed as given and wins over ratio", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"size":"720x1280","ratio":"16:9"}`),
+			wantStatus: http.StatusNoContent, want: tokenFacts(720, 1280), wantTokens: 108000},
+		{name: "token: seedance-2.5 480p", sales: tokenSales25, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"480p","ratio":"16:9"}`),
+			wantStatus: http.StatusNoContent, wantTokens: 48037.5,
+			want: &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 5, Resolution: "480p", PricingUnit: "token", Width: 854, Height: 480, FPS: 24, USDPerMillionTokens: 46.3}},
+		{name: "token: unsupported ratio", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"resolution":"720p","ratio":"2:1"}`), wantStatus: http.StatusBadRequest},
+		{name: "token: size above the tier's largest frame", sales: tokenSales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":5,"size":"100000x720"}`), wantStatus: http.StatusBadRequest},
 		{name: "json", sales: sales, request: jsonRequest(`{"model":"video-sales-model","prompt":"cat","seconds":15,"size":"1280x720"}`),
 			wantStatus: http.StatusNoContent, want: &service.VideoSalesFacts{Model: "video-sales-model", Seconds: 15, Resolution: "720p", USDPerSecond: 0.02}},
 		{name: "multipart", sales: sales, request: multipartRequest,
@@ -982,6 +1006,10 @@ func TestPrepareTaskPluginEndpointFreezesVideoSalesFacts(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
 			assert.Equal(t, tc.want, frozen)
+			if tc.wantTokens > 0 {
+				require.NotNil(t, frozen)
+				assert.Equal(t, tc.wantTokens, frozen.OutputTokens())
+			}
 			if tc.corrupt {
 				assert.NotContains(t, recorder.Body.String(), "misconfigured")
 			}

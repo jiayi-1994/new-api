@@ -359,7 +359,7 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 	// The selection that fed the submitting attempt, so terminal logs can be
 	// matched to the consumption log's attempts by task ID.
 	if record, row, ok := videoScheduleSelection(c, channel.Id); ok {
-		summary.Selected, summary.SelectionSeq, summary.AttemptSeq, summary.Probe, summary.Spec = channel.Id, record.SelectionSeq, record.AttemptSeq, record.Probe, row.Spec
+		summary.Selected, summary.SelectionSeq, summary.AttemptSeq, summary.Probe, summary.Spec, summary.CostUSD = channel.Id, record.SelectionSeq, record.AttemptSeq, record.Probe, row.Spec, row.CostUSD
 	}
 	return summary
 }

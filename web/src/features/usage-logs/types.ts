@@ -147,6 +147,9 @@ export interface LogOtherData {
     // Reject / intercept reason (admin only)
     reject_reason?: string
     task_plugin?: TaskPluginInfo
+    // Upstream purchase cost in USD booked on this row: the quoted cost on a
+    // task's consume log, its negation on the refund, 0 on settlement deltas.
+    cost_usd?: number
   }
   root_info?: {
     task_plugin?: TaskPluginRuntimeInfo
@@ -219,6 +222,16 @@ export interface LogOtherData {
   matched_tier?: string
   request_rules?: RequestRuleTrace[]
   usage_facts?: Record<string, string | number>
+  /** Token-priced unified video: the public unit prices and frozen output size. */
+  video_sales?: {
+    unit: 'token'
+    usd_per_million_tokens: number
+    with_video_usd_per_million_tokens: number
+    width: number
+    height: number
+    fps: number
+    official_reference_billing?: boolean
+  }
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number

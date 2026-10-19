@@ -25,18 +25,23 @@ import { Button } from '@/components/ui/button'
 import { FieldGroup, FieldLegend, FieldSet } from '@/components/ui/field'
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { PricingAmountInput } from '@/features/model-pricing/pricing-amount-input'
 import {
-  VIDEO_INPUT_TOKENS_PER_SECOND,
-  videoInputSecondPrice,
-  videoInputTokenPrice,
-} from '@/features/pricing/lib/price'
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { PricingAmountInput } from '@/features/model-pricing/pricing-amount-input'
+import { videoTokens, videoTokenSaleUSD } from '@/features/pricing/lib/price'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
@@ -46,12 +51,21 @@ import { SettingsSwitchField } from '../components/settings-form-layout'
 import {
   createVideoSalesFormSchema,
   isInputVideoPrice,
+  isPositivePrice,
   parseVideoSalesSeconds,
   videoSalesFromForm,
-  videoSalesInputTokensPerSecond,
+  videoSalesTiersForUnit,
+  videoSalesTokenSizes,
+  type VideoPricingUnit,
   type VideoSalesFormValues,
 } from './video-sales-form'
 import { VideoSalesRoutingPanel } from './video-sales-routing-panel'
+
+type TierPriceField =
+  | 'price'
+  | 'inputPrice'
+  | 'tokenPrice'
+  | 'withVideoTokenPrice'
 
 export function VideoSalesModelEditor(props: {
   form: UseFormReturn<VideoSalesFormValues>
@@ -71,11 +85,62 @@ export function VideoSalesModelEditor(props: {
   // Field-array edits update form values before the watch subscription catches up.
   const model = props.form.getValues(path)
   const modelLabel = model.name || t('New video model')
+  const tokenPriced = model.pricingUnit === 'token'
   const validated = createVideoSalesFormSchema(t).safeParse({ models: [model] })
   const sales = validated.success
     ? videoSalesFromForm(validated.data)[model.name]
     : null
   const tierError = props.form.formState.errors.models?.[props.index]?.tiers
+  const currency = {
+    locale,
+    digitsLarge: 4,
+    digitsSmall: 6,
+    abbreviate: false,
+  }
+
+  const priceColumn = (field: TierPriceField, header: string) => ({
+    id: field,
+    header,
+    className: 'min-w-44',
+    cell: (row: { index: number }) => (
+      <FormField
+        control={props.form.control}
+        name={`${path}.tiers.${row.index}.${field}`}
+        render={({ field: input, fieldState }) => (
+          <FormItem>
+            <FormLabel className='sr-only'>{header}</FormLabel>
+            <FormControl>
+              <PricingAmountInput
+                {...input}
+                disabled={props.pending}
+                aria-invalid={fieldState.invalid}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    ),
+  })
+  const priceColumns = tokenPriced
+    ? [
+        priceColumn('tokenPrice', t('No-reference price per 1M tokens (USD)')),
+        priceColumn(
+          'withVideoTokenPrice',
+          model.officialReferenceBilling
+            ? t('With-reference order price per 1M tokens (USD)')
+            : t('Reference video price per 1M tokens (USD)')
+        ),
+      ]
+    : [
+        priceColumn('price', t('Price per second (USD)')),
+        priceColumn(
+          'inputPrice',
+          model.officialReferenceBilling
+            ? t('With-reference order price per second (USD)')
+            : t('Input video price per second (USD)')
+        ),
+      ]
 
   return (
     <FieldSet
@@ -142,6 +207,94 @@ export function VideoSalesModelEditor(props: {
             />
           )}
         />
+        <div className='flex flex-wrap items-start gap-3'>
+          <FormField
+            control={props.form.control}
+            name={`${path}.pricingUnit`}
+            render={({ field }) => (
+              <FormItem className='min-w-56'>
+                <FormLabel>{t('Pricing unit')}</FormLabel>
+                <FormControl>
+                  <Select
+                    items={[
+                      { value: 'second', label: t('Per second') },
+                      { value: 'token', label: t('Per 1M tokens') },
+                    ]}
+                    value={field.value}
+                    onValueChange={(value) => {
+                      const unit = value as VideoPricingUnit
+                      if (unit === field.value) return
+                      // Prefill the other unit's prices for the administrator to confirm.
+                      tiers.replace(videoSalesTiersForUnit(model, unit))
+                      field.onChange(unit)
+                    }}
+                    disabled={props.pending}
+                  >
+                    <SelectTrigger aria-label={t('Pricing unit')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='second'>
+                          {t('Per second')}
+                        </SelectItem>
+                        <SelectItem value='token'>
+                          {t('Per 1M tokens')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Switching prefills the other unit at the 16:9 token rate; check the prices before saving.'
+                  )}
+                </FormDescription>
+              </FormItem>
+            )}
+          />
+          {tokenPriced && (
+            <FormField
+              control={props.form.control}
+              name={`${path}.dimensionProfile`}
+              render={({ field }) => (
+                <FormItem className='min-w-56'>
+                  <FormLabel>{t('Size table')}</FormLabel>
+                  <FormControl>
+                    <Select
+                      items={[
+                        { value: 'seedance-2.0', label: 'Seedance 2.0' },
+                        { value: 'seedance-2.5', label: 'Seedance 2.5' },
+                      ]}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      disabled={props.pending}
+                    >
+                      <SelectTrigger aria-label={t('Size table')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='seedance-2.0'>
+                            Seedance 2.0
+                          </SelectItem>
+                          <SelectItem value='seedance-2.5'>
+                            Seedance 2.5
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Sets the output width and height used to count tokens, matching the official calculator.'
+                    )}
+                  </FormDescription>
+                </FormItem>
+              )}
+            />
+          )}
+        </div>
         <StaticDataTable
           data={tiers.fields.map((tier, index) => ({ ...tier, index }))}
           getRowKey={(row) => row.id}
@@ -168,64 +321,6 @@ export function VideoSalesModelEditor(props: {
                           {...field}
                           disabled={props.pending}
                           placeholder='720p'
-                          onChange={(event) => {
-                            const tierPath =
-                              `${path}.tiers.${row.index}` as const
-                            const tier = props.form.getValues(tierPath)
-                            const before = videoSalesInputTokensPerSecond(
-                              tier.resolution
-                            )
-                            const after = videoSalesInputTokensPerSecond(
-                              event.target.value
-                            )
-                            field.onChange(event)
-                            // Token-priced tiers keep the token price, so the
-                            // stored per-second price follows the new tier.
-                            if (before !== null && after === null) {
-                              props.form.setValue(
-                                `${tierPath}.inputPrice`,
-                                isInputVideoPrice(tier.inputTokenPrice)
-                                  ? String(
-                                      videoInputSecondPrice(
-                                        Number(tier.inputTokenPrice),
-                                        before
-                                      )
-                                    )
-                                  : tier.inputTokenPrice
-                              )
-                            }
-                            // Typing passes through untiered values such as
-                            // "720"; keep the token price unless the
-                            // per-second price was edited meanwhile.
-                            if (before === null && after !== null) {
-                              const mirrored =
-                                isInputVideoPrice(tier.inputTokenPrice) &&
-                                [
-                                  ...VIDEO_INPUT_TOKENS_PER_SECOND.values(),
-                                ].some(
-                                  (rate) =>
-                                    String(
-                                      videoInputSecondPrice(
-                                        Number(tier.inputTokenPrice),
-                                        rate
-                                      )
-                                    ) === tier.inputPrice
-                                )
-                              if (!mirrored) {
-                                props.form.setValue(
-                                  `${tierPath}.inputTokenPrice`,
-                                  isInputVideoPrice(tier.inputPrice)
-                                    ? String(
-                                        videoInputTokenPrice(
-                                          Number(tier.inputPrice),
-                                          after
-                                        )
-                                      )
-                                    : tier.inputPrice
-                                )
-                              }
-                            }
-                          }}
                         />
                       </FormControl>
                       <FormMessage />
@@ -234,77 +329,7 @@ export function VideoSalesModelEditor(props: {
                 />
               ),
             },
-            {
-              id: 'price',
-              header: t('Price per second (USD)'),
-              className: 'min-w-40',
-              cell: (row) => (
-                <FormField
-                  control={props.form.control}
-                  name={`${path}.tiers.${row.index}.price`}
-                  render={({ field, fieldState }) => (
-                    <FormItem>
-                      <FormLabel className='sr-only'>
-                        {t('Price per second (USD)')}
-                      </FormLabel>
-                      <FormControl>
-                        <PricingAmountInput
-                          {...field}
-                          disabled={props.pending}
-                          aria-invalid={fieldState.invalid}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              ),
-            },
-            {
-              id: 'input-price',
-              header: model.officialReferenceBilling
-                ? t('With-reference order price (USD)')
-                : t('Reference video price (USD)'),
-              className: 'min-w-44',
-              cell: (row) => {
-                const tokenPriced =
-                  videoSalesInputTokensPerSecond(
-                    model.tiers[row.index].resolution
-                  ) !== null
-                let label = tokenPriced
-                  ? t('Reference video price per 1M tokens (USD)')
-                  : t('Input video price per second (USD)')
-                if (model.officialReferenceBilling) {
-                  label = tokenPriced
-                    ? t('With-reference order price per 1M tokens (USD)')
-                    : t('With-reference order price per second (USD)')
-                }
-                return (
-                  <FormField
-                    // Remount so the input binds to the field this tier prices by.
-                    key={tokenPriced ? 'tokens' : 'seconds'}
-                    control={props.form.control}
-                    name={`${path}.tiers.${row.index}.${tokenPriced ? 'inputTokenPrice' : 'inputPrice'}`}
-                    render={({ field, fieldState }) => (
-                      <FormItem>
-                        <FormLabel className='sr-only'>{label}</FormLabel>
-                        <FormControl>
-                          <PricingAmountInput
-                            {...field}
-                            disabled={props.pending}
-                            aria-invalid={fieldState.invalid}
-                          />
-                        </FormControl>
-                        <p className='text-muted-foreground text-xs'>
-                          {tokenPriced ? t('per 1M tokens') : t('per second')}
-                        </p>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                )
-              },
-            },
+            ...priceColumns,
             {
               id: 'seconds',
               header: t('Allowed durations (seconds)'),
@@ -338,54 +363,98 @@ export function VideoSalesModelEditor(props: {
               cell: (row) => {
                 const tier = model.tiers[row.index]
                 const seconds = parseVideoSalesSeconds(tier.seconds)
+                if (!seconds) return '—'
+                if (tokenPriced) {
+                  const size = videoSalesTokenSizes(
+                    tier.resolution,
+                    model.dimensionProfile
+                  )?.[0]
+                  if (
+                    !size ||
+                    !isPositivePrice(tier.tokenPrice) ||
+                    !isInputVideoPrice(tier.withVideoTokenPrice)
+                  ) {
+                    return '—'
+                  }
+                  const sale = {
+                    usdPerMillionTokens: Number(tier.tokenPrice),
+                    withVideoUSDPerMillionTokens: Number(
+                      tier.withVideoTokenPrice
+                    ),
+                    official: model.officialReferenceBilling,
+                  }
+                  // A reference as long as the output, the official example.
+                  const example = seconds[0]
+                  const exampleTokens = videoTokens(size[0], size[1], example)
+                  return (
+                    <div className='space-y-1 font-mono text-xs tabular-nums'>
+                      {seconds.map((duration) => {
+                        const tokens = videoTokens(size[0], size[1], duration)
+                        return (
+                          <div key={duration}>
+                            {t(
+                              '{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}',
+                              {
+                                resolution: tier.resolution,
+                                seconds: formatNumber(duration, locale),
+                                tokens: formatNumber(tokens, locale),
+                                price: formatBillingCurrencyFromUSD(
+                                  videoTokenSaleUSD({
+                                    ...sale,
+                                    outputTokens: tokens,
+                                    inputTokens: 0,
+                                  }),
+                                  currency
+                                ),
+                              }
+                            )}
+                          </div>
+                        )
+                      })}
+                      <div className='text-muted-foreground font-sans'>
+                        {sale.withVideoUSDPerMillionTokens > 0
+                          ? t(
+                              'With a {{seconds}} s reference: {{tokens}} tokens = {{price}}',
+                              {
+                                seconds: formatNumber(example, locale),
+                                tokens: formatNumber(exampleTokens * 2, locale),
+                                price: formatBillingCurrencyFromUSD(
+                                  videoTokenSaleUSD({
+                                    ...sale,
+                                    outputTokens: exampleTokens,
+                                    inputTokens: exampleTokens,
+                                  }),
+                                  currency
+                                ),
+                              }
+                            )
+                          : t('Input video: no extra charge')}
+                      </div>
+                    </div>
+                  )
+                }
                 const price = Number(tier.price)
-                const tokensPerSecond = videoSalesInputTokensPerSecond(
-                  tier.resolution
-                )
-                const inputValue =
-                  tokensPerSecond === null
-                    ? tier.inputPrice
-                    : tier.inputTokenPrice
                 if (
-                  !seconds ||
-                  !Number.isFinite(price) ||
-                  price <= 0 ||
-                  !isInputVideoPrice(inputValue)
+                  !isPositivePrice(tier.price) ||
+                  !isInputVideoPrice(tier.inputPrice)
                 ) {
                   return '—'
                 }
-                const inputPrice = Number(inputValue)
-                const currency = {
-                  locale,
-                  digitsLarge: 4,
-                  digitsSmall: 6,
-                  abbreviate: false,
-                }
+                const inputPrice = Number(tier.inputPrice)
                 const inputPriceText = formatBillingCurrencyFromUSD(
                   inputPrice,
                   currency
                 )
                 let inputNote = t('Input video: no extra charge')
                 if (inputPrice > 0 && model.officialReferenceBilling) {
-                  inputNote =
-                    tokensPerSecond === null
-                      ? t(
-                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second',
-                          { price: inputPriceText }
-                        )
-                      : t(
-                          'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} / 1M tokens',
-                          { price: inputPriceText }
-                        )
+                  inputNote = t(
+                    'With reference: (output + max(reference, ⌈output × 2/3⌉)) seconds × {{price}} per second',
+                    { price: inputPriceText }
+                  )
                 } else if (inputPrice > 0) {
-                  inputNote =
-                    tokensPerSecond === null
-                      ? t('Plus input video: {{price}} per second', {
-                          price: inputPriceText,
-                        })
-                      : t('Plus reference video: {{price}} / 1M tokens', {
-                          price: inputPriceText,
-                        })
+                  inputNote = t('Plus input video: {{price}} per second', {
+                    price: inputPriceText,
+                  })
                 }
                 // Input duration is unknown here, so no total is shown.
                 return (
@@ -404,16 +473,6 @@ export function VideoSalesModelEditor(props: {
                     ))}
                     <div className='text-muted-foreground font-sans'>
                       {inputNote}
-                      {inputPrice > 0 && tokensPerSecond !== null && (
-                        <>
-                          {' '}
-                          <span>
-                            {t('({{tokens}} tokens per second)', {
-                              tokens: formatNumber(tokensPerSecond, locale),
-                            })}
-                          </span>
-                        </>
-                      )}
                     </div>
                   </div>
                 )
@@ -442,13 +501,18 @@ export function VideoSalesModelEditor(props: {
           ]}
         />
         <p className='text-muted-foreground text-sm'>
-          {model.officialReferenceBilling
-            ? t(
-                'With-reference order price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. It must be above 0; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
-              )
-            : t(
-                'Reference video price follows the official token rule: tokens = seconds × width × height × 24 / 1024 at the output resolution. 0 means no extra charge; 480p, 720p, 1080p and 4k are priced per 1M tokens, other resolutions per second.'
-              )}
+          {tokenPriced &&
+            t(
+              'Tokens = width × height × 24 × seconds / 1024 at the official output size; reference video is counted at the output size too. 480p, 720p, 1080p and 4k only.'
+            )}
+          {!tokenPriced &&
+            (model.officialReferenceBilling
+              ? t(
+                  'With-reference order price is per second of output plus billable reference video. It must be above 0.'
+                )
+              : t(
+                  'Input video price is per second of reference video. 0 means no extra charge.'
+                ))}
         </p>
         {(tierError?.root?.message || tierError?.message) && (
           <p role='alert' className='text-destructive text-sm'>
@@ -466,7 +530,8 @@ export function VideoSalesModelEditor(props: {
               resolution: '',
               price: '',
               inputPrice: '0',
-              inputTokenPrice: '0',
+              tokenPrice: '',
+              withVideoTokenPrice: '0',
               seconds: '',
             })
           }

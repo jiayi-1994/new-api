@@ -58,6 +58,7 @@ import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
   decodeBillingExprB64,
+  getLogProfitUSD,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
@@ -779,6 +780,39 @@ export function useCommonLogsColumns(
           )
         },
       },
+      ...(isAdmin
+        ? [
+            {
+              id: 'profit',
+              header: t('Profit'),
+              cell: ({ row }) => {
+                const log = row.original
+                if (!isDisplayableLogType(log.type)) return null
+
+                const profit = getLogProfitUSD(log, parseLogOther(log.other))
+                if (profit == null) {
+                  return <span className='text-muted-foreground/40'>—</span>
+                }
+                return (
+                  <span
+                    className={cn(
+                      'font-mono text-xs font-medium whitespace-nowrap tabular-nums',
+                      profit < 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    )}
+                  >
+                    {formatBillingCurrencyFromUSD(profit, {
+                      digitsLarge: 4,
+                      digitsSmall: 6,
+                      abbreviate: false,
+                    })}
+                  </span>
+                )
+              },
+            } satisfies ColumnDef<UsageLog>,
+          ]
+        : []),
 
       {
         accessorKey: 'use_time',
