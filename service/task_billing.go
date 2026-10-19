@@ -83,6 +83,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 	appendTaskLogInfo(task, other)
 	attachQuotaSaturation(c, info, other)
 	AppendVideoScheduleConsumeLog(c, task, other)
+	// An immediate failure settles to zero and gets no refund row, and the
+	// upstream does not charge it, so it books no cost either.
+	if summary := task.PrivateData.SchedulingSummary; summary != nil && summary.CostUSD != nil && task.Status != model.TaskStatusFailure {
+		other.SetAdmin("cost_usd", *summary.CostUSD)
+	}
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
@@ -269,22 +274,30 @@ func taskModelName(task *model.Task) string {
 // 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
-	if quota == 0 {
+	// A free task still booked its purchase cost on the consume log, so its
+	// failure writes a zero-quota refund row carrying the reversal.
+	var costUSD *float64
+	if summary := task.PrivateData.SchedulingSummary; summary != nil {
+		costUSD = summary.CostUSD
+	}
+	if quota == 0 && costUSD == nil {
 		return true
 	}
 
-	// 1. 退还资金来源（钱包或订阅）
-	if err := taskAdjustFunding(task, -quota); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
-		return false
+	if quota != 0 {
+		// 1. 退还资金来源（钱包或订阅）
+		if err := taskAdjustFunding(task, -quota); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+			return false
+		}
+
+		// 2. 退还令牌额度
+		taskAdjustTokenQuota(ctx, task, -quota)
+
+		// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变
+		model.UpdateUserUsedQuota(task.UserId, -quota)
+		model.UpdateChannelUsedQuota(task.ChannelId, -quota)
 	}
-
-	// 2. 退还令牌额度
-	taskAdjustTokenQuota(ctx, task, -quota)
-
-	// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变
-	model.UpdateUserUsedQuota(task.UserId, -quota)
-	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
 
 	// 4. 记录日志
 	other := taskBillingOther(task)
@@ -294,6 +307,11 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		other.SetPublic("reason", "Video generation failed")
 	} else {
 		other.SetPublic("reason", reason)
+	}
+	// Upstreams do not charge failed tasks, so the refund reverses the cost
+	// recorded on the consume log and the task nets zero profit.
+	if costUSD != nil {
+		other.SetAdmin("cost_usd", -*costUSD)
 	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
@@ -306,6 +324,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		Group:     task.Group,
 		Other:     other,
 	})
+	if quota == 0 {
+		return true
+	}
 
 	// 5. 资金退款完成后再清除持久化标记。
 	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
@@ -372,6 +393,11 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	other.SetPublic("task_id", task.TaskID)
 	other.SetPublic("pre_consumed_quota", preConsumedQuota)
 	other.SetPublic("actual_quota", actualQuota)
+	// The purchase cost was booked once on the consume log; a settlement delta
+	// changes revenue only.
+	if summary := task.PrivateData.SchedulingSummary; summary != nil && summary.CostUSD != nil {
+		other.SetAdmin("cost_usd", 0)
+	}
 	for _, clamp := range clamps {
 		attachQuotaSaturationToOther(other, clamp)
 	}

@@ -312,6 +312,10 @@ func TestUnifiedVideoLogsKeepUpstreamModelInAdminScope(t *testing.T) {
 			snapshot = &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest, UsageFacts: map[string]any{"seconds": float64(15), "resolution": "720p"}}
 		}
 		task.PrivateData.BillingContext.TieredSnapshot = snapshot
+		if unified {
+			cost := 1.25
+			task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
+		}
 		info := &relaycommon.RelayInfo{
 			UserId: userID, OriginModelName: "public-video", UsingGroup: "default",
 			ChannelMeta:           &relaycommon.ChannelMeta{ChannelId: channelID, UpstreamModelName: "private-upstream-video", IsModelMapped: true},
@@ -321,6 +325,12 @@ func TestUnifiedVideoLogsKeepUpstreamModelInAdminScope(t *testing.T) {
 		log := callLogTaskConsumption(t, info, task)
 		var submitted map[string]any
 		require.NoError(t, common.UnmarshalJsonStr(log.Other, &submitted))
+		submittedAdmin, _ := submitted["admin_info"].(map[string]any)
+		if unified {
+			assert.Equal(t, 1.25, submittedAdmin["cost_usd"])
+		} else {
+			assert.NotContains(t, submittedAdmin, "cost_usd")
+		}
 		for _, other := range []map[string]any{submitted, taskBillingOther(task).Snapshot()} {
 			assert.Equal(t, true, other["is_model_mapped"])
 			if unified {
@@ -335,6 +345,7 @@ func TestUnifiedVideoLogsKeepUpstreamModelInAdminScope(t *testing.T) {
 		userLogs, err := model.GetLogByTokenId(0)
 		require.NoError(t, err)
 		require.NotEmpty(t, userLogs)
+		assert.NotContains(t, userLogs[0].Other, "cost_usd")
 		if unified {
 			assert.NotContains(t, userLogs[0].Other, "private-upstream-video")
 		} else {
@@ -451,6 +462,8 @@ func TestLogTaskConsumptionMarksInlineResultsAndDiscardedArtifacts(t *testing.T)
 			task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
 			task.Status = tc.status
 			task.PrivateData.ResultDiscarded = tc.discarded
+			cost := 1.25
+			task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
 			info := &relaycommon.RelayInfo{
 				UserId: userID, OriginModelName: "qwen-image-plus", UsingGroup: "default",
 				ChannelMeta:   &relaycommon.ChannelMeta{ChannelId: channelID},
@@ -479,6 +492,14 @@ func TestLogTaskConsumptionMarksInlineResultsAndDiscardedArtifacts(t *testing.T)
 				assert.NotContains(t, other, "result_discarded")
 			} else {
 				assert.Equal(t, true, other["result_discarded"])
+			}
+			// An immediate failure is never refunded and costs nothing upstream,
+			// so it books no purchase cost.
+			adminInfo, _ := other["admin_info"].(map[string]any)
+			if tc.status == model.TaskStatusFailure {
+				assert.NotContains(t, adminInfo, "cost_usd")
+			} else {
+				assert.Equal(t, 1.25, adminInfo["cost_usd"])
 			}
 		})
 	}
@@ -933,6 +954,8 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 			task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 			if unified {
 				task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{SalesSource: billingexpr.SalesSourceVideoRequest}
+				cost := 1.25
+				task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
 			}
 			require.NoError(t, model.DB.Create(task).Error)
 
@@ -964,12 +987,16 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 				adminInfo, ok := other["admin_info"].(map[string]any)
 				require.True(t, ok)
 				assert.Equal(t, "task failed: upstream error", adminInfo["reason"])
+				// Failed tasks cost nothing upstream: the refund reverses the consume log's cost.
+				assert.Equal(t, -1.25, adminInfo["cost_usd"])
 				userLogs, err := model.GetLogByTokenId(tokenID)
 				require.NoError(t, err)
 				require.Len(t, userLogs, 1)
 				assert.NotContains(t, userLogs[0].Other, "upstream error")
+				assert.NotContains(t, userLogs[0].Other, "cost_usd")
 			} else {
 				assert.Equal(t, "task failed: upstream error", other["reason"])
+				assert.NotContains(t, other, "admin_info")
 			}
 		})
 	}
@@ -1028,6 +1055,22 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 
 	// No log created
 	assert.Equal(t, int64(0), countLogs(t))
+
+	// A free task that booked a purchase cost still reverses it on failure,
+	// through a zero-quota refund row, so the task nets zero profit.
+	cost := 1.25
+	task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
+	assert.True(t, RefundTaskQuota(ctx, task, "free task failed"))
+	assert.Equal(t, 5000, getUserQuota(t, userID))
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Zero(t, log.Quota)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, -1.25, adminInfo["cost_usd"])
 }
 
 func TestRefundTaskQuota_NoToken(t *testing.T) {
@@ -1102,6 +1145,8 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	cost := 1.25
+	task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
@@ -1124,6 +1169,12 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeConsume, log.Type)
 	assert.Equal(t, actualQuota-preConsumed, log.Quota)
+	// The cost was booked on the submit log; the delta row adds revenue only.
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), adminInfo["cost_usd"])
 }
 
 func TestRecalculate_NegativeDelta(t *testing.T) {
@@ -1141,6 +1192,8 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	cost := 1.25
+	task.PrivateData.SchedulingSummary = &model.TaskSchedulingSummary{CostUSD: &cost}
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
@@ -1163,6 +1216,12 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 	assert.Equal(t, preConsumed-actualQuota, log.Quota)
+	// A partial refund returns revenue only; the cost stays on the submit log.
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), adminInfo["cost_usd"])
 }
 
 func TestRecalculate_ZeroDelta(t *testing.T) {

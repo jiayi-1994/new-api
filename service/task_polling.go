@@ -131,7 +131,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 		}
 		timedOutCount++
 		ObserveVideoTerminal(task, true)
-		if !isLegacy && task.Quota != 0 {
+		if !isLegacy {
 			RefundTaskQuota(ctx, task, reason)
 		}
 	}
@@ -668,7 +668,7 @@ func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task 
 	perfmetrics.RecordTaskResult(task, taskResult)
 	ObserveVideoTerminal(task, hostFailure)
 	billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
-	if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
+	if task.Status == model.TaskStatusFailure && !billingSettled {
 		RefundTaskQuota(ctx, task, task.FailReason)
 	}
 }

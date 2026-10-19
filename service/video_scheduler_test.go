@@ -2029,6 +2029,12 @@ func TestVideoSchedulerExclusionsLayersAndFallback(t *testing.T) {
 		assert.True(t, summary.Probe)
 		require.NotNil(t, summary.Spec)
 		assert.Equal(t, map[string]int{"video": 0, "image": 0, "audio": 0, "frame": 0}, summary.Spec.References)
+		// The selected channel's quoted cost travels with the task for profit logs.
+		_, row, ok := videoScheduleSelection(c, 3201)
+		require.True(t, ok)
+		require.NotNil(t, row.CostUSD)
+		require.NotNil(t, summary.CostUSD)
+		assert.Equal(t, *row.CostUSD, *summary.CostUSD)
 		other := model.NewLogOther()
 		AppendVideoScheduleConsumeLog(c, &model.Task{ChannelId: 3201}, other)
 		adminInfo := other.Snapshot()["admin_info"].(map[string]any)

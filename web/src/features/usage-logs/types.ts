@@ -147,6 +147,9 @@ export interface LogOtherData {
     // Reject / intercept reason (admin only)
     reject_reason?: string
     task_plugin?: TaskPluginInfo
+    // Upstream purchase cost in USD booked on this row: the quoted cost on a
+    // task's consume log, its negation on the refund, 0 on settlement deltas.
+    cost_usd?: number
   }
   root_info?: {
     task_plugin?: TaskPluginRuntimeInfo
