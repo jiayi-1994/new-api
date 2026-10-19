@@ -35,20 +35,37 @@ export function canonicalVideoSalesTier(tier: string): string | null {
   return Number.isSafeInteger(height) ? normalized : null
 }
 
-const videoSalesModelSchema = z.object({
-  disabled: z.boolean().optional(),
-  official_reference_billing: z.boolean().optional(),
-  resolutions: z.record(
-    z.string(),
-    z.object({
-      usd_per_second: z.number().finite().positive(),
-      input_video_usd_per_second: z.number().finite().min(0).optional(),
-      seconds: z
-        .array(z.number().int().min(1).max(MAX_VIDEO_SALES_SECONDS))
-        .min(1),
-    })
-  ),
-})
+const videoSalesModelSchema = z
+  .object({
+    disabled: z.boolean().optional(),
+    official_reference_billing: z.boolean().optional(),
+    pricing_unit: z.literal('token').optional(),
+    dimension_profile: z.literal('seedance-2.5').optional(),
+    resolutions: z.record(
+      z.string(),
+      z.object({
+        // A token tier stores an unused 0 per-second price.
+        usd_per_second: z.number().finite().min(0),
+        input_video_usd_per_second: z.number().finite().min(0).optional(),
+        usd_per_million_tokens: z.number().finite().positive().optional(),
+        with_video_usd_per_million_tokens: z
+          .number()
+          .finite()
+          .min(0)
+          .optional(),
+        seconds: z
+          .array(z.number().int().min(1).max(MAX_VIDEO_SALES_SECONDS))
+          .min(1),
+      })
+    ),
+  })
+  .refine((model) =>
+    Object.values(model.resolutions).every((tier) =>
+      model.pricing_unit === 'token'
+        ? tier.usd_per_million_tokens !== undefined
+        : tier.usd_per_second > 0
+    )
+  )
 
 /** Invalid source data must never be silently replaced with an empty sales table. */
 export function parseVideoSales(

@@ -222,6 +222,16 @@ export interface LogOtherData {
   matched_tier?: string
   request_rules?: RequestRuleTrace[]
   usage_facts?: Record<string, string | number>
+  /** Token-priced unified video: the public unit prices and frozen output size. */
+  video_sales?: {
+    unit: 'token'
+    usd_per_million_tokens: number
+    with_video_usd_per_million_tokens: number
+    width: number
+    height: number
+    fps: number
+    official_reference_billing?: boolean
+  }
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number

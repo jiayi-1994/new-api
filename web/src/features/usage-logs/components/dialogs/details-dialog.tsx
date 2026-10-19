@@ -60,10 +60,7 @@ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-p
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
-import {
-  videoInputTokenPrice,
-  videoInputTokensPerSecond,
-} from '@/features/pricing/lib/price'
+import { videoTokenSaleUSD } from '@/features/pricing/lib/price'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { toIntlLocale } from '@/i18n/languages'
@@ -214,89 +211,66 @@ function BillingBreakdown(props: {
         value: other.matched_tier || t('No matching results'),
       })
     }
-    // Unified video bills reference video per second; show the official
-    // token equivalent (before the group ratio). Older logs have no billable
-    // fact and were charged the measured seconds.
-    const measuredSeconds = Number(other.usage_facts?.input_video_seconds)
-    const inputVideoSeconds = Number(
-      other.usage_facts?.input_video_billable_seconds ?? measuredSeconds
-    )
-    const resolution = other.usage_facts?.resolution
-    const tokensPerSecond =
-      typeof resolution === 'string'
-        ? videoInputTokensPerSecond(resolution)
-        : null
-    // ponytail: relies on the host-generated expression formats
-    // (relay/relay_task.go); log input_video_usd_per_second to drop the regex.
-    const videoExpr = decodeBillingExprB64(other.expr_b64)
-    const wholeOrderPrice = Number(
-      videoExpr.match(
-        /\(u\("seconds"\) \+ u\("input_video_billable_seconds"\)\) \* (\d+(?:\.\d+)?)/
-      )?.[1]
-    )
-    if (wholeOrderPrice > 0 && inputVideoSeconds > 0) {
-      // Official reference billing prices the whole order at the with-video rate.
-      const orderSeconds =
-        Number(other.usage_facts?.seconds) + inputVideoSeconds
-      const seconds = {
-        output: formatNumber(Number(other.usage_facts?.seconds), locale),
-        billed: formatNumber(inputVideoSeconds, locale),
-        measured: formatNumber(measuredSeconds, locale),
-      }
+    // Token-priced unified video logs its unit prices and output size; older
+    // and per-second logs show only the usage facts (seconds).
+    const videoSales = other.video_sales
+    if (videoSales?.unit === 'token') {
+      const facts = other.usage_facts ?? {}
+      const outputTokens = Number(facts.video_tokens ?? 0)
+      const inputTokens = Number(facts.input_video_tokens ?? 0)
+      const official = !!videoSales.official_reference_billing
       rows.push({
-        label: t('With-reference order'),
-        value:
-          tokensPerSecond === null
-            ? t(
-                'Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} s × {{price}} / second',
-                {
-                  ...seconds,
-                  total: formatNumber(orderSeconds, locale),
-                  price: fmtPrice(wholeOrderPrice),
-                }
-              )
-            : t(
-                'Output {{output}} s + reference billed {{billed}} s (measured {{measured}} s) = {{total}} tokens × {{price}} / 1M tokens',
-                {
-                  ...seconds,
-                  total: formatNumber(orderSeconds * tokensPerSecond, locale),
-                  price: fmtPrice(
-                    videoInputTokenPrice(wholeOrderPrice, tokensPerSecond)
-                  ),
-                }
-              ),
+        label: t('Output size'),
+        value: `${videoSales.width}×${videoSales.height} · ${videoSales.fps} fps`,
       })
-      if (inputVideoSeconds > measuredSeconds) {
+      rows.push({
+        label: t('Output tokens'),
+        value: formatNumber(outputTokens, locale),
+      })
+      rows.push({
+        label: t('No-reference price'),
+        value: t('{{price}} / 1M tokens', {
+          price: fmtPrice(videoSales.usd_per_million_tokens),
+        }),
+      })
+      if (inputTokens > 0) {
         rows.push({
-          label: t('Reference video minimum'),
-          value: t(
-            'Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds',
-            { billed: seconds.billed }
-          ),
+          label: t('Reference video tokens'),
+          value: formatNumber(inputTokens, locale),
         })
-      }
-    } else if (inputVideoSeconds > 0 && tokensPerSecond !== null) {
-      rows.push({
-        label: t('Reference video tokens'),
-        value: formatNumber(inputVideoSeconds * tokensPerSecond, locale),
-      })
-      const secondPrice = Number(
-        videoExpr.match(
-          /u\("input_video_(?:billable_)?seconds"\) \* (\d+(?:\.\d+)?)/
-        )?.[1]
-      )
-      if (secondPrice > 0) {
         rows.push({
-          label: t('Reference video price'),
+          label: official
+            ? t('With-reference order price')
+            : t('Reference video price'),
           value: t('{{price}} / 1M tokens', {
-            price: fmtPrice(videoInputTokenPrice(secondPrice, tokensPerSecond)),
+            price: fmtPrice(videoSales.with_video_usd_per_million_tokens),
           }),
         })
-        rows.push({
-          label: t('Reference video cost'),
-          value: fmtPrice(inputVideoSeconds * secondPrice),
-        })
+        const measured = Number(facts.input_video_seconds)
+        const billed = Number(facts.input_video_billable_seconds)
+        if (billed > measured) {
+          rows.push({
+            label: t('Reference video minimum'),
+            value: t(
+              'Reference video is shorter than 2/3 of the output; billed as {{billed}} seconds',
+              { billed: formatNumber(billed, locale) }
+            ),
+          })
+        }
       }
+      rows.push({
+        label: t('Video cost before group ratio'),
+        value: fmtPrice(
+          videoTokenSaleUSD({
+            outputTokens,
+            inputTokens,
+            usdPerMillionTokens: videoSales.usd_per_million_tokens,
+            withVideoUSDPerMillionTokens:
+              videoSales.with_video_usd_per_million_tokens,
+            official,
+          })
+        ),
+      })
     }
   } else if (isPerCall) {
     rows.push({ label: t('Billing Mode'), value: t('Per-call') })

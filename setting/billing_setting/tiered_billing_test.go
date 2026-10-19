@@ -3,6 +3,7 @@ package billing_setting
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -129,6 +130,15 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 		{name: "seconds above cap", value: `{"m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[3601]}}}}`, wantErr: "seconds must be within"},
 		{name: "no resolutions", value: `{"m":{"resolutions":{}}}`, wantErr: "at least one resolution"},
 		{name: "untrimmed name", value: `{" m":{"resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "trimmed"},
+		{name: "token pricing needs no per-second price", value: `{"m":{"pricing_unit":"token","resolutions":{"720p":{"usd_per_second":0,"usd_per_million_tokens":46.3,"with_video_usd_per_million_tokens":0,"seconds":[5]}}}}`},
+		{name: "unknown pricing unit", value: `{"m":{"pricing_unit":"frame","resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "pricing_unit must be second or token"},
+		{name: "zero token price", value: `{"m":{"pricing_unit":"token","resolutions":{"720p":{"usd_per_million_tokens":0,"seconds":[5]}}}}`, wantErr: "usd_per_million_tokens must be a positive number"},
+		{name: "negative token price", value: `{"m":{"pricing_unit":"token","resolutions":{"720p":{"usd_per_million_tokens":-1,"seconds":[5]}}}}`, wantErr: "usd_per_million_tokens must be a positive number"},
+		{name: "negative with-video token price", value: `{"m":{"pricing_unit":"token","resolutions":{"720p":{"usd_per_million_tokens":46.3,"with_video_usd_per_million_tokens":-1,"seconds":[5]}}}}`, wantErr: "with_video_usd_per_million_tokens must be a finite number >= 0"},
+		{name: "official token billing needs a with-video price", value: `{"m":{"pricing_unit":"token","official_reference_billing":true,"resolutions":{"720p":{"usd_per_million_tokens":46.3,"seconds":[5]}}}}`, wantErr: "positive with_video_usd_per_million_tokens"},
+		{name: "token tier outside the size table", value: `{"m":{"pricing_unit":"token","resolutions":{"540p":{"usd_per_million_tokens":46.3,"seconds":[5]}}}}`, wantErr: "needs an official output size"},
+		{name: "seedance-2.5 has no 4k", value: `{"m":{"dimension_profile":"seedance-2.5","resolutions":{"4k":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "seedance-2.5 has no 4k"},
+		{name: "unknown dimension profile", value: `{"m":{"dimension_profile":"seedance-1.0","resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`, wantErr: "dimension_profile must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseVideoSales(tc.value)
@@ -161,6 +171,17 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 	for _, price := range []float64{-1, math.NaN(), math.Inf(1)} {
 		assert.False(t, ValidVideoInputPrice(price), price)
 	}
+	for _, price := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		assert.False(t, ValidVideoTokenPrice(price), price)
+	}
+	// Defaults normalize to empty, so per-second documents serialize unchanged.
+	defaults, err := ParseVideoSales(`{"m":{"pricing_unit":"second","dimension_profile":"seedance-2.0","resolutions":{"720p":{"usd_per_second":0.1,"seconds":[5]}}}}`)
+	require.NoError(t, err)
+	encoded, err = common.Marshal(defaults)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "pricing_unit")
+	assert.NotContains(t, string(encoded), "dimension_profile")
+	assert.NotContains(t, string(encoded), "per_million_tokens")
 
 	for input, want := range map[string]string{"720P": "720p", " 1080p ": "1080p", "2160p": "4k", "4K": "4k"} {
 		got, ok := CanonicalVideoTier(input)
@@ -171,6 +192,39 @@ func TestVideoSalesValidationAndFoldedLookup(t *testing.T) {
 		_, ok := CanonicalVideoTier(input)
 		assert.False(t, ok, input)
 	}
+
+	// The official size tables, cell for cell; the web pricing tests assert
+	// the same cells against the TypeScript copy.
+	ratios := []string{"16:9", "4:3", "1:1", "3:4", "9:16", "21:9"}
+	shared := map[string]string{
+		"720p":  "1280x720 1112x834 960x960 834x1112 720x1280 1470x630",
+		"1080p": "1920x1080 1664x1248 1440x1440 1248x1664 1080x1920 2206x946",
+	}
+	for profile, rows := range map[string]map[string]string{
+		"": {"480p": "864x496 752x560 640x640 560x752 496x864 992x432", "720p": shared["720p"], "1080p": shared["1080p"],
+			"4k": "3840x2160 3326x2494 2880x2880 2494x3326 2160x3840 4398x1886"},
+		VideoDimensionProfile25: {"480p": "854x480 752x560 640x640 560x752 480x854 992x432", "720p": shared["720p"], "1080p": shared["1080p"]},
+	} {
+		for tier, row := range rows {
+			for i, want := range strings.Fields(row) {
+				width, height, ok := VideoTokenDimensions(profile, tier, ratios[i])
+				require.True(t, ok, profile, tier, ratios[i])
+				assert.Equal(t, want, fmt.Sprintf("%dx%d", width, height), profile, tier, ratios[i])
+			}
+		}
+	}
+	for _, ratio := range []string{"", "adaptive"} {
+		width, height, ok := VideoTokenDimensions("", "720p", ratio)
+		require.True(t, ok)
+		assert.Equal(t, [2]int{1280, 720}, [2]int{width, height}, "a missing or adaptive ratio takes 16:9")
+	}
+	_, _, ok := VideoTokenDimensions("", "720p", "2:1")
+	assert.False(t, ok)
+	_, ok = VideoTokenMaxPixels(VideoDimensionProfile25, "4k")
+	assert.False(t, ok)
+	pixels, ok := VideoTokenMaxPixels("", "720p")
+	require.True(t, ok)
+	assert.Equal(t, 1112*834, pixels, "4:3 is the largest 720p frame")
 
 	saved := billingSetting.VideoSales
 	t.Cleanup(func() { billingSetting.VideoSales = saved })

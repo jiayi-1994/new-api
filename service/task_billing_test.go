@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -287,12 +288,15 @@ func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
 	assert.NotContains(t, other, "usage_facts")
 }
 
-func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
+func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task, sales ...VideoSalesFacts) *model.Log {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
 	ctx.Set("token_name", "test_token")
+	for _, facts := range sales {
+		SetVideoSalesFacts(ctx, facts)
+	}
 	LogTaskConsumption(ctx, info, task)
 	log := getLastLog(t)
 	require.NotNil(t, log)
@@ -322,14 +326,23 @@ func TestUnifiedVideoLogsKeepUpstreamModelInAdminScope(t *testing.T) {
 			TaskRelayInfo:         &relaycommon.TaskRelayInfo{Action: "text_to_video"},
 			TieredBillingSnapshot: snapshot, PriceData: types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
 		}
-		log := callLogTaskConsumption(t, info, task)
+		var sales []VideoSalesFacts
+		if unified {
+			sales = append(sales, VideoSalesFacts{Model: "public-video", Seconds: 15, Resolution: "720p", OfficialReferenceBilling: true,
+				PricingUnit: billing_setting.VideoPricingUnitToken, Width: 1280, Height: 720, FPS: 24, USDPerMillionTokens: 46.3, WithVideoUSDPerMillionTokens: 42})
+		}
+		log := callLogTaskConsumption(t, info, task, sales...)
 		var submitted map[string]any
 		require.NoError(t, common.UnmarshalJsonStr(log.Other, &submitted))
 		submittedAdmin, _ := submitted["admin_info"].(map[string]any)
 		if unified {
 			assert.Equal(t, 1.25, submittedAdmin["cost_usd"])
+			// Token prices and output size are public, so every log view can show tokens and cost.
+			assert.Equal(t, map[string]any{"unit": "token", "usd_per_million_tokens": 46.3, "with_video_usd_per_million_tokens": float64(42),
+				"width": float64(1280), "height": float64(720), "fps": float64(24), "official_reference_billing": true}, submitted["video_sales"])
 		} else {
 			assert.NotContains(t, submittedAdmin, "cost_usd")
+			assert.NotContains(t, submitted, "video_sales")
 		}
 		for _, other := range []map[string]any{submitted, taskBillingOther(task).Snapshot()} {
 			assert.Equal(t, true, other["is_model_mapped"])

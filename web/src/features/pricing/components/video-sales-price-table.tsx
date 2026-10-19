@@ -30,10 +30,11 @@ import {
 } from '../lib/model-helpers'
 import {
   formatVideoSalesPrice,
-  videoInputTokenPrice,
-  videoInputTokensPerSecond,
+  VIDEO_TOKEN_DIMENSIONS,
+  videoTokens,
+  videoTokenSaleUSD,
 } from '../lib/price'
-import type { PricingModel } from '../types'
+import type { PricingModel, VideoSalesTier } from '../types'
 import type { ModelPriceCellOptions } from './model-price-cell'
 
 export function VideoSalesPriceTable(props: {
@@ -56,11 +57,52 @@ export function VideoSalesPriceTable(props: {
     tiers.map((tier) => ({ ...tier, group }))
   )
   const official = !!props.model.video_sales?.official_reference_billing
-  const chargesTokens = tiers.some(
-    (tier) =>
-      !!tier.input_video_usd_per_second &&
-      videoInputTokensPerSecond(tier.resolution) !== null
-  )
+  const tokenPriced = props.model.video_sales?.pricing_unit === 'token'
+  const rowOptions = (group: string) => ({
+    ...props.options,
+    groupRatio: getConfiguredGroupRatio(props.groupRatio ?? {}, group),
+  })
+  const referencePrice = (row: VideoSalesTier) =>
+    tokenPriced
+      ? row.with_video_usd_per_million_tokens
+      : row.input_video_usd_per_second
+  const chargesReference = tiers.some((tier) => !!referencePrice(tier))
+  const unitPrice = (usd: number, group: string) =>
+    tokenPriced
+      ? t('{{price}} / 1M tokens', {
+          price: formatVideoSalesPrice(usd, rowOptions(group)),
+        })
+      : t('{{price}} / second', {
+          price: formatVideoSalesPrice(usd, rowOptions(group)),
+        })
+
+  // One 16:9 example at the first tier's shortest duration, group ratio applied.
+  let example = ''
+  const first = rows[0]
+  const profile = props.model.video_sales?.dimension_profile ?? 'seedance-2.0'
+  const exampleSize =
+    first && VIDEO_TOKEN_DIMENSIONS[profile][first.resolution]?.[0]
+  if (tokenPriced && first && exampleSize && first.seconds.length > 0) {
+    const tokens = videoTokens(exampleSize[0], exampleSize[1], first.seconds[0])
+    example = t(
+      '{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}',
+      {
+        resolution: first.resolution,
+        seconds: formatNumber(first.seconds[0], locale),
+        tokens: formatNumber(tokens, locale),
+        price: formatVideoSalesPrice(
+          videoTokenSaleUSD({
+            outputTokens: tokens,
+            inputTokens: 0,
+            usdPerMillionTokens: first.usd_per_million_tokens ?? 0,
+            withVideoUSDPerMillionTokens: 0,
+            official,
+          }),
+          rowOptions(first.group)
+        ),
+      }
+    )
+  }
   return (
     <>
       <StaticDataTable
@@ -89,16 +131,17 @@ export function VideoSalesPriceTable(props: {
           },
           {
             id: 'price',
-            header: t('Price per second'),
+            header: tokenPriced
+              ? t('No-reference price')
+              : t('Price per second'),
             cellClassName: 'font-mono tabular-nums',
             cell: (row) =>
-              formatVideoSalesPrice(row.usd_per_second, {
-                ...props.options,
-                groupRatio: getConfiguredGroupRatio(
-                  props.groupRatio ?? {},
-                  row.group
-                ),
-              }),
+              tokenPriced
+                ? unitPrice(row.usd_per_million_tokens ?? 0, row.group)
+                : formatVideoSalesPrice(
+                    row.usd_per_second,
+                    rowOptions(row.group)
+                  ),
           },
           {
             id: 'input-price',
@@ -107,43 +150,8 @@ export function VideoSalesPriceTable(props: {
               : t('Reference video price'),
             cellClassName: 'font-mono tabular-nums',
             cell: (row) => {
-              if (!row.input_video_usd_per_second) return t('No extra charge')
-              const priceOptions = {
-                ...props.options,
-                groupRatio: getConfiguredGroupRatio(
-                  props.groupRatio ?? {},
-                  row.group
-                ),
-              }
-              const tokensPerSecond = videoInputTokensPerSecond(row.resolution)
-              if (tokensPerSecond === null) {
-                return t('{{price}} / second', {
-                  price: formatVideoSalesPrice(
-                    row.input_video_usd_per_second,
-                    priceOptions
-                  ),
-                })
-              }
-              return (
-                <div>
-                  <div>
-                    {t('{{price}} / 1M tokens', {
-                      price: formatVideoSalesPrice(
-                        videoInputTokenPrice(
-                          row.input_video_usd_per_second,
-                          tokensPerSecond
-                        ),
-                        priceOptions
-                      ),
-                    })}
-                  </div>
-                  <div className='text-muted-foreground font-sans text-xs'>
-                    {t('{{tokens}} tokens per second', {
-                      tokens: formatNumber(tokensPerSecond, locale),
-                    })}
-                  </div>
-                </div>
-              )
+              const price = referencePrice(row)
+              return price ? unitPrice(price, row.group) : t('No extra charge')
             },
           },
           {
@@ -156,14 +164,20 @@ export function VideoSalesPriceTable(props: {
           },
         ]}
       />
-      {chargesTokens && (
+      {tokenPriced && (
         <p className='text-muted-foreground mt-2 text-xs'>
           {t(
-            'Reference video tokens = seconds × width × height × 24 / 1024 (output resolution)'
+            'Tokens = width × height × 24 × seconds / 1024 (official output size; reference video counted at the output size)'
+          )}
+          {example && (
+            <>
+              <br />
+              {example}
+            </>
           )}
         </p>
       )}
-      {official && tiers.some((tier) => !!tier.input_video_usd_per_second) && (
+      {official && chargesReference && (
         <p className='text-muted-foreground mt-2 text-xs'>
           {t(
             'With reference video, the whole order (output plus reference seconds) is billed at the with-reference price. Reference video shorter than 2/3 of the output duration is billed as 2/3 of it, rounded up to whole seconds.'

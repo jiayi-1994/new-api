@@ -297,21 +297,32 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			return nil, taskErr
 		}
 		outPrice, inPrice := strconv.FormatFloat(sales.USDPerSecond, 'f', -1, 64), strconv.FormatFloat(sales.InputVideoUSDPerSecond, 'f', -1, 64)
-		exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s)`, sales.Resolution, outPrice)
+		outQty, inQty, scale := `u("seconds")`, `u("input_video_billable_seconds")`, ""
 		exists, salesSource = true, billingexpr.SalesSourceVideoRequest
 		facts = map[string]any{"seconds": float64(sales.Seconds), "resolution": sales.Resolution}
+		if sales.PricingUnit == billing_setting.VideoPricingUnitToken {
+			// Official Ark tokens at the frozen output size; prices are per 1M tokens.
+			outPrice, inPrice = strconv.FormatFloat(sales.USDPerMillionTokens, 'f', -1, 64), strconv.FormatFloat(sales.WithVideoUSDPerMillionTokens, 'f', -1, 64)
+			outQty, inQty, scale = `u("video_tokens")`, `u("input_video_tokens")`, " / 1000000"
+			facts["video_tokens"] = sales.OutputTokens()
+			facts["output_width"], facts["output_height"], facts["fps"] = float64(sales.Width), float64(sales.Height), float64(sales.FPS)
+		}
+		exprStr = fmt.Sprintf(`tier(%q, %s * %s%s)`, sales.Resolution, outQty, outPrice, scale)
 		if sales.ChargesInputVideo() {
 			// The measured seconds are logged; the billable seconds (after the
 			// official minimum) are charged, the same number the sale quotes.
 			facts["input_video_seconds"] = *sales.InputVideoSeconds
 			if billable := sales.BillableInputVideoSeconds(); billable > 0 {
 				facts["input_video_billable_seconds"] = billable
+				if sales.PricingUnit == billing_setting.VideoPricingUnitToken {
+					facts["input_video_tokens"] = sales.InputVideoTokens()
+				}
 				if sales.OfficialReferenceBilling {
 					// Official shape: the whole order is priced at the with-video rate.
-					exprStr = fmt.Sprintf(`tier(%q, (u("seconds") + u("input_video_billable_seconds")) * %s)`, sales.Resolution, inPrice)
+					exprStr = fmt.Sprintf(`tier(%q, (%s + %s) * %s%s)`, sales.Resolution, outQty, inQty, inPrice, scale)
 				} else {
 					// Input video is an added fee, never a ratio on the output price.
-					exprStr = fmt.Sprintf(`tier(%q, u("seconds") * %s + u("input_video_billable_seconds") * %s)`, sales.Resolution, outPrice, inPrice)
+					exprStr = fmt.Sprintf(`tier(%q, %s * %s%s + %s * %s%s)`, sales.Resolution, outQty, outPrice, scale, inQty, inPrice, scale)
 				}
 			}
 		}

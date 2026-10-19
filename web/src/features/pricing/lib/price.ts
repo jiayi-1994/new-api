@@ -291,22 +291,122 @@ export function formatRequestPrice(
   })
 }
 
-// Ark bills reference video as seconds × W × H × 24 / 1024 at the 16:9 output
-// size, so each canonical tier has a fixed token rate. Billing still stores the
-// per-second price; the token price is the customer-facing equivalent.
-export const VIDEO_INPUT_TOKENS_PER_SECOND = new Map([
-  ['480p', 10_044],
-  ['720p', 21_600],
-  ['1080p', 48_600],
-  ['4k', 194_400],
-])
+export type VideoDimensionProfile = 'seedance-2.0' | 'seedance-2.5'
 
-/** Token rate for a canonical tier, or null when the tier has no official rate. */
-export function videoInputTokensPerSecond(tier: string): number | null {
-  return VIDEO_INPUT_TOKENS_PER_SECOND.get(tier) ?? null
+export const VIDEO_TOKEN_FPS = 24
+export const VIDEO_TOKEN_RATIOS = [
+  '16:9',
+  '4:3',
+  '1:1',
+  '3:4',
+  '9:16',
+  '21:9',
+] as const
+
+const SEEDANCE_720P: Array<[number, number]> = [
+  [1280, 720],
+  [1112, 834],
+  [960, 960],
+  [834, 1112],
+  [720, 1280],
+  [1470, 630],
+]
+const SEEDANCE_1080P: Array<[number, number]> = [
+  [1920, 1080],
+  [1664, 1248],
+  [1440, 1440],
+  [1248, 1664],
+  [1080, 1920],
+  [2206, 946],
+]
+
+/**
+ * Official Seedance output sizes per profile, tier and ratio (columns follow
+ * VIDEO_TOKEN_RATIOS). Keep identical to setting/billing_setting/video_sales.go;
+ * both test suites assert every cell.
+ */
+export const VIDEO_TOKEN_DIMENSIONS: Record<
+  VideoDimensionProfile,
+  Record<string, Array<[number, number]>>
+> = {
+  'seedance-2.0': {
+    '480p': [
+      [864, 496],
+      [752, 560],
+      [640, 640],
+      [560, 752],
+      [496, 864],
+      [992, 432],
+    ],
+    '720p': SEEDANCE_720P,
+    '1080p': SEEDANCE_1080P,
+    '4k': [
+      [3840, 2160],
+      [3326, 2494],
+      [2880, 2880],
+      [2494, 3326],
+      [2160, 3840],
+      [4398, 1886],
+    ],
+  },
+  'seedance-2.5': {
+    '480p': [
+      [854, 480],
+      [752, 560],
+      [640, 640],
+      [560, 752],
+      [480, 854],
+      [992, 432],
+    ],
+    '720p': SEEDANCE_720P,
+    '1080p': SEEDANCE_1080P,
+  },
 }
 
-export function videoInputSecondPrice(
+/** Ark video tokens: W × H × 24 × seconds / 1024, never rounded. */
+export function videoTokens(
+  width: number,
+  height: number,
+  seconds: number
+): number {
+  return (width * height * VIDEO_TOKEN_FPS * seconds) / 1024
+}
+
+/**
+ * USD of a token-priced sale before the group ratio; mirrors the server's
+ * VideoSalesFacts.USD. Official billing prices the whole order at the
+ * with-video rate once reference tokens are billed.
+ */
+export function videoTokenSaleUSD(sale: {
+  outputTokens: number
+  inputTokens: number
+  usdPerMillionTokens: number
+  withVideoUSDPerMillionTokens: number
+  official: boolean
+}): number {
+  if (sale.official && sale.inputTokens > 0) {
+    return (
+      ((sale.outputTokens + sale.inputTokens) *
+        sale.withVideoUSDPerMillionTokens) /
+      1_000_000
+    )
+  }
+  return (
+    (sale.outputTokens * sale.usdPerMillionTokens) / 1_000_000 +
+    (sale.inputTokens * sale.withVideoUSDPerMillionTokens) / 1_000_000
+  )
+}
+
+/** Tokens per second of a tier's 16:9 frame, or null when the profile has no official size for it. */
+export function videoTokensPerSecond(
+  tier: string,
+  profile: VideoDimensionProfile = 'seedance-2.0'
+): number | null {
+  const size = VIDEO_TOKEN_DIMENSIONS[profile][tier]?.[0]
+  return size ? videoTokens(size[0], size[1], 1) : null
+}
+
+export function videoSecondPrice(
   usdPerMillionTokens: number,
   tokensPerSecond: number
 ): number {
@@ -315,7 +415,7 @@ export function videoInputSecondPrice(
   )
 }
 
-export function videoInputTokenPrice(
+export function videoTokenPrice(
   usdPerSecond: number,
   tokensPerSecond: number
 ): number {

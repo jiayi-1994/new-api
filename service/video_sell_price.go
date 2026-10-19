@@ -48,12 +48,36 @@ type VideoSalesFacts struct {
 	// OfficialReferenceBilling raises billed input video to ceil(O*2/3) and
 	// prices the whole order at InputVideoUSDPerSecond when input is billed.
 	OfficialReferenceBilling bool
-	inputVideoURLs           []string // request-scoped, never persisted or logged
+	// Token pricing (PricingUnit "token") sells W x H x FPS x seconds / 1024
+	// tokens at the output size frozen from the request.
+	PricingUnit                  string
+	Width, Height, FPS           int
+	USDPerMillionTokens          float64
+	WithVideoUSDPerMillionTokens float64
+	inputVideoURLs               []string // request-scoped, never persisted or logged
 }
 
-// ChargesInputVideo reports whether the sale prices input video seconds.
+func (f VideoSalesFacts) tokenPriced() bool {
+	return f.PricingUnit == billing_setting.VideoPricingUnitToken
+}
+
+// ChargesInputVideo reports whether the sale prices input video.
 func (f VideoSalesFacts) ChargesInputVideo() bool {
+	if f.tokenPriced() {
+		return f.WithVideoUSDPerMillionTokens > 0
+	}
 	return f.InputVideoUSDPerSecond > 0
+}
+
+// OutputTokens is the official token count of the output video.
+func (f VideoSalesFacts) OutputTokens() float64 {
+	return float64(f.Width*f.Height*f.FPS) * float64(f.Seconds) / 1024
+}
+
+// InputVideoTokens is the official token count of the billable reference
+// video, measured at the output size as Ark does.
+func (f VideoSalesFacts) InputVideoTokens() float64 {
+	return float64(f.Width*f.Height*f.FPS) * f.BillableInputVideoSeconds() / 1024
 }
 
 // Ready reports whether every quantity the sale prices is frozen.
@@ -77,6 +101,13 @@ func (f VideoSalesFacts) BillableInputVideoSeconds() float64 {
 // USD is the sale before the group ratio. Callers check Ready first. It must
 // match the submission expression (relay.RelayTaskSubmit).
 func (f VideoSalesFacts) USD() float64 {
+	if f.tokenPriced() {
+		output, input := f.OutputTokens(), f.InputVideoTokens()
+		if f.OfficialReferenceBilling && input > 0 {
+			return (output + input) * f.WithVideoUSDPerMillionTokens / 1000000
+		}
+		return output*f.USDPerMillionTokens/1000000 + input*f.WithVideoUSDPerMillionTokens/1000000
+	}
 	billable := f.BillableInputVideoSeconds()
 	if f.OfficialReferenceBilling && billable > 0 {
 		// Official shape: the whole order is priced at the with-video rate.
@@ -157,7 +188,8 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 		return VideoSalesFacts{}, errors.New("seconds is required")
 	}
 
-	tier := ""
+	profile := sales.DimensionProfile
+	tier, width, height := "", 0, 0
 	if raw, present := fields["resolution"]; present {
 		name, _ := raw.(string)
 		canonical, ok := billing_setting.CanonicalVideoTier(name)
@@ -168,17 +200,19 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 	}
 	if raw, present := fields["size"]; present {
 		size, _ := raw.(string)
-		width, height, found := strings.Cut(strings.ToLower(strings.TrimSpace(size)), "x")
-		w, widthErr := strconv.Atoi(width)
-		h, heightErr := strconv.Atoi(height)
+		widthText, heightText, found := strings.Cut(strings.ToLower(strings.TrimSpace(size)), "x")
+		w, widthErr := strconv.Atoi(widthText)
+		h, heightErr := strconv.Atoi(heightText)
 		if !found || widthErr != nil || heightErr != nil || w <= 0 || h <= 0 {
 			return VideoSalesFacts{}, errors.New("size must be WIDTHxHEIGHT")
 		}
+		// Tiered by short edge, as the executing plugins do; non-16:9 official
+		// sizes are requested with resolution + ratio.
 		sizeTier := billing_setting.VideoTierForHeight(min(w, h))
 		if tier != "" && tier != sizeTier {
 			return VideoSalesFacts{}, errors.New("size and resolution conflict")
 		}
-		tier = sizeTier
+		tier, width, height = sizeTier, w, h
 	}
 	if tier == "" {
 		return VideoSalesFacts{}, errors.New("resolution or size is required")
@@ -190,10 +224,52 @@ func ParseVideoSalesFacts(model string, sales billing_setting.VideoSalesModel, b
 	if !slices.Contains(price.Seconds, seconds) {
 		return VideoSalesFacts{}, fmt.Errorf("%d seconds is not sold at %s for model %s", seconds, tier, model)
 	}
-	if !billing_setting.ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
+	facts := VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond, InputVideoUSDPerSecond: price.InputVideoUSDPerSecond, OfficialReferenceBilling: sales.OfficialReferenceBilling}
+	if sales.PricingUnit != billing_setting.VideoPricingUnitToken {
+		if !billing_setting.ValidVideoInputPrice(price.InputVideoUSDPerSecond) {
+			return VideoSalesFacts{}, fmt.Errorf("%w: model %s", ErrVideoSalesPriceInvalid, model)
+		}
+		return facts, nil
+	}
+
+	// Token pricing: the output size comes from the request, never from the
+	// executing channel, so the sale stays frozen at the entry.
+	maxPixels, official := billing_setting.VideoTokenMaxPixels(profile, tier)
+	if !official || !billing_setting.ValidVideoTokenPrice(price.USDPerMillionTokens) || !billing_setting.ValidVideoInputPrice(price.WithVideoUSDPerMillionTokens) {
 		return VideoSalesFacts{}, fmt.Errorf("%w: model %s", ErrVideoSalesPriceInvalid, model)
 	}
-	return VideoSalesFacts{Model: model, Seconds: seconds, Resolution: tier, USDPerSecond: price.USDPerSecond, InputVideoUSDPerSecond: price.InputVideoUSDPerSecond, OfficialReferenceBilling: sales.OfficialReferenceBilling}, nil
+	// A size is billed as given; otherwise resolution + ratio look up the
+	// official size table.
+	if width == 0 {
+		ratio := ""
+		for _, name := range []string{"ratio", "aspect_ratio"} {
+			raw, present := fields[name]
+			if !present {
+				continue
+			}
+			value, isString := raw.(string)
+			value = strings.ToLower(strings.TrimSpace(value))
+			if !isString || value == "" {
+				return VideoSalesFacts{}, fmt.Errorf("%s must be a ratio such as 16:9", name)
+			}
+			if ratio != "" && ratio != value {
+				return VideoSalesFacts{}, errors.New("ratio and aspect_ratio conflict")
+			}
+			ratio = value
+		}
+		var known bool
+		width, height, known = billing_setting.VideoTokenDimensions(profile, tier, ratio)
+		if !known {
+			return VideoSalesFacts{}, fmt.Errorf("ratio %q is not supported", ratio)
+		}
+	}
+	// Bounds the token multiplier; checked by division so huge sizes cannot overflow.
+	if width > maxPixels/height {
+		return VideoSalesFacts{}, fmt.Errorf("size exceeds the largest %s output", tier)
+	}
+	facts.PricingUnit, facts.Width, facts.Height, facts.FPS = billing_setting.VideoPricingUnitToken, width, height, billing_setting.VideoTokenFPS
+	facts.USDPerMillionTokens, facts.WithVideoUSDPerMillionTokens = price.USDPerMillionTokens, price.WithVideoUSDPerMillionTokens
+	return facts, nil
 }
 
 // EstimateVideoSell estimates the USD sale of one candidate: plugin executes

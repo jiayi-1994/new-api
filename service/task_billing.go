@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -77,6 +78,23 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 			other.SetPublic("usage_facts", snap.UsageFacts)
 		}
 		setTaskImageCount(other, snap.UsageFacts["image_count"])
+		// Token-priced unified video: the unit prices and output size the
+		// token facts were computed with, so log views need not parse the
+		// expression. Public prices only; no upstream detail.
+		if sales, unified := GetVideoSalesFacts(c); unified && snap.SalesSource == billingexpr.SalesSourceVideoRequest && sales.tokenPriced() {
+			videoSales := map[string]any{
+				"unit":                              billing_setting.VideoPricingUnitToken,
+				"usd_per_million_tokens":            sales.USDPerMillionTokens,
+				"with_video_usd_per_million_tokens": sales.WithVideoUSDPerMillionTokens,
+				"width":                             sales.Width,
+				"height":                            sales.Height,
+				"fps":                               sales.FPS,
+			}
+			if sales.OfficialReferenceBilling {
+				videoSales["official_reference_billing"] = true
+			}
+			other.SetPublic("video_sales", videoSales)
+		}
 	} else {
 		setTaskImageCount(other, info.PriceData.OtherRatios()["image_count"])
 	}

@@ -19,17 +19,21 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
-  videoInputSecondPrice,
-  videoInputTokenPrice,
-  videoInputTokensPerSecond,
+  VIDEO_TOKEN_DIMENSIONS,
+  videoSecondPrice,
+  videoTokenPrice,
+  videoTokensPerSecond,
+  type VideoDimensionProfile,
 } from '@/features/pricing/lib/price'
-import type { VideoSalesModel } from '@/features/pricing/types'
+import type { VideoSalesModel, VideoSalesTier } from '@/features/pricing/types'
 
 import {
   asciiFoldVideoModelName,
   canonicalVideoSalesTier,
   MAX_VIDEO_SALES_SECONDS,
 } from './video-sales-config'
+
+export type VideoPricingUnit = 'second' | 'token'
 
 export function parseVideoSalesSeconds(value: string): number[] | null {
   if (!/^\s*\d+(?:[\s,]+\d+)*\s*$/.test(value)) return null
@@ -47,18 +51,23 @@ export function parseVideoSalesSeconds(value: string): number[] | null {
     : null
 }
 
-/** Tiers with an official token rate take the reference video price per 1M tokens. */
-export function videoSalesInputTokensPerSecond(
-  resolution: string
-): number | null {
-  const tier = canonicalVideoSalesTier(resolution)
-  return tier ? videoInputTokensPerSecond(tier) : null
-}
-
 export function isInputVideoPrice(value: string): boolean {
   return (
     value.trim() !== '' && Number.isFinite(Number(value)) && Number(value) >= 0
   )
+}
+
+export function isPositivePrice(value: string): boolean {
+  return isInputVideoPrice(value) && Number(value) > 0
+}
+
+/** The official output sizes a tier is token-priced with, or null outside the profile's table. */
+export function videoSalesTokenSizes(
+  resolution: string,
+  profile: VideoDimensionProfile
+): Array<[number, number]> | null {
+  const tier = canonicalVideoSalesTier(resolution)
+  return (tier && VIDEO_TOKEN_DIMENSIONS[profile][tier]) || null
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
@@ -77,6 +86,8 @@ export function createVideoSalesFormSchema(t: Translate) {
             ),
           disabled: z.boolean(),
           officialReferenceBilling: z.boolean(),
+          pricingUnit: z.enum(['second', 'token']),
+          dimensionProfile: z.enum(['seedance-2.0', 'seedance-2.5']),
           tiers: z
             .array(
               z.object({
@@ -86,18 +97,11 @@ export function createVideoSalesFormSchema(t: Translate) {
                     (value) => canonicalVideoSalesTier(value) !== null,
                     t('Enter a resolution such as 720p, 1080p, or 4k')
                   ),
-                price: z
-                  .string()
-                  .refine(
-                    (value) =>
-                      value.trim() !== '' &&
-                      Number.isFinite(Number(value)) &&
-                      Number(value) > 0,
-                    t('Price per second must be a positive number')
-                  ),
-                // Validated in superRefine against the field the tier shows.
+                // Prices are validated in superRefine against the model's unit.
+                price: z.string(),
                 inputPrice: z.string(),
-                inputTokenPrice: z.string(),
+                tokenPrice: z.string(),
+                withVideoTokenPrice: z.string(),
                 seconds: z
                   .string()
                   .refine(
@@ -125,28 +129,40 @@ export function createVideoSalesFormSchema(t: Translate) {
           })
         }
         models.add(folded)
+        const tokenPriced = model.pricingUnit === 'token'
         const tiers = new Set<string>()
         model.tiers.forEach((tier, tierIndex) => {
+          const path = ['models', index, 'tiers', tierIndex]
           // A cleared field is an error, never a silent free price.
-          const tokenPriced =
-            videoSalesInputTokensPerSecond(tier.resolution) !== null
-          const priceField = tokenPriced ? 'inputTokenPrice' : 'inputPrice'
-          if (!isInputVideoPrice(tier[priceField])) {
+          const basePrice = tokenPriced ? 'tokenPrice' : 'price'
+          if (!isPositivePrice(tier[basePrice])) {
             context.addIssue({
               code: 'custom',
-              path: ['models', index, 'tiers', tierIndex, priceField],
+              path: [...path, basePrice],
+              message: tokenPriced
+                ? t('Price per 1M tokens must be a positive number')
+                : t('Price per second must be a positive number'),
+            })
+          }
+          const referencePrice = tokenPriced
+            ? 'withVideoTokenPrice'
+            : 'inputPrice'
+          if (!isInputVideoPrice(tier[referencePrice])) {
+            context.addIssue({
+              code: 'custom',
+              path: [...path, referencePrice],
               message: t(
                 'Input video price must be 0 or more; 0 means no extra charge'
               ),
             })
           } else if (
             model.officialReferenceBilling &&
-            Number(tier[priceField]) === 0
+            Number(tier[referencePrice]) === 0
           ) {
             // The with-reference price bills the whole order; 0 would make it free.
             context.addIssue({
               code: 'custom',
-              path: ['models', index, 'tiers', tierIndex, priceField],
+              path: [...path, referencePrice],
               message: t(
                 'Official reference billing needs a positive with-reference price'
               ),
@@ -154,10 +170,29 @@ export function createVideoSalesFormSchema(t: Translate) {
           }
           const canonical = canonicalVideoSalesTier(tier.resolution)
           if (!canonical) return
+          if (canonical === '4k' && model.dimensionProfile === 'seedance-2.5') {
+            context.addIssue({
+              code: 'custom',
+              path: [...path, 'resolution'],
+              message: t('Seedance 2.5 has no 4k output'),
+            })
+          } else if (
+            tokenPriced &&
+            !videoSalesTokenSizes(canonical, model.dimensionProfile)
+          ) {
+            // Token pricing needs an official output size to count tokens.
+            context.addIssue({
+              code: 'custom',
+              path: [...path, 'resolution'],
+              message: t(
+                'Token pricing supports only 480p, 720p, 1080p and 4k'
+              ),
+            })
+          }
           if (tiers.has(canonical)) {
             context.addIssue({
               code: 'custom',
-              path: ['models', index, 'tiers', tierIndex, 'resolution'],
+              path: [...path, 'resolution'],
               message: t(
                 'Resolution is duplicated; 2160p and 4k are the same tier'
               ),
@@ -172,6 +207,7 @@ export function createVideoSalesFormSchema(t: Translate) {
 export type VideoSalesFormValues = z.infer<
   ReturnType<typeof createVideoSalesFormSchema>
 >
+type VideoSalesFormModel = VideoSalesFormValues['models'][number]
 
 export function videoSalesFormValues(
   sales: Record<string, VideoSalesModel>
@@ -181,22 +217,57 @@ export function videoSalesFormValues(
       name,
       disabled: model.disabled ?? false,
       officialReferenceBilling: model.official_reference_billing ?? false,
-      tiers: Object.entries(model.resolutions).map(([resolution, tier]) => {
-        const inputPrice = tier.input_video_usd_per_second ?? 0
-        const tokensPerSecond = videoSalesInputTokensPerSecond(resolution)
-        return {
-          resolution,
-          price: String(tier.usd_per_second),
-          inputPrice: String(inputPrice),
-          inputTokenPrice:
-            tokensPerSecond === null
-              ? ''
-              : String(videoInputTokenPrice(inputPrice, tokensPerSecond)),
-          seconds: tier.seconds.join(', '),
-        }
-      }),
+      pricingUnit: model.pricing_unit ?? 'second',
+      dimensionProfile: model.dimension_profile ?? 'seedance-2.0',
+      tiers: Object.entries(model.resolutions).map(([resolution, tier]) => ({
+        resolution,
+        price: String(tier.usd_per_second),
+        inputPrice: String(tier.input_video_usd_per_second ?? 0),
+        tokenPrice: String(tier.usd_per_million_tokens ?? ''),
+        withVideoTokenPrice: String(
+          tier.with_video_usd_per_million_tokens ?? 0
+        ),
+        seconds: tier.seconds.join(', '),
+      })),
     })),
   }
+}
+
+/**
+ * Tiers prefilled for a pricing unit switch: each price is converted at the
+ * tier's 16:9 token rate for the administrator to confirm. A tier without an
+ * official size, or with an invalid source price, is left empty to fill in.
+ */
+export function videoSalesTiersForUnit(
+  model: VideoSalesFormModel,
+  unit: VideoPricingUnit
+): VideoSalesFormModel['tiers'] {
+  return model.tiers.map((tier) => {
+    const canonical = canonicalVideoSalesTier(tier.resolution)
+    const rate = canonical
+      ? videoTokensPerSecond(canonical, model.dimensionProfile)
+      : null
+    const convert = (value: string, toToken: boolean) => {
+      if (rate === null || !isInputVideoPrice(value)) return ''
+      return String(
+        toToken
+          ? videoTokenPrice(Number(value), rate)
+          : videoSecondPrice(Number(value), rate)
+      )
+    }
+    if (unit === 'token') {
+      return {
+        ...tier,
+        tokenPrice: convert(tier.price, true),
+        withVideoTokenPrice: convert(tier.inputPrice, true),
+      }
+    }
+    return {
+      ...tier,
+      price: convert(tier.tokenPrice, false),
+      inputPrice: convert(tier.withVideoTokenPrice, false),
+    }
+  })
 }
 
 /** Called only after form validation; carries every model into the whole-table option. */
@@ -208,28 +279,36 @@ export function videoSalesFromForm(
       model.name,
       {
         disabled: model.disabled,
-        // Omitted when off, like the server's omitempty.
+        // Omitted when off or default, like the server's omitempty.
         ...(model.officialReferenceBilling && {
           official_reference_billing: true,
         }),
+        ...(model.pricingUnit === 'token' && { pricing_unit: 'token' }),
+        ...(model.dimensionProfile === 'seedance-2.5' && {
+          dimension_profile: 'seedance-2.5',
+        }),
         resolutions: Object.fromEntries(
           model.tiers.map((tier) => {
-            const tokensPerSecond = videoSalesInputTokensPerSecond(
-              tier.resolution
-            )
+            const seconds = parseVideoSalesSeconds(tier.seconds) ?? []
+            // A token tier sells no seconds; 0 is what the server stores.
+            const price: VideoSalesTier =
+              model.pricingUnit === 'token'
+                ? {
+                    usd_per_second: 0,
+                    usd_per_million_tokens: Number(tier.tokenPrice),
+                    with_video_usd_per_million_tokens: Number(
+                      tier.withVideoTokenPrice
+                    ),
+                    seconds,
+                  }
+                : {
+                    usd_per_second: Number(tier.price),
+                    input_video_usd_per_second: Number(tier.inputPrice),
+                    seconds,
+                  }
             return [
               canonicalVideoSalesTier(tier.resolution) ?? tier.resolution,
-              {
-                usd_per_second: Number(tier.price),
-                input_video_usd_per_second:
-                  tokensPerSecond === null
-                    ? Number(tier.inputPrice)
-                    : videoInputSecondPrice(
-                        Number(tier.inputTokenPrice),
-                        tokensPerSecond
-                      ),
-                seconds: parseVideoSalesSeconds(tier.seconds) ?? [],
-              },
+              price,
             ]
           })
         ),

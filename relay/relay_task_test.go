@@ -452,7 +452,34 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 		wantExpr      string  // empty = output seconds only
 		wantBillable  float64 // charged input seconds; 0 = no billable fact
 		wantUSD       float64 // before the group ratio
+		// Token pricing at the frozen output size (default 1280x720, 24 fps).
+		tokenPrice, withVideoTokenPrice float64 // nonzero tokenPrice = token pricing
+		width, height                   int
+		wantInputTokens                 float64
+		wantClamp                       bool
 	}{
+		// Ark calculator cases (PLAN §1). 1280 × 720 × 24 × 5 / 1024 = 108,000 tokens × 46.3 / 1M.
+		{name: "token: output only", tokenGroup: "default", frozen: true, outputSeconds: 5, tokenPrice: 46.3,
+			wantExpr: `tier("720p", u("video_tokens") * 46.3 / 1000000)`, wantUSD: 5.0004},
+		// 1112 × 834 × 24 × 5 / 1024 = 108,680.625 tokens, never rounded.
+		{name: "token: fractional tokens are kept", tokenGroup: "default", frozen: true, outputSeconds: 5, tokenPrice: 46, width: 1112, height: 834,
+			wantExpr: `tier("720p", u("video_tokens") * 46 / 1000000)`, wantUSD: 4.99930875},
+		// 15 s + max(5, 10) s = 25 s = 540,000 tokens × 42 / 1M (the original screenshot).
+		{name: "token: official 15s output with 5s reference", tokenGroup: "default", frozen: true, outputSeconds: 15, tokenPrice: 46.3, withVideoTokenPrice: 42, inputSeconds: seconds(5), official: true,
+			wantExpr: `tier("720p", (u("video_tokens") + u("input_video_tokens")) * 42 / 1000000)`, wantBillable: 10, wantInputTokens: 216000, wantUSD: 22.68},
+		// 5 s + max(2, 4) s = 9 s = 194,400 tokens × 28 / 1M.
+		{name: "token: official 5s output with 2s reference", tokenGroup: "default", frozen: true, outputSeconds: 5, tokenPrice: 46, withVideoTokenPrice: 28, inputSeconds: seconds(2), official: true,
+			wantExpr: `tier("720p", (u("video_tokens") + u("input_video_tokens")) * 28 / 1000000)`, wantBillable: 4, wantInputTokens: 86400, wantUSD: 5.4432},
+		// 6 s + max(2, 4) s = 10 s = 216,000 tokens × 42 / 1M.
+		{name: "token: official 6s output with 2s reference", tokenGroup: "default", frozen: true, outputSeconds: 6, tokenPrice: 46.3, withVideoTokenPrice: 42, inputSeconds: seconds(2), official: true,
+			wantExpr: `tier("720p", (u("video_tokens") + u("input_video_tokens")) * 42 / 1000000)`, wantBillable: 4, wantInputTokens: 86400, wantUSD: 9.072},
+		// 108,000 × 46.3 / 1M + 324,000 × 28 / 1M: the reference fee is added.
+		{name: "token: added reference fee", tokenGroup: "default", frozen: true, outputSeconds: 5, tokenPrice: 46.3, withVideoTokenPrice: 28, inputSeconds: seconds(15),
+			wantExpr: `tier("720p", u("video_tokens") * 46.3 / 1000000 + u("input_video_tokens") * 28 / 1000000)`, wantBillable: 15, wantInputTokens: 324000, wantUSD: 14.0724},
+		{name: "token: one group ratio discounts the whole order", tokenGroup: "default", frozen: true, outputSeconds: 15, tokenPrice: 46.3, withVideoTokenPrice: 42, inputSeconds: seconds(5), official: true, usingGroup: "discount",
+			wantExpr: `tier("720p", (u("video_tokens") + u("input_video_tokens")) * 42 / 1000000)`, wantBillable: 10, wantInputTokens: 216000, wantUSD: 22.68},
+		{name: "token: an oversized sale saturates and is audited", tokenGroup: "default", frozen: true, outputSeconds: 5, tokenPrice: 1e9,
+			wantExpr: `tier("720p", u("video_tokens") * 1000000000 / 1000000)`, wantUSD: 1.08e8, wantClamp: true},
 		{name: "frozen sale", tokenGroup: "default", frozen: true, wantUSD: 0.3},
 		// 15 × 0.02 + 8.25 × 0.2: the input fee is added, not a ratio.
 		{name: "frozen sale with measured input video", tokenGroup: "default", frozen: true, inputPrice: 0.2, inputSeconds: seconds(8.25),
@@ -520,8 +547,13 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			c.Set(pluginruntime.ContextKeyPinnedEndpoint, endpoint)
 			common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, decision)
 			if tc.frozen {
-				service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "video-unified", Seconds: cmp.Or(tc.outputSeconds, 15), Resolution: "720p", USDPerSecond: cmp.Or(tc.outputPrice, 0.02),
-					InputVideoUSDPerSecond: tc.inputPrice, InputVideoSeconds: tc.inputSeconds, OfficialReferenceBilling: tc.official})
+				sales := service.VideoSalesFacts{Model: "video-unified", Seconds: cmp.Or(tc.outputSeconds, 15), Resolution: "720p", USDPerSecond: cmp.Or(tc.outputPrice, 0.02),
+					InputVideoUSDPerSecond: tc.inputPrice, InputVideoSeconds: tc.inputSeconds, OfficialReferenceBilling: tc.official}
+				if tc.tokenPrice > 0 {
+					sales.PricingUnit, sales.Width, sales.Height, sales.FPS = billing_setting.VideoPricingUnitToken, cmp.Or(tc.width, 1280), cmp.Or(tc.height, 720), 24
+					sales.USDPerMillionTokens, sales.WithVideoUSDPerMillionTokens = tc.tokenPrice, tc.withVideoTokenPrice
+				}
+				service.SetVideoSalesFacts(c, sales)
 			}
 
 			_, taskErr := RelayTaskSubmit(c, info)
@@ -545,6 +577,15 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			if tc.wantBillable > 0 {
 				wantFacts["input_video_billable_seconds"] = tc.wantBillable
 			}
+			if tc.tokenPrice > 0 {
+				// Seconds stay logged next to the official token counts.
+				width, height := cmp.Or(tc.width, 1280), cmp.Or(tc.height, 720)
+				wantFacts["video_tokens"] = float64(width*height*24*cmp.Or(tc.outputSeconds, 15)) / 1024
+				wantFacts["output_width"], wantFacts["output_height"], wantFacts["fps"] = float64(width), float64(height), float64(24)
+				if tc.wantInputTokens > 0 {
+					wantFacts["input_video_tokens"] = tc.wantInputTokens
+				}
+			}
 			groupRatio := ratio_setting.GetGroupRatio(usingGroup)
 			assert.Equal(t, wantExpr, snap.ExprString)
 			assert.Equal(t, wantFacts, snap.UsageFacts)
@@ -553,6 +594,7 @@ func TestRelayTaskSubmitPricesUnifiedVideoSaleFromFrozenFacts(t *testing.T) {
 			// One group ratio discounts the whole sale, reference fee included.
 			assert.Equal(t, common.QuotaRound(tc.wantUSD*groupRatio*common.QuotaPerUnit), snap.EstimatedQuotaAfterGroup)
 			assert.Equal(t, snap.EstimatedQuotaAfterGroup, info.PriceData.Quota)
+			assert.Equal(t, tc.wantClamp, info.QuotaClamp != nil, "a saturated sale is recorded for the saturation audit")
 
 			// Completion usage reported by the executing plugin never changes a frozen sale.
 			result, usage, err := service.EvaluateTaskCompletionUsage(snap, map[string]any{"requests": float64(1), "seconds": float64(5), "input_video_seconds": float64(99)})

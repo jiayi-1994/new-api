@@ -60,6 +60,10 @@ export type VideoSalesTier = {
   /** Added per second of input video (the whole order's with-video price under
    * official reference billing); absent on older servers means free. */
   input_video_usd_per_second?: number
+  /** Token pricing: output tokens price; the per-second prices are then unused. */
+  usd_per_million_tokens?: number
+  /** Token pricing: reference video tokens price (the whole order's with-video price under official reference billing). */
+  with_video_usd_per_million_tokens?: number
   seconds: number[]
 }
 
@@ -67,6 +71,10 @@ export type VideoSalesModel = {
   disabled?: boolean
   /** With reference video, bills the whole order at the with-video price and reference at no less than ceil(2/3) of the output. */
   official_reference_billing?: boolean
+  /** Absent means per second. */
+  pricing_unit?: 'token'
+  /** Official size table for token pricing; absent means seedance-2.0. */
+  dimension_profile?: 'seedance-2.5'
   resolutions: Record<string, VideoSalesTier>
 }
 

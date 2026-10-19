@@ -205,137 +205,104 @@ describe('usage facts billing details', () => {
     ).toBeTruthy()
   })
 
-  test('shows reference video tokens, token price and cost for a unified video log', () => {
+  // Ark calculator: 15 s output + 5 s reference bills max(5, 10) = 10 s, so
+  // 324,000 + 216,000 = 540,000 tokens × $42 / 1M = $22.68.
+  test('shows output and reference tokens, prices and cost from a token-priced video log', () => {
     queryClients.push(
       renderDetails({
         group_ratio: 2,
         billing_mode: 'tiered_expr',
         expr_b64: btoa(
-          'tier("720p", u("seconds") * 0.56 + u("input_video_seconds") * 0.0864)'
+          'tier("720p", (u("video_tokens") + u("input_video_tokens")) * 42 / 1000000)'
         ),
         matched_tier: '720p',
         usage_facts: {
-          seconds: 10,
+          seconds: 15,
           resolution: '720p',
-          input_video_seconds: 8.25,
+          video_tokens: 324_000,
+          output_width: 1280,
+          output_height: 720,
+          fps: 24,
+          input_video_seconds: 5,
+          input_video_billable_seconds: 10,
+          input_video_tokens: 216_000,
+        },
+        video_sales: {
+          unit: 'token',
+          usd_per_million_tokens: 46.3,
+          with_video_usd_per_million_tokens: 42,
+          width: 1280,
+          height: 720,
+          fps: 24,
+          official_reference_billing: true,
         },
       })
     )
 
-    expect(rowValue('Reference video tokens')).toBe('178,200')
-    expect(rowValue('Reference video price')).toBe('$4 / 1M tokens')
-    expect(rowValue('Reference video cost')).toBe('$0.7128')
+    expect(rowValue('Output size')).toBe('1280×720 · 24 fps')
+    expect(rowValue('Output tokens')).toBe('324,000')
+    expect(rowValue('No-reference price')).toBe('$46.3 / 1M tokens')
+    expect(rowValue('Reference video tokens')).toBe('216,000')
+    expect(rowValue('With-reference order price')).toBe('$42 / 1M tokens')
+    expect(rowValue('Reference video minimum')).toBe(
+      'Reference video is shorter than 2/3 of the output; billed as 10 seconds'
+    )
+    expect(rowValue('Video cost before group ratio')).toBe('$22.68')
   })
 
-  test('prices the billable reference seconds of an added-fee expression', () => {
+  test('prices output tokens alone when a token-priced log has no reference video', () => {
     queryClients.push(
       renderDetails({
         billing_mode: 'tiered_expr',
-        expr_b64: btoa(
-          'tier("720p", u("seconds") * 0.56 + u("input_video_billable_seconds") * 0.0864)'
-        ),
+        expr_b64: btoa('tier("720p", u("video_tokens") * 46.3 / 1000000)'),
         matched_tier: '720p',
         usage_facts: {
-          seconds: 10,
+          seconds: 5,
           resolution: '720p',
-          input_video_seconds: 8.25,
-          input_video_billable_seconds: 8.25,
+          video_tokens: 108_000,
+          output_width: 1280,
+          output_height: 720,
+          fps: 24,
+        },
+        video_sales: {
+          unit: 'token',
+          usd_per_million_tokens: 46.3,
+          with_video_usd_per_million_tokens: 0,
+          width: 1280,
+          height: 720,
+          fps: 24,
         },
       })
     )
 
-    expect(rowValue('Reference video tokens')).toBe('178,200')
-    expect(rowValue('Reference video price')).toBe('$4 / 1M tokens')
-    expect(rowValue('Reference video cost')).toBe('$0.7128')
-    expect(screen.queryByText('With-reference order')).toBeNull()
-  })
-
-  test.each([
-    {
-      measured: 2,
-      billed: 10,
-      details:
-        'Output 15 s + reference billed 10 s (measured 2 s) = 540,000 tokens × $28 / 1M tokens',
-      minimum:
-        'Reference video is shorter than 2/3 of the output; billed as 10 seconds',
-    },
-    {
-      measured: 15,
-      billed: 15,
-      details:
-        'Output 15 s + reference billed 15 s (measured 15 s) = 648,000 tokens × $28 / 1M tokens',
-      minimum: null,
-    },
-  ])(
-    'bills the whole order at the with-reference price for $measured s of reference',
-    (row) => {
-      queryClients.push(
-        renderDetails({
-          billing_mode: 'tiered_expr',
-          expr_b64: btoa(
-            'tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)'
-          ),
-          matched_tier: '720p',
-          usage_facts: {
-            seconds: 15,
-            resolution: '720p',
-            input_video_seconds: row.measured,
-            input_video_billable_seconds: row.billed,
-          },
-        })
-      )
-
-      // The generic tier parser does not read this shape; only the tier shows.
-      expect(rowValue('Matched Tier')).toBe('720p')
-      expect(rowValue('With-reference order')).toBe(row.details)
-      if (row.minimum) {
-        expect(rowValue('Reference video minimum')).toBe(row.minimum)
-      } else {
-        expect(screen.queryByText('Reference video minimum')).toBeNull()
-      }
-      expect(screen.queryByText('Reference video cost')).toBeNull()
-    }
-  )
-
-  test('shows only the reference video tokens when the expression has no input price', () => {
-    queryClients.push(
-      renderDetails({
-        billing_mode: 'tiered_expr',
-        expr_b64: btoa('tier("720p", u("seconds") * 0.56)'),
-        matched_tier: '720p',
-        usage_facts: {
-          seconds: 10,
-          resolution: '720p',
-          input_video_seconds: 8.25,
-        },
-      })
-    )
-
-    expect(rowValue('Reference video tokens')).toBe('178,200')
-    expect(screen.queryByText('Reference video price')).toBeNull()
-    expect(screen.queryByText('Reference video cost')).toBeNull()
-  })
-
-  test.each([
-    [
-      'a tier without a token rate',
-      { resolution: '540p', input_video_seconds: 8 },
-    ],
-    ['no reference video', { resolution: '720p' }],
-  ])('hides reference video rows for %s', (_, facts) => {
-    queryClients.push(
-      renderDetails({
-        billing_mode: 'tiered_expr',
-        expr_b64: btoa(
-          'tier("720p", u("seconds") * 0.56 + u("input_video_seconds") * 0.0864)'
-        ),
-        matched_tier: facts.resolution,
-        usage_facts: { seconds: 10, ...facts },
-      })
-    )
-
+    expect(rowValue('Output tokens')).toBe('108,000')
+    expect(rowValue('Video cost before group ratio')).toBe('$5.0004')
     expect(screen.queryByText('Reference video tokens')).toBeNull()
-    expect(screen.queryByText('Reference video price')).toBeNull()
+    expect(screen.queryByText('Reference video minimum')).toBeNull()
+  })
+
+  test('shows only the seconds facts for a per-second or older video log', () => {
+    queryClients.push(
+      renderDetails({
+        billing_mode: 'tiered_expr',
+        expr_b64: btoa(
+          'tier("720p", (u("seconds") + u("input_video_billable_seconds")) * 0.6048)'
+        ),
+        matched_tier: '720p',
+        usage_facts: {
+          seconds: 15,
+          resolution: '720p',
+          input_video_seconds: 2,
+          input_video_billable_seconds: 10,
+        },
+      })
+    )
+
+    expect(rowValue('Matched Tier')).toBe('720p')
+    expect(rowValue('input_video_billable_seconds')).toBe('10')
+    expect(screen.queryByText('Output tokens')).toBeNull()
+    expect(screen.queryByText('Reference video tokens')).toBeNull()
+    expect(screen.queryByText('With-reference order')).toBeNull()
   })
 
   test('does not render usage parameter rows when usage_facts is absent', () => {
