@@ -302,6 +302,7 @@ const SENSITIVE_FORM_FIELDS = [
   'http_protocol',
   'http2_connection_shards',
   'pass_through_body_enabled',
+  'error_passthrough_enabled',
   'responses_websocket_enabled',
   'system_prompt',
   'system_prompt_override',
@@ -1900,6 +1901,32 @@ export function ChannelMutateDrawer({
                   if (confirmed) field.onChange(true)
                 })
               }}
+            />
+          </FormControl>
+        </FormItem>
+      )}
+    />
+  )
+
+  const errorPassthroughFields = (
+    <FormField
+      control={form.control}
+      name='error_passthrough_enabled'
+      render={({ field }) => (
+        <FormItem className='flex items-center justify-between px-4 py-3'>
+          <div className='space-y-0.5'>
+            <FormLabel>{t('Pass Through Upstream Errors')}</FormLabel>
+            <FormDescription>
+              {t(
+                "Show this channel's upstream error message to unified video model callers instead of the generic failure text; URLs and quota or balance details stay hidden"
+              )}
+            </FormDescription>
+          </div>
+          <FormControl>
+            <Switch
+              disabled={sensitiveLocked}
+              checked={field.value}
+              onCheckedChange={field.onChange}
             />
           </FormControl>
         </FormItem>
@@ -4686,6 +4713,7 @@ export function ChannelMutateDrawer({
                 {thinkingFields}
                 {currentType !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
                   passthroughFields}
+                {errorPassthroughFields}
                 {systemPromptFields}
                 {systemPromptOverrideFields}
               </fieldset>

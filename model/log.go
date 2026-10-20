@@ -115,13 +115,17 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 	}
 }
 
+// UnifiedVideoRequestFailedMessage is the public wording of a unified video
+// sale failure whose cause must stay hidden from the buyer.
+const UnifiedVideoRequestFailedMessage = "视频生成请求失败，请稍后重试；如多次失败请联系管理员"
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelId = 0
 		logs[i].ChannelName = ""
 		logs[i].UpstreamRequestId = ""
 		if logs[i].Type == LogTypeError && gjson.Get(logs[i].Other, "sales_source").String() == billingexpr.SalesSourceVideoRequest {
-			logs[i].Content = "Video request failed"
+			logs[i].Content = UnifiedVideoRequestFailedMessage
 		}
 		logs[i].Other = formatLogOtherJSON(logs[i].Other, logOtherVisibilityUser)
 	}

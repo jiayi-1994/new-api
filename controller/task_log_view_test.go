@@ -10,12 +10,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -287,7 +289,7 @@ func TestUnifiedVideoErrorsKeepDiagnosticsOutOfUserViews(t *testing.T) {
 	userLogs, queryErr := model.GetLogByTokenId(99)
 	require.NoError(t, queryErr)
 	require.Len(t, userLogs, 1)
-	assert.Equal(t, "Video request failed", userLogs[0].Content)
+	assert.Equal(t, model.UnifiedVideoRequestFailedMessage, userLogs[0].Content)
 	userJSON, marshalErr := common.Marshal(userLogs)
 	require.NoError(t, marshalErr)
 	assert.NotContains(t, string(userJSON), "private-")
@@ -305,9 +307,96 @@ func TestUnifiedVideoErrorsKeepDiagnosticsOutOfUserViews(t *testing.T) {
 	respondTaskSubmissionError(c, taskErr)
 	assert.Equal(t, http.StatusBadGateway, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), "private-")
-	assert.Contains(t, recorder.Body.String(), "Video request failed")
+	assert.Contains(t, recorder.Body.String(), "视频生成服务暂时不可用，请稍后重试")
+	assert.Contains(t, recorder.Body.String(), `"code":"video_request_failed"`)
 	assert.Equal(t, "private-plugin-error", taskErr.Code, "public projection must not mutate diagnostics")
 	assert.Contains(t, taskErr.Message, "private-provider")
+}
+
+func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
+	cases := []struct {
+		name        string
+		passthrough bool
+		taskErr     *taskdto.TaskError
+		wantMessage string
+		wantAbsent  string
+	}{
+		{
+			name:        "off keeps upstream validation failures generic",
+			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"prompt rejected by private-provider"}}`), "fail_to_fetch_task", http.StatusBadRequest),
+			wantMessage: "视频生成请求未通过上游校验，请调整提示词或参数后重试",
+			wantAbsent:  "private-provider",
+		},
+		{
+			name:        "on shows the upstream error message",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"prompt rejected: unsafe content","type":"invalid_request_error"}}`), "fail_to_fetch_task", http.StatusBadRequest),
+			wantMessage: "prompt rejected: unsafe content",
+			wantAbsent:  "invalid_request_error",
+		},
+		{
+			name:        "on shows a downstream gateway task error message",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapper(errors.New(`{"code":"video_request_failed","message":"视频生成服务暂时不可用","data":null}`), "fail_to_fetch_task", http.StatusBadGateway),
+			wantMessage: "视频生成服务暂时不可用",
+			wantAbsent:  `"data":null,"message"`,
+		},
+		{
+			name:        "on hides dollar amounts",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"Your account balance is $1.800000, request needs $2.4"}}`), "fail_to_fetch_task", http.StatusForbidden),
+			wantMessage: "上游账户状态异常，暂时无法处理该请求，请联系管理员",
+			wantAbsent:  "1.800000",
+		},
+		{
+			name:        "on hides Chinese quota wording",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapper(errors.New("当前额度不足，剩余 ￥1.800000，请充值"), "fail_to_fetch_task", http.StatusForbidden),
+			wantMessage: "上游账户状态异常，暂时无法处理该请求，请联系管理员",
+			wantAbsent:  "额度",
+		},
+		{
+			name:        "on masks upstream URLs",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"GET https://private-upstream.invalid/v1/videos returned 502"}}`), "fail_to_fetch_task", http.StatusBadGateway),
+			wantMessage: "GET https://***.invalid/***/*** returned 502",
+			wantAbsent:  "private-upstream",
+		},
+		{
+			name:        "on keeps local rejections hidden",
+			passthrough: true,
+			taskErr:     service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "origin_task_channel_disabled", http.StatusBadRequest),
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
+			wantAbsent:  "origin task",
+		},
+		{
+			name:        "on reports the buyer's own quota plainly",
+			passthrough: true,
+			taskErr:     service.TaskErrorFromAPIError(relaytypes.NewErrorWithStatusCode(errors.New("user quota is not enough"), relaytypes.ErrorCodeInsufficientUserQuota, http.StatusForbidden)),
+			wantMessage: "账户额度不足，请充值后重试",
+			wantAbsent:  "上游账户",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			c.Set(common.RequestIdKey, "req-passthrough")
+			service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "public-video", Seconds: 7, Resolution: "720p", USDPerSecond: 1})
+			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ErrorPassthroughEnabled: tc.passthrough})
+
+			respondTaskSubmissionError(c, tc.taskErr)
+
+			assert.Equal(t, tc.taskErr.StatusCode, recorder.Code)
+			var body map[string]any
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+			assert.Equal(t, "video_request_failed", body["code"])
+			assert.Nil(t, body["data"])
+			assert.Equal(t, tc.wantMessage+" (request id: req-passthrough)", body["message"])
+			assert.NotContains(t, recorder.Body.String(), tc.wantAbsent)
+		})
+	}
 }
 
 func TestUnifiedVideoCreateReceiptUsesOnlyPublicFields(t *testing.T) {

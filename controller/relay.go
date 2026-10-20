@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -850,7 +852,7 @@ func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 	if _, unified := service.GetVideoSalesFacts(c); unified {
 		publicError := *taskErr
 		publicError.Code = "video_request_failed"
-		publicError.Message = "Video request failed"
+		publicError.Message = common.MessageWithRequestId(unifiedVideoPublicErrorMessage(c, taskErr), c.GetString(common.RequestIdKey))
 		publicError.Data = nil
 		respondTaskError(c, &publicError)
 		return
@@ -859,6 +861,43 @@ func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 		return
 	}
 	respondTaskError(c, taskErr)
+}
+
+// upstreamQuotaMessagePattern spots upstream wording about the operator's own
+// account funds (额度/余额, "$1.800000", "insufficient credits"), which a buyer
+// of a unified video sale must never see.
+var upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|欠费|充值|扣费|\bquota\b|\bbalance\b|\binsufficient\b|\bcredits?\b|\bbilling\b|[$￥¥€£]\s*\d`)
+
+// unifiedVideoPublicErrorMessage projects a submission failure onto the public
+// unified video sale. The upstream message is shown only when the serving
+// channel opts in; even then its credentials and fund details stay hidden.
+func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) string {
+	userQuota := taskErr.Code == string(types.ErrorCodeInsufficientUserQuota) || taskErr.Code == string(types.ErrorCodePreConsumeTokenQuotaFailed)
+	if userQuota {
+		return "账户额度不足，请充值后重试"
+	}
+	setting, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	if setting.ErrorPassthroughEnabled && !taskErr.LocalError {
+		message := taskErr.Message
+		var body dto.GeneralErrorResponse
+		if common.UnmarshalJsonStr(message, &body) == nil {
+			if parsed := body.ToMessage(); parsed != "" {
+				message = parsed
+			}
+		}
+		if upstreamQuotaMessagePattern.MatchString(message) {
+			return "上游账户状态异常，暂时无法处理该请求，请联系管理员"
+		}
+		return common.MaskSensitiveInfo(message)
+	}
+	switch {
+	case taskErr.LocalError:
+		return model.UnifiedVideoRequestFailedMessage
+	case taskErr.StatusCode == http.StatusBadRequest, taskErr.StatusCode == http.StatusUnprocessableEntity:
+		return "视频生成请求未通过上游校验，请调整提示词或参数后重试"
+	default:
+		return "视频生成服务暂时不可用，请稍后重试"
+	}
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
