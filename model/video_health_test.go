@@ -911,3 +911,62 @@ func TestVideoHealthDatabase(t *testing.T) {
 		})
 	}
 }
+
+func TestChannelVideoSupplyDatabase(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var driver gorm.Dialector
+			switch dialect {
+			case "sqlite":
+				driver = sqlite.Open(filepath.Join(t.TempDir(), "supply.db"))
+			case "mysql":
+				dsn := os.Getenv("TEST_MYSQL_DSN")
+				if dsn == "" {
+					t.Skip("TEST_MYSQL_DSN is not configured")
+				}
+				driver = mysql.Open(dsn)
+			case "postgres":
+				dsn := os.Getenv("TEST_POSTGRES_DSN")
+				if dsn == "" {
+					t.Skip("TEST_POSTGRES_DSN is not configured")
+				}
+				driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+			}
+			db, err := gorm.Open(driver, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), NamingStrategy: schema.NamingStrategy{TablePrefix: "vs_supply_test_"}})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			previous, previousKind := DB, common.MainDatabaseType()
+			DB = db
+			common.SetMainDatabaseType(common.DatabaseType(dialect))
+			t.Cleanup(func() { DB = previous; common.SetMainDatabaseType(previousKind) })
+			models := []any{&ChannelVideoSupply{}}
+			require.NoError(t, db.Migrator().DropTable(models...))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(models...)) })
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(models...))
+			}
+			var dbVersion string
+			if dialect == "sqlite" {
+				require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&dbVersion).Error)
+			} else {
+				require.NoError(t, db.Raw("SELECT version()").Scan(&dbVersion).Error)
+			}
+			t.Logf("%s: %s", dialect, dbVersion)
+
+			require.NoError(t, AddChannelVideoSupply(7, 3000, 10), "first top-up creates the row")
+			require.NoError(t, AddChannelVideoSupply(7, -1, 11))
+			require.NoError(t, AddChannelVideoSupply(8, -2, 12), "a deduction before any top-up goes negative instead of failing")
+			supplies, err := GetChannelVideoSupplies([]int{7, 8, 9})
+			require.NoError(t, err)
+			assert.Equal(t, map[int]int64{7: 2999, 8: -2}, supplies, "channel 9 has no row")
+			var row ChannelVideoSupply
+			require.NoError(t, db.First(&row, "channel_id = ?", 7).Error)
+			assert.Equal(t, int64(11), row.UpdatedTime)
+			empty, err := GetChannelVideoSupplies(nil)
+			require.NoError(t, err)
+			assert.Empty(t, empty)
+		})
+	}
+}

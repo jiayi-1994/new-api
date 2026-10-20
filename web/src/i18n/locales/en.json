@@ -7288,5 +7288,18 @@
     "With-reference order price is per second of output plus billable reference video. It must be above 0.": "With-reference order price is per second of output plus billable reference video. It must be above 0.",
     "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}": "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}",
     "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}": "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}"
-  }
+  },
+  "Supply unit": "Supply unit",
+  "Purchase amount": "Purchase amount",
+  "Video count": "Video count",
+  "Stock the upstream can still deliver; scheduling skips the channel once it runs out": "Stock the upstream can still deliver; scheduling skips the channel once it runs out",
+  "Remaining supply": "Remaining supply",
+  "Supply added": "Supply added",
+  "Out of stock: scheduling skips this channel until supply is added": "Out of stock: scheduling skips this channel until supply is added",
+  "Only successful tasks consume supply; a negative amount corrects the balance": "Only successful tasks consume supply; a negative amount corrects the balance",
+  "Save the channel before adding supply": "Save the channel before adding supply",
+  "Amount (USD)": "Amount (USD)",
+  "Videos": "Videos",
+  "Add supply": "Add supply",
+  "Supply": "Supply"
 }

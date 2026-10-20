@@ -174,6 +174,22 @@ describe('video scheduling channel settings', () => {
     })
   })
 
+  test('a supply unit round-trips through the form and an unlimited draft saves no supply_unit', () => {
+    const stocked = transformChannelToFormDefaults(
+      channelWithSettings({
+        video_scheduling: { ...storedConfig, supply_unit: 'count' },
+      })
+    )
+    const draft = draftOf(channelFormSchema.parse(stocked))
+    expect(draft.supply_unit).toBe('count')
+    expect(savedSettings(draft).video_scheduling.supply_unit).toBe('count')
+
+    expect(storedDraft().supply_unit).toBe('')
+    expect(savedSettings(storedDraft()).video_scheduling).not.toHaveProperty(
+      'supply_unit'
+    )
+  })
+
   test('an untouched stored config saves back unchanged, keeping explicit zeros and unknown settings', () => {
     const validated = channelFormSchema.parse(storedForm())
     const settings = savedSettings(draftOf(validated))

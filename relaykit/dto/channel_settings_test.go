@@ -763,6 +763,8 @@ func TestVideoSchedulingConfigValidate(t *testing.T) {
 		{name: "quality above one", json: `{"quality":1.1}`, wantErr: "quality"},
 		{name: "negative capacity", json: `{"capacity":-1}`, wantErr: "capacity"},
 		{name: "padded capacity group", json: `{"capacity_group":" a"}`, wantErr: "capacity_group"},
+		{name: "supply units", json: `{"supply_unit":"count"}`},
+		{name: "unknown supply unit", json: `{"supply_unit":"videos"}`, wantErr: "supply_unit"},
 		{name: "max seconds over host limit", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"max_seconds":3601}}}`, wantErr: "seconds"},
 		{name: "min above max", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"min_seconds":10,"max_seconds":5}}}`, wantErr: "min_seconds"},
 		{name: "non-positive allowed seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds":[0]}}}`, wantErr: "allowed_seconds"},

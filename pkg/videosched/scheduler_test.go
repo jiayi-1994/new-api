@@ -1504,3 +1504,26 @@ func TestEvaluateProbeOnlyRelaxesHealthGates(t *testing.T) {
 		assert.Empty(t, byID(t, scores, 2).Reason, "an exhausted higher layer falls through to the gated lower one")
 	})
 }
+
+func TestOutOfStockGatesByQuoteInEveryEvaluator(t *testing.T) {
+	cands := demoCandidates(spec("720p", 5), 3)
+	short, exact, none, one := 1.19, 1.0, 0.0, 1.0
+	cands[0].SupplyUnit, cands[0].Supply = SupplyUSD, &short // ch1 quotes 1.20
+	cands[1].SupplyUnit, cands[1].Supply = SupplyUSD, &exact // ch2 quotes 1.00
+	cands[3].SupplyUnit, cands[3].Supply = SupplyCount, &none
+	cands[4].SupplyUnit, cands[4].Supply = SupplyCount, &one
+	for name, scores := range map[string][]Score{"evaluate": Evaluate(cands, gatePolicy), "probe": EvaluateProbe(cands, gatePolicy)} {
+		assert.Equal(t, "out of stock", byID(t, scores, 1).Reason, name)
+		assert.Empty(t, byID(t, scores, 2).Reason, name)
+		assert.Equal(t, "out of stock", byID(t, scores, 4).Reason, name)
+		assert.Empty(t, byID(t, scores, 5).Reason, name)
+	}
+
+	p := Policy{SelectionPolicy: PolicyStabilityCostV2, MinMarginRate: .1, MinGenRate: .8, MinOverallRate: .6, StabilityTolerance: .01, MinSamples: 20, Now: 4000, MaxCostUSD: bound, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
+	stocked, empty := stabilityTestCandidate(1, .5, 1000), stabilityTestCandidate(2, .5, 1000)
+	stocked.SupplyUnit, stocked.Supply = SupplyUSD, &exact
+	empty.SupplyUnit, empty.Supply = SupplyUSD, &none
+	scores := Evaluate([]Candidate{stocked, empty}, p)
+	assert.Empty(t, byID(t, scores, 1).Reason)
+	assert.Equal(t, "out of stock", byID(t, scores, 2).Reason)
+}

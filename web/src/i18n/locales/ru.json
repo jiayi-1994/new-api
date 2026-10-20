@@ -7288,5 +7288,18 @@
     "With-reference order price is per second of output plus billable reference video. It must be above 0.": "Цена заказа с референсом указывается за секунду вывода и оплачиваемого референсного видео. Она должна быть больше 0.",
     "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}": "{{resolution}} 16:9 × {{seconds}} с = {{tokens}} токенов = {{price}}",
     "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}": "{{resolution}} 16:9 × {{seconds}} с ≈ {{tokens}} токенов ≈ {{price}}"
-  }
+  },
+  "Supply unit": "Единица поставки",
+  "Purchase amount": "Сумма закупки",
+  "Video count": "Количество видео",
+  "Stock the upstream can still deliver; scheduling skips the channel once it runs out": "Остаток, который может поставить источник; когда он закончится, планировщик пропускает канал",
+  "Remaining supply": "Остаток поставки",
+  "Supply added": "Поставка добавлена",
+  "Out of stock: scheduling skips this channel until supply is added": "Нет в наличии: планировщик пропускает канал, пока не добавят поставку",
+  "Only successful tasks consume supply; a negative amount corrects the balance": "Только успешные задачи расходуют поставку; отрицательное значение корректирует остаток",
+  "Save the channel before adding supply": "Сохраните канал, прежде чем добавлять поставку",
+  "Amount (USD)": "Сумма (USD)",
+  "Videos": "Видео",
+  "Add supply": "Добавить поставку",
+  "Supply": "Поставка"
 }

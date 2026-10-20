@@ -358,6 +358,7 @@ func migrateDB() error {
 		&VideoHealthState{},
 		&VideoHealthAttempt{},
 		&VideoHealthRequest{},
+		&ChannelVideoSupply{},
 		&TaskPlugin{},
 		&Model{},
 		&Vendor{},

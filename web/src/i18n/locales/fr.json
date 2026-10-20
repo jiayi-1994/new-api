@@ -7288,5 +7288,18 @@
     "With-reference order price is per second of output plus billable reference video. It must be above 0.": "Le prix de commande avec référence s'applique par seconde de sortie et de vidéo de référence facturable. Il doit être supérieur à 0.",
     "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}": "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}",
     "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}": "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}"
-  }
+  },
+  "Supply unit": "Unité d'approvisionnement",
+  "Purchase amount": "Montant d'achat",
+  "Video count": "Nombre de vidéos",
+  "Stock the upstream can still deliver; scheduling skips the channel once it runs out": "Stock que l'amont peut encore livrer ; une fois épuisé, la planification ignore le canal",
+  "Remaining supply": "Stock restant",
+  "Supply added": "Stock ajouté",
+  "Out of stock: scheduling skips this channel until supply is added": "Rupture de stock : la planification ignore ce canal jusqu'à l'ajout de stock",
+  "Only successful tasks consume supply; a negative amount corrects the balance": "Seules les tâches réussies consomment le stock ; un montant négatif corrige le solde",
+  "Save the channel before adding supply": "Enregistrez le canal avant d'ajouter du stock",
+  "Amount (USD)": "Montant (USD)",
+  "Videos": "Vidéos",
+  "Add supply": "Ajouter du stock",
+  "Supply": "Stock"
 }

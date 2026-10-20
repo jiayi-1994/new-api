@@ -7288,5 +7288,18 @@
     "With-reference order price is per second of output plus billable reference video. It must be above 0.": "含参考整单价格按输出与计费参考视频的每秒计价，必须大于 0。",
     "{{resolution}} 16:9 × {{seconds}} s = {{tokens}} tokens = {{price}}": "{{resolution}} 16:9 × {{seconds}} 秒 = {{tokens}} Token = {{price}}",
     "{{resolution}} 16:9 × {{seconds}} s ≈ {{tokens}} tokens ≈ {{price}}": "{{resolution}} 16:9 × {{seconds}} 秒 ≈ {{tokens}} Token ≈ {{price}}"
-  }
+  },
+  "Supply unit": "供货单位",
+  "Purchase amount": "采购金额",
+  "Video count": "视频条数",
+  "Stock the upstream can still deliver; scheduling skips the channel once it runs out": "上游剩余可交付的供货量；用完后调度会跳过该渠道",
+  "Remaining supply": "剩余供货量",
+  "Supply added": "供货量已添加",
+  "Out of stock: scheduling skips this channel until supply is added": "已无货：添加供货量前调度会跳过该渠道",
+  "Only successful tasks consume supply; a negative amount corrects the balance": "只有成功的任务消耗供货量；负数用于修正余量",
+  "Save the channel before adding supply": "请先保存渠道再添加供货量",
+  "Amount (USD)": "金额（USD）",
+  "Videos": "条数",
+  "Add supply": "添加供货量",
+  "Supply": "供货"
 }

@@ -589,6 +589,32 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		input.Probe[channel.Id] = probe
 	}
 	freezeUnifiedVideoInput(c, group, modelName, input.Candidates)
+	var stocked []int
+	for _, candidate := range input.Candidates {
+		if candidate.SupplyUnit != "" && candidate.Excluded == "" {
+			stocked = append(stocked, candidate.ID)
+		}
+	}
+	if len(stocked) > 0 {
+		// Read fresh, not from the channel cache, so an empty or refilled
+		// stock takes effect at once. Unreadable stock counts as empty, like
+		// an unreadable in-flight count counts as full.
+		remaining, err := model.GetChannelVideoSupplies(stocked)
+		if err != nil {
+			logger.LogWarn(c, "video scheduling supply read failed: error=%v", err)
+		}
+		for i := range input.Candidates {
+			candidate := &input.Candidates[i]
+			if candidate.SupplyUnit == "" || candidate.Excluded != "" {
+				continue
+			}
+			supply := float64(remaining[candidate.ID])
+			if candidate.SupplyUnit == videosched.SupplyUSD {
+				supply /= common.QuotaPerUnit
+			}
+			candidate.Supply = &supply
+		}
+	}
 	for _, candidate := range input.Candidates {
 		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 && setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
 			continue
@@ -703,7 +729,7 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 		candidate.Excluded = "not schedulable: no cost table"
 		return
 	}
-	candidate.Quality, candidate.Capacity = cfg.Quality, cfg.Capacity
+	candidate.Quality, candidate.Capacity, candidate.SupplyUnit = cfg.Quality, cfg.Capacity, cfg.SupplyUnit
 	cost, ok := videoModelCost(cfg.Models, clientModel)
 	if !ok {
 		candidate.Excluded = "not schedulable: model not priced"

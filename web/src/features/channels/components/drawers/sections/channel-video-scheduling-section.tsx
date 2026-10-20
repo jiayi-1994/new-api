@@ -57,6 +57,7 @@ import {
 } from '../../../lib/video-scheduling'
 import { ChannelConfigurationStatusIndicator } from '../channel-configuration'
 import { VideoModelCostCard } from './video-model-cost-card'
+import { VideoSupplyTopUp } from './video-supply-top-up'
 
 type ChannelVideoSchedulingSectionProps = {
   /** Task plugins bound to the channel; without one only an existing draft renders. */
@@ -65,6 +66,10 @@ type ChannelVideoSchedulingSectionProps = {
   disabled: boolean
   status: ChannelConfigurationStatus
   className: string
+  /** null for a channel that is not saved yet. */
+  channelId: number | null
+  /** Remaining stock from the channel list; null when unknown. */
+  supplyRemaining: number | null
 }
 
 export function ChannelVideoSchedulingSection(
@@ -118,6 +123,11 @@ export function ChannelVideoSchedulingSection(
   const addableModels = props.channelModels.filter(
     (model) => !configured.has(model)
   )
+  const supplyUnitItems = [
+    { value: 'unlimited', label: t('Unlimited') },
+    { value: 'usd', label: t('Purchase amount') },
+    { value: 'count', label: t('Video count') },
+  ]
   const group = draft.capacity_group.trim()
   const unregisteredGroup =
     group !== '' &&
@@ -197,7 +207,7 @@ export function ChannelVideoSchedulingSection(
 
           {draft.enabled && (
             <>
-              <div className='grid gap-4 sm:grid-cols-3'>
+              <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
                 <FormField
                   control={form.control}
                   name='video_scheduling.quality'
@@ -271,7 +281,52 @@ export function ChannelVideoSchedulingSection(
                     </FormItem>
                   )}
                 />
+                <FormField
+                  control={form.control}
+                  name='video_scheduling.supply_unit'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Supply unit')}</FormLabel>
+                      <Select
+                        items={supplyUnitItems}
+                        value={field.value || 'unlimited'}
+                        onValueChange={(value) =>
+                          field.onChange(value === 'unlimited' ? '' : value)
+                        }
+                      >
+                        <FormControl>
+                          <SelectTrigger aria-label={t('Supply unit')}>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          {supplyUnitItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t(
+                          'Stock the upstream can still deliver; scheduling skips the channel once it runs out'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
+
+              {draft.supply_unit && (
+                <VideoSupplyTopUp
+                  key={`${props.channelId ?? 'new'}-${draft.supply_unit}`}
+                  channelId={props.channelId}
+                  unit={draft.supply_unit}
+                  remaining={props.supplyRemaining}
+                  disabled={props.disabled}
+                />
+              )}
 
               {draft.models.map((item, index) => (
                 <VideoModelCostCard

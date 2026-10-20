@@ -91,6 +91,18 @@ export async function requestVideoHealthRecovery(
   requireServerSuccess(response.data)
 }
 
+/** Adds a signed amount to the channel's video supply; returns the new balance. */
+export async function addChannelVideoSupply(
+  channelId: number,
+  delta: number
+): Promise<number> {
+  const response = await api.post<{
+    success: boolean
+    data?: { remaining: number }
+  }>(`/api/channel/${channelId}/video_supply`, { delta })
+  return requireServerSuccess(response.data).data?.remaining ?? 0
+}
+
 const channelActionConfig = (
   config: ApiRequestConfig = {}
 ): ApiRequestConfig => ({

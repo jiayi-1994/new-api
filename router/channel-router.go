@@ -57,6 +57,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/:id", permission: authz.ChannelRead, handler: controller.GetChannel},
 	{method: http.MethodGet, path: "/:id/video_health", permission: authz.ChannelRead, handler: controller.GetChannelVideoHealth},
 	{method: http.MethodPost, path: "/:id/video_health/recover", permission: authz.ChannelOperate, handler: controller.RecoverChannelVideoHealth},
+	{method: http.MethodPost, path: "/:id/video_supply", permission: authz.ChannelOperate, handler: controller.AddChannelVideoSupply},
 	{method: http.MethodGet, path: "/video_schedule/schedulable", permission: authz.ChannelRead, handler: controller.GetVideoSchedulable},
 	{method: http.MethodGet, path: "/test", permission: authz.ChannelOperate, handler: controller.TestAllChannels},
 	{method: http.MethodGet, path: "/test/:id", permission: authz.ChannelOperate, handler: controller.TestChannel},

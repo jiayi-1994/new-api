@@ -19,6 +19,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/alicebob/miniredis/v2"
@@ -1307,4 +1308,51 @@ func TestVideoChannelOverviewJoinsLiveStateWithServedRequests(t *testing.T) {
 	for _, row := range overview.Rows {
 		assert.Nil(t, row.Service, "stability_cost_v2 has no service score")
 	}
+}
+
+func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
+	useVideoHealthBackend(t, "memory")
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.ChannelVideoSupply{}, &model.VideoScheduleRun{}, &model.VideoScheduleDecision{}))
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+
+	channel := &model.Channel{Id: 7}
+	finish := func(unit string, status model.TaskStatus, cost *float64) {
+		channel.OtherSettings = fmt.Sprintf(`{"video_scheduling":{"supply_unit":%q,"models":{"m":{"mode":"per_video","prices":{"*":1}}}}}`, unit)
+		c := healthTestContext()
+		task := &model.Task{ChannelId: 7, Status: model.TaskStatusInProgress}
+		task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(c, channel, "m")
+		require.NotNil(t, task.PrivateData.SchedulingSummary)
+		require.Equal(t, unit, task.PrivateData.SchedulingSummary.SupplyUnit, "unit is frozen at submission")
+		task.PrivateData.SchedulingSummary.CostUSD = cost
+		VideoTaskPersisted(c, task)
+		task.Status = status
+		ObserveVideoTerminal(task, false)
+	}
+	remaining := func() int64 {
+		supplies, err := model.GetChannelVideoSupplies([]int{7})
+		require.NoError(t, err)
+		return supplies[7]
+	}
+	unit := int64(common.QuotaPerUnit)
+	require.NoError(t, model.AddChannelVideoSupply(7, 10*unit, 1))
+	cost := 1.5
+
+	finish(dto.VideoSupplyUSD, model.TaskStatusSuccess, &cost)
+	assert.Equal(t, 10*unit-3*unit/2, remaining(), "a success deducts the quoted purchase cost")
+	finish(dto.VideoSupplyUSD, model.TaskStatusFailure, &cost)
+	assert.Equal(t, 10*unit-3*unit/2, remaining(), "a failure keeps the stock")
+	finish(dto.VideoSupplyUSD, model.TaskStatusSuccess, nil)
+	assert.Equal(t, 10*unit-3*unit/2, remaining(), "an unpriced success is not deducted")
+	finish(dto.VideoSupplyCount, model.TaskStatusSuccess, nil)
+	assert.Equal(t, 10*unit-3*unit/2-1, remaining(), "count unit deducts one video")
+	finish("", model.TaskStatusSuccess, &cost)
+	assert.Equal(t, 10*unit-3*unit/2-1, remaining(), "an unlimited channel is never deducted")
 }

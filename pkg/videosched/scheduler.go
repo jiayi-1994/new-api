@@ -134,7 +134,30 @@ type Candidate struct {
 	Submit, Gen HealthStat           // raw; health gates are applied here, not during assembly
 	Reliability *ReliabilitySnapshot `json:",omitempty"`
 	Sell        SellPrice
-	Excluded    string // hard exclusion from assembly (disabled, tried, not schedulable, ...); never gated or at capacity
+	// Supply is the channel's remaining upstream stock in SupplyUnit ("usd"
+	// or "count"); nil is unlimited. A quote the stock cannot cover is gated.
+	SupplyUnit string   `json:",omitempty"`
+	Supply     *float64 `json:",omitempty"`
+	Excluded   string   // hard exclusion from assembly (disabled, tried, not schedulable, ...); never gated or at capacity
+}
+
+// Supply units mirror relaykit/dto, which this package cannot import.
+const (
+	SupplyUSD   = "usd"
+	SupplyCount = "count"
+)
+
+// outOfStock reports whether the remaining supply cannot cover one more
+// success at this quote.
+func (c *Candidate) outOfStock(quote CostQuote) bool {
+	if c.Supply == nil {
+		return false
+	}
+	need := 1.0
+	if c.SupplyUnit == SupplyUSD {
+		need = quote.TotalUSD
+	}
+	return need > *c.Supply
 }
 
 // Weights are normalized internally; they need not sum to 1.
@@ -440,6 +463,10 @@ func evaluate(cands []Candidate, p Policy, relaxHealth bool) []Score {
 		cost := s.Quote.TotalUSD
 		if cost > p.MaxCostUSD {
 			s.Reason = "cost exceeds bound"
+			continue
+		}
+		if c.outOfStock(s.Quote) {
+			s.Reason = "out of stock"
 			continue
 		}
 		s.Unproven = c.Submit.Samples < p.MinSamples || c.Gen.Samples < p.MinSamples

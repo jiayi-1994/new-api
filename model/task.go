@@ -197,6 +197,9 @@ type TaskSchedulingSummary struct {
 	// CostUSD is the selected channel's purchase cost quoted at submission;
 	// nil when the channel has no price for the request.
 	CostUSD *float64 `json:"cost_usd,omitempty"`
+	// SupplyUnit is the channel's supply unit frozen at submission so the
+	// terminal deduction does not depend on the live channel config.
+	SupplyUnit string `json:"supply_unit,omitempty"`
 }
 
 // VideoSpecView summarizes the spec a candidate's plugin described: output

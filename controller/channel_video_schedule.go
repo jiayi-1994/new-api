@@ -44,8 +44,48 @@ func GetChannelVideoHealth(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := service.FillVideoSupply(map[int]*service.VideoHealthView{id: view}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	common.ApiSuccess(c, view)
 }
+
+// AddChannelVideoSupply adds a signed amount to the channel's remaining video
+// stock: quota units for the "usd" supply unit, videos for "count". A
+// negative delta corrects drift.
+func AddChannelVideoSupply(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	var request struct {
+		Delta int64 `json:"delta"`
+	}
+	if err != nil || channelID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<10), &request) != nil {
+		common.ApiErrorMsg(c, "invalid video supply request")
+		return
+	}
+	if request.Delta == 0 || request.Delta > maxVideoSupplyDelta || request.Delta < -maxVideoSupplyDelta {
+		common.ApiErrorMsg(c, "delta must be a non-zero amount within the supported range")
+		return
+	}
+	if _, err := model.GetChannelById(channelID, false); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.AddChannelVideoSupply(channelID, request.Delta, time.Now().Unix()); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	remaining, err := model.GetChannelVideoSupplies([]int{channelID})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.video_supply", map[string]any{"id": channelID, "delta": request.Delta, "remaining": remaining[channelID]})
+	common.ApiSuccess(c, gin.H{"remaining": remaining[channelID]})
+}
+
+// maxVideoSupplyDelta keeps repeated top-ups far from int64 overflow.
+const maxVideoSupplyDelta = int64(1) << 53
 
 func RecoverChannelVideoHealth(c *gin.Context) {
 	channelID, err := strconv.Atoi(c.Param("id"))
@@ -113,18 +153,27 @@ func ReviewUnknownVideoHealthAttempt(c *gin.Context) {
 // video_scheduling config. The list query already loaded their settings, so
 // this reads only Redis or memory per row.
 func channelListItems(channels []*model.Channel) []any {
-	items := make([]any, 0, len(channels))
+	views := make(map[int]*service.VideoHealthView, len(channels))
 	for _, channel := range channels {
 		if channel.OtherSettings == "" {
 			// No config; also skips the cache lookup that would query the
 			// database when the memory cache is off.
-			items = append(items, channel)
 			continue
 		}
 		view, err := service.GetVideoHealthView(channel, false)
 		if err != nil {
 			common.SysError("video scheduling health read failed: channel=" + strconv.Itoa(channel.Id) + " error=" + err.Error())
 		}
+		if view != nil {
+			views[channel.Id] = view
+		}
+	}
+	if err := service.FillVideoSupply(views); err != nil {
+		common.SysError("video supply read failed: " + err.Error())
+	}
+	items := make([]any, 0, len(channels))
+	for _, channel := range channels {
+		view := views[channel.Id]
 		if view == nil {
 			items = append(items, channel)
 			continue

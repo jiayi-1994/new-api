@@ -212,6 +212,26 @@ export function VideoHealthCell(props: { channel: Channel }) {
     ? null
     : props.channel.video_health
   if (!health) return null
+  const supplyBadge = health.supply_unit &&
+    health.supply_remaining !== undefined && (
+      <StatusBadge
+        variant={health.supply_remaining > 0 ? 'info' : 'danger'}
+        size='sm'
+        copyable={false}
+        title={
+          health.supply_remaining > 0
+            ? undefined
+            : t(
+                'Out of stock: scheduling skips this channel until supply is added'
+              )
+        }
+      >
+        {t('Supply')}:{' '}
+        {health.supply_unit === 'usd'
+          ? formatQuotaWithCurrency(health.supply_remaining)
+          : formatNumber(health.supply_remaining, locale)}
+      </StatusBadge>
+    )
   if (health.selection_policy === 'stability_cost_v2') {
     const models = Object.entries(health.models ?? {})
     const verified = models.filter(
@@ -221,67 +241,70 @@ export function VideoHealthCell(props: { channel: Channel }) {
         (model.reliability.qualification?.expires_at ?? 0) > (health.as_of ?? 0)
     ).length
     return (
-      <Dialog
-        title={t('Video reliability')}
-        description={props.channel.name}
-        trigger={
-          <Button
-            variant='ghost'
-            size='sm'
-            className='h-auto justify-start text-left whitespace-normal'
-          >
-            <StatusBadge
-              copyable={false}
-              variant={verified > 0 ? 'success' : 'warning'}
+      <div className='flex flex-wrap items-center gap-1'>
+        <Dialog
+          title={t('Video reliability')}
+          description={props.channel.name}
+          trigger={
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-auto justify-start text-left whitespace-normal'
             >
-              {t('Verified models')}: {formatNumber(verified, locale)}/
-              {formatNumber(models.length, locale)}
-            </StatusBadge>
-          </Button>
-        }
-      >
-        <p className='text-muted-foreground mb-4 text-sm'>
-          {t(
-            'No verified candidates does not mean no service. Unverified channels may accept limited validation traffic.'
-          )}
-        </p>
-        <p className='mb-4 text-sm'>
-          {t('Validation slots')}:{' '}
-          {formatNumber(health.validation_slots_held ?? 0, locale)} ·{' '}
-          {t('Exploration max in flight')}:{' '}
-          {formatNumber(health.explore_limit ?? 0, locale)} ·{' '}
-          {t('Probe max in flight')}:{' '}
-          {formatNumber(health.recovery_limit ?? 0, locale)}
-        </p>
-        <div className='space-y-4'>
-          {models.map(([name, model]) => (
-            <section key={name} className='border-t pt-3'>
-              <h4 className='mb-2 font-medium break-all'>{name}</h4>
-              <div className='flex flex-wrap items-start justify-between gap-2'>
-                <VideoReliabilityDetails
-                  health={model.reliability}
-                  asOf={health.as_of}
-                />
-                {canOperate && model.reliability && (
-                  <VideoHealthRecovery
-                    channelId={props.channel.id}
-                    channelName={props.channel.name}
-                    model={name}
-                    stateVersion={model.reliability.state_version}
-                    canRecover={
-                      props.channel.status === 1 &&
-                      model.reliability.integrity === 'complete' &&
-                      model.reliability.state === 'blocked' &&
-                      model.reliability.reason !== 'manual_recovery_requested'
-                    }
+              <StatusBadge
+                copyable={false}
+                variant={verified > 0 ? 'success' : 'warning'}
+              >
+                {t('Verified models')}: {formatNumber(verified, locale)}/
+                {formatNumber(models.length, locale)}
+              </StatusBadge>
+            </Button>
+          }
+        >
+          <p className='text-muted-foreground mb-4 text-sm'>
+            {t(
+              'No verified candidates does not mean no service. Unverified channels may accept limited validation traffic.'
+            )}
+          </p>
+          <p className='mb-4 text-sm'>
+            {t('Validation slots')}:{' '}
+            {formatNumber(health.validation_slots_held ?? 0, locale)} ·{' '}
+            {t('Exploration max in flight')}:{' '}
+            {formatNumber(health.explore_limit ?? 0, locale)} ·{' '}
+            {t('Probe max in flight')}:{' '}
+            {formatNumber(health.recovery_limit ?? 0, locale)}
+          </p>
+          <div className='space-y-4'>
+            {models.map(([name, model]) => (
+              <section key={name} className='border-t pt-3'>
+                <h4 className='mb-2 font-medium break-all'>{name}</h4>
+                <div className='flex flex-wrap items-start justify-between gap-2'>
+                  <VideoReliabilityDetails
+                    health={model.reliability}
+                    asOf={health.as_of}
                   />
-                )}
-              </div>
-            </section>
-          ))}
-        </div>
-        <VideoUnknownReview channelId={props.channel.id} />
-      </Dialog>
+                  {canOperate && model.reliability && (
+                    <VideoHealthRecovery
+                      channelId={props.channel.id}
+                      channelName={props.channel.name}
+                      model={name}
+                      stateVersion={model.reliability.state_version}
+                      canRecover={
+                        props.channel.status === 1 &&
+                        model.reliability.integrity === 'complete' &&
+                        model.reliability.state === 'blocked' &&
+                        model.reliability.reason !== 'manual_recovery_requested'
+                      }
+                    />
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+          <VideoUnknownReview channelId={props.channel.id} />
+        </Dialog>
+        {supplyBadge}
+      </div>
     )
   }
   let variant: StatusBadgeProps['variant'] = 'success'
@@ -291,30 +314,33 @@ export function VideoHealthCell(props: { channel: Channel }) {
   if (health.gated) variant = 'danger'
   const probing = health.probe_slots_held > 0
   return (
-    <StatusBadge
-      label={t(
-        'Submit {{submit}} / gen {{gen}} ({{samples}} samples) · in flight {{inFlight}}/{{capacity}}',
-        {
-          submit:
-            health.submit.samples > 0
-              ? formatPercent(health.submit.rate * 100)
-              : t('Unknown'),
-          gen:
-            health.gen.samples > 0
-              ? formatPercent(health.gen.rate * 100)
-              : t('Unknown'),
-          samples: health.submit.samples,
-          inFlight: health.in_flight,
-          capacity: health.capacity > 0 ? health.capacity : '∞',
-        }
-      )}
-      variant={variant}
-      icon={probing ? Radar : undefined}
-      title={probing ? t('Recovery probe in progress') : undefined}
-      size='sm'
-      copyable={false}
-      className='-ml-1.5'
-    />
+    <div className='flex flex-wrap items-center gap-1'>
+      <StatusBadge
+        label={t(
+          'Submit {{submit}} / gen {{gen}} ({{samples}} samples) · in flight {{inFlight}}/{{capacity}}',
+          {
+            submit:
+              health.submit.samples > 0
+                ? formatPercent(health.submit.rate * 100)
+                : t('Unknown'),
+            gen:
+              health.gen.samples > 0
+                ? formatPercent(health.gen.rate * 100)
+                : t('Unknown'),
+            samples: health.submit.samples,
+            inFlight: health.in_flight,
+            capacity: health.capacity > 0 ? health.capacity : '∞',
+          }
+        )}
+        variant={variant}
+        icon={probing ? Radar : undefined}
+        title={probing ? t('Recovery probe in progress') : undefined}
+        size='sm'
+        copyable={false}
+        className='-ml-1.5'
+      />
+      {supplyBadge}
+    </div>
   )
 }
 

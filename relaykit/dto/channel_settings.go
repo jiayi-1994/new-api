@@ -151,6 +151,10 @@ const (
 	VideoRefPerOutputSecond = "per_output_second"
 	VideoRefMultiplier      = "multiplier"
 
+	// Video supply units. Empty means unlimited supply.
+	VideoSupplyUSD   = "usd"
+	VideoSupplyCount = "count"
+
 	MaxVideoCapacityGroupLength = 64
 )
 
@@ -162,6 +166,10 @@ type VideoSchedulingConfig struct {
 	Quality       float64 `json:"quality"`                  // [0,1]
 	Capacity      int     `json:"capacity"`                 // 0 = unlimited
 	CapacityGroup string  `json:"capacity_group,omitempty"` // quota lives in the global capacity_groups setting
+	// SupplyUnit tracks the upstream stock this channel can still deliver:
+	// "" (unlimited), "usd" (purchase cost per success) or "count" (one per
+	// success). The remaining balance lives in channel_video_supplies.
+	SupplyUnit string `json:"supply_unit,omitempty"`
 	// Models is keyed by the model name as spelled in the channel's models.
 	Models map[string]VideoModelCost `json:"models"`
 }
@@ -246,6 +254,9 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 	}
 	if c.CapacityGroup != strings.TrimSpace(c.CapacityGroup) || len(c.CapacityGroup) > MaxVideoCapacityGroupLength {
 		return fmt.Errorf("video_scheduling: capacity_group must be trimmed and at most %d bytes", MaxVideoCapacityGroupLength)
+	}
+	if c.SupplyUnit != "" && c.SupplyUnit != VideoSupplyUSD && c.SupplyUnit != VideoSupplyCount {
+		return fmt.Errorf("video_scheduling: invalid supply_unit %q", c.SupplyUnit)
 	}
 	usd := func(v float64) bool { return v >= 0 && v <= maxCostUSD }
 	for model, cost := range c.Models {

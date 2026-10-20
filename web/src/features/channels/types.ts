@@ -112,10 +112,14 @@ export interface VideoModelCost {
   >
 }
 
+export type VideoSupplyUnit = 'usd' | 'count'
+
 export interface VideoSchedulingConfig {
   quality: number
   capacity: number
   capacity_group?: string
+  /** Absent means unlimited upstream stock. */
+  supply_unit?: VideoSupplyUnit
   models: Record<string, VideoModelCost>
 }
 
@@ -144,6 +148,9 @@ export interface VideoHealth {
   group_in_flight?: number
   probe_slots_held: number
   probe_cooldown_until?: number
+  supply_unit?: VideoSupplyUnit
+  /** Quota units for usd, videos for count. */
+  supply_remaining?: number
 }
 
 export interface VideoSchedulable {

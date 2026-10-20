@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -353,6 +354,9 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 		return nil
 	}
 	summary := &model.TaskSchedulingSummary{Model: modelName, CapacityGroup: owner.Group, CapacityToken: owner.Token}
+	if cfg, ok := VideoSchedulingConfigOf(channel); ok {
+		summary.SupplyUnit = cfg.SupplyUnit
+	}
 	if lease, ok := peekVideoProbeLease(c); ok && lease.ChannelID == channel.Id {
 		summary.ProbeSlot = &model.TaskProbeSlot{Key: lease.Key, Token: lease.Token}
 	}
@@ -440,6 +444,24 @@ func observeVideoTerminal(task *model.Task, counted bool, outcome VideoOutcome) 
 		}
 		recordVideoSamples(task.ChannelId, summary.Model, field)
 	}
+	if outcome == VideoOutcomeSuccess && summary.SupplyUnit != "" {
+		// Only a success consumes stock; a host-side timeout that the
+		// upstream still delivered is corrected by a signed top-up.
+		amount := int64(1)
+		if summary.SupplyUnit == videosched.SupplyUSD {
+			if summary.CostUSD == nil {
+				common.SysError(fmt.Sprintf("video supply not deducted: channel=%d task=%d has no cost quote", task.ChannelId, task.ID))
+				amount = 0
+			} else {
+				amount = int64(math.Round(*summary.CostUSD * common.QuotaPerUnit))
+			}
+		}
+		if amount != 0 {
+			if err := model.AddChannelVideoSupply(task.ChannelId, -amount, time.Now().Unix()); err != nil {
+				common.SysError(fmt.Sprintf("video supply deduction failed: channel=%d task=%d amount=%d error=%v", task.ChannelId, task.ID, amount, err))
+			}
+		}
+	}
 	if counted {
 		if err := videoHealthStore().finishCapacity(videoInFlightKeys(task.ChannelId, summary), videoTaskCapacityToken(task), false); err != nil {
 			common.SysError(fmt.Sprintf("video scheduling task capacity release failed: channel=%d error=%v", task.ChannelId, err))
@@ -519,6 +541,30 @@ type VideoHealthView struct {
 	ProbeSlotsHeld      int                           `json:"probe_slots_held"`
 	ProbeCooldownUntil  int64                         `json:"probe_cooldown_until,omitempty"` // unix seconds after the last probe
 	Models              map[string]VideoChannelHealth `json:"models,omitempty"`
+	// SupplyRemaining is in SupplyUnit: quota units (USD × QuotaPerUnit) or
+	// videos. Filled by FillVideoSupply, since the view itself never reads the
+	// database.
+	SupplyUnit      string `json:"supply_unit,omitempty"`
+	SupplyRemaining *int64 `json:"supply_remaining,omitempty"`
+}
+
+// FillVideoSupply reads the remaining stock of every stocked view in one query.
+func FillVideoSupply(views map[int]*VideoHealthView) error {
+	var stocked []int
+	for id, view := range views {
+		if view != nil && view.SupplyUnit != "" {
+			stocked = append(stocked, id)
+		}
+	}
+	remaining, err := model.GetChannelVideoSupplies(stocked)
+	if err != nil {
+		return err
+	}
+	for _, id := range stocked {
+		value := remaining[id]
+		views[id].SupplyRemaining = &value
+	}
+	return nil
 }
 
 // GetVideoHealthView reads a channel's scheduling state from Redis or memory
@@ -541,6 +587,7 @@ func GetVideoHealthView(channel *model.Channel, perModel bool) (*VideoHealthView
 		Capacity:      cfg.Capacity,
 		CapacityGroup: cfg.CapacityGroup,
 		GroupCapacity: setting.CapacityGroups[cfg.CapacityGroup],
+		SupplyUnit:    cfg.SupplyUnit,
 	}
 	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 		if view.ValidationSlotsHeld, err = videoHealthStore().held(videoValidationKeys(channel.Id)); err != nil {

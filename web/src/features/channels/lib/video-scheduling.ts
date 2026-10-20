@@ -24,6 +24,7 @@ import type {
   VideoReferenceKind,
   VideoReferenceMode,
   VideoSchedulingConfig,
+  VideoSupplyUnit,
 } from '../types'
 
 // Mirrors relaykit dto.VideoSchedulingConfig.Validate. The USD upper bound
@@ -69,6 +70,7 @@ export type VideoSchedulingDraft = {
   quality: string
   capacity: string
   capacity_group: string
+  supply_unit: '' | VideoSupplyUnit
   models: VideoModelDraft[]
 }
 
@@ -77,6 +79,7 @@ export const EMPTY_VIDEO_SCHEDULING_DRAFT: VideoSchedulingDraft = {
   quality: '',
   capacity: '',
   capacity_group: '',
+  supply_unit: '',
   models: [],
 }
 
@@ -131,6 +134,10 @@ export function parseVideoSchedulingDraft(
     quality: draftNumber(stored.quality ?? 0),
     capacity: stored.capacity ? String(stored.capacity) : '',
     capacity_group: stored.capacity_group ?? '',
+    supply_unit:
+      stored.supply_unit === 'usd' || stored.supply_unit === 'count'
+        ? stored.supply_unit
+        : '',
     models,
   }
 }
@@ -188,6 +195,7 @@ export function buildVideoSchedulingConfig(
   }
   const group = draft.capacity_group.trim()
   if (group) config.capacity_group = group
+  if (draft.supply_unit) config.supply_unit = draft.supply_unit
   return config
 }
 
@@ -226,6 +234,7 @@ export const videoSchedulingDraftSchema = z
     quality: z.string(),
     capacity: z.string(),
     capacity_group: z.string(),
+    supply_unit: z.enum(['', 'usd', 'count']),
     models: z.array(
       z.object({
         model: z.string(),

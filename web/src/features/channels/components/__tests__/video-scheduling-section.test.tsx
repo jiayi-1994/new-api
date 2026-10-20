@@ -360,3 +360,42 @@ test('the only base price tier cannot be removed', async () => {
     await screen.findByRole('button', { name: 'Remove price tier' })
   ).toBeDisabled()
 })
+
+test('a channel with a supply unit shows its remaining stock and tops it up through the supply endpoint', async () => {
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: true, data: { remaining: 8 } } })
+  const channel = {
+    ...editingChannel({ ...pricedConfig(undefined), supply_unit: 'count' }),
+    video_health: {
+      submit: { rate: 1, samples: 0 },
+      gen: { rate: 1, samples: 0 },
+      in_flight: 0,
+      probe: { last_probe_at: 0, consecutive_fails: 0 },
+      gated: false,
+      capacity: 0,
+      probe_slots_held: 0,
+      supply_unit: 'count' as const,
+      supply_remaining: 3,
+    },
+  }
+  const user = await openRouting(channel)
+
+  expect(
+    await screen.findByRole('combobox', { name: 'Supply unit' })
+  ).toHaveTextContent('Video count')
+  const supply = screen.getByRole('group', { name: 'Remaining supply' })
+  expect(within(supply).getByText(/Remaining supply: 3/)).toBeVisible()
+  const add = within(supply).getByRole('button', { name: 'Add supply' })
+  expect(add).toBeDisabled()
+
+  await user.type(within(supply).getByLabelText('Videos'), '5')
+  await user.click(add)
+
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith('/api/channel/42/video_supply', {
+      delta: 5,
+    })
+  )
+  expect(await within(supply).findByText(/Remaining supply: 8/)).toBeVisible()
+})

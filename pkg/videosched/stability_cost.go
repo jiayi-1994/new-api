@@ -46,6 +46,10 @@ func evaluateStabilityCost(cands []Candidate, p Policy, validation bool) []Score
 			s.Reason = "cost exceeds bound"
 			continue
 		}
+		if c.outOfStock(s.Quote) {
+			s.Reason = "out of stock"
+			continue
+		}
 		margin := (c.Sell.USD - s.Quote.TotalUSD) / c.Sell.USD
 		s.EstimatedMargin = &margin
 		// Compare the allowed cost directly: binary subtraction of 1-.9 must

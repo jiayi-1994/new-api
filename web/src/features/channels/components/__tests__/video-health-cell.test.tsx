@@ -817,3 +817,47 @@ test('a tag aggregate row shows no video health even though it copies a child ch
 
   expect(container).toBeEmptyDOMElement()
 })
+
+test('a stocked channel shows its remaining supply and flags an empty stock', () => {
+  const client = new QueryClient()
+  const health = {
+    submit: { rate: 0.9, samples: 10 },
+    gen: { rate: 0.8, samples: 8 },
+    in_flight: 1,
+    probe: { last_probe_at: 0, consecutive_fails: 0 },
+    gated: false,
+    capacity: 3,
+    probe_slots_held: 0,
+    supply_unit: 'count' as const,
+    supply_remaining: 12,
+  }
+  const stocked: Channel = {
+    ...scheduled,
+    tag: undefined,
+    video_health: health,
+  }
+  const { unmount } = render(
+    <QueryClientProvider client={client}>
+      <VideoHealthCell channel={stocked} />
+    </QueryClientProvider>
+  )
+  expect(screen.getByText(/Supply: 12/)).toBeVisible()
+  expect(
+    screen.queryByTitle(/Out of stock: scheduling skips this channel/)
+  ).not.toBeInTheDocument()
+  unmount()
+
+  const empty: Channel = {
+    ...stocked,
+    video_health: { ...health, supply_remaining: 0 },
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <VideoHealthCell channel={empty} />
+    </QueryClientProvider>
+  )
+  expect(screen.getByText(/Supply: 0/)).toBeVisible()
+  expect(
+    screen.getByTitle(/Out of stock: scheduling skips this channel/)
+  ).toBeVisible()
+})

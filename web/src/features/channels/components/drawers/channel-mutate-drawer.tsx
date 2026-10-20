@@ -4676,6 +4676,10 @@ export function ChannelMutateDrawer({
             <ChannelVideoSchedulingSection
               pluginKeys={videoSchedulingPluginKeys}
               channelModels={currentModelsArray}
+              channelId={channelId}
+              supplyRemaining={
+                currentRow?.video_health?.supply_remaining ?? null
+              }
               disabled={sensitiveLocked || isSubmitting}
               status={configuration.blocks.videoScheduling}
               className={channelConfigurationBlockClassName(
