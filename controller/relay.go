@@ -866,7 +866,7 @@ func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 // upstreamQuotaMessagePattern spots upstream wording about the operator's own
 // account funds (额度/余额, "$1.800000", "insufficient credits"), which a buyer
 // of a unified video sale must never see.
-var upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|欠费|充值|扣费|\bquota\b|\bbalance\b|\binsufficient\b|\bcredits?\b|\bbilling\b|[$￥¥€£]\s*\d`)
+var upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|余量|欠费|欠款|充值|扣费|quota|balance|insufficient|credit|billing|overdue|arrear|[$￥¥€£]\s*\d|\d(?:\.\d+)?\s*(?:USD|CNY|RMB|EUR|GBP)`)
 
 // unifiedVideoPublicErrorMessage projects a submission failure onto the public
 // unified video sale. The upstream message is shown only when the serving
@@ -877,7 +877,12 @@ func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) 
 		return "账户额度不足，请充值后重试"
 	}
 	setting, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
-	if setting.ErrorPassthroughEnabled && !taskErr.LocalError {
+	// Only codes whose Message is the upstream response body may pass through;
+	// other non-local codes carry internal diagnostics. Upstream auth failures
+	// stay generic because they tend to echo the channel's own credentials.
+	upstreamBody := taskErr.Code == "fail_to_fetch_task" || taskErr.Code == "plugin_submit_rejected"
+	upstreamAuth := taskErr.StatusCode == http.StatusUnauthorized || taskErr.StatusCode == http.StatusForbidden
+	if setting.ErrorPassthroughEnabled && upstreamBody && !upstreamAuth {
 		message := taskErr.Message
 		var body dto.GeneralErrorResponse
 		if common.UnmarshalJsonStr(message, &body) == nil {
