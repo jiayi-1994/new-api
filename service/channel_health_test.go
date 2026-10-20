@@ -1310,8 +1310,10 @@ func TestVideoChannelOverviewJoinsLiveStateWithServedRequests(t *testing.T) {
 	}
 }
 
-func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
-	useVideoHealthBackend(t, "memory")
+// videoSupplyTestDB points model.DB at a private SQLite database holding the
+// supply table and the audit tables the terminal observers write.
+func videoSupplyTestDB(t *testing.T) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
@@ -1322,6 +1324,11 @@ func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
 	previousDB := model.DB
 	model.DB = db
 	t.Cleanup(func() { model.DB = previousDB })
+}
+
+func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
+	useVideoHealthBackend(t, "memory")
+	videoSupplyTestDB(t)
 
 	channel := &model.Channel{Id: 7}
 	finish := func(unit string, status model.TaskStatus, cost *float64) {
@@ -1339,10 +1346,10 @@ func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
 	remaining := func() int64 {
 		supplies, err := model.GetChannelVideoSupplies([]int{7})
 		require.NoError(t, err)
-		return supplies[7]
+		return supplies[7].Remaining
 	}
 	unit := int64(common.QuotaPerUnit)
-	require.NoError(t, model.AddChannelVideoSupply(7, 10*unit, 1))
+	require.NoError(t, model.AddChannelVideoSupply(7, dto.VideoSupplyUSD, 10*unit, 1))
 	cost := 1.5
 
 	finish(dto.VideoSupplyUSD, model.TaskStatusSuccess, &cost)
@@ -1352,7 +1359,55 @@ func TestVideoSupplyDeductsOnlySuccessfulTasks(t *testing.T) {
 	finish(dto.VideoSupplyUSD, model.TaskStatusSuccess, nil)
 	assert.Equal(t, 10*unit-3*unit/2, remaining(), "an unpriced success is not deducted")
 	finish(dto.VideoSupplyCount, model.TaskStatusSuccess, nil)
-	assert.Equal(t, 10*unit-3*unit/2-1, remaining(), "count unit deducts one video")
+	assert.Equal(t, 10*unit-3*unit/2, remaining(), "a task frozen in count does not spend a stock kept in usd")
 	finish("", model.TaskStatusSuccess, &cost)
-	assert.Equal(t, 10*unit-3*unit/2-1, remaining(), "an unlimited channel is never deducted")
+	assert.Equal(t, 10*unit-3*unit/2, remaining(), "an unlimited channel is never deducted")
+
+	require.NoError(t, model.AddChannelVideoSupply(7, dto.VideoSupplyCount, 5, 2), "switching the unit restarts the balance")
+	finish(dto.VideoSupplyCount, model.TaskStatusSuccess, nil)
+	assert.Equal(t, int64(4), remaining(), "count unit deducts one video")
+}
+
+func TestVideoSupplyQuotesUSDWithoutABoardSelection(t *testing.T) {
+	useVideoHealthBackend(t, "memory")
+	mapping := `{"videos-fast":"videos-mini"}`
+	plugin := `{"task_plugin_key":"seedance-hjmie"}`
+	channel := &model.Channel{Id: 31, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled,
+		Key: "k", BaseURL: common.GetPointer("https://supply.example"), Models: "videos-fast", Group: "default", ModelMapping: &mapping, Setting: &plugin,
+		OtherSettings: `{"video_scheduling":{"supply_unit":"usd","models":{"videos-fast":{"mode":"per_video","prices":{"720p":0.12}}}}}`}
+	c := videoSchedProtocolRequest(t, map[string]any{"prompt": "stock", "duration": 15, "resolution": "720p"}, VideoSchedDecision{Shadow: true})
+	summary := NewVideoSchedulingSummary(c, channel, "videos-fast")
+	require.NotNil(t, summary)
+	require.NotNil(t, summary.CostUSD, "a shadow or non-takeover submission still quotes the channel's own cost table")
+	assert.InDelta(t, 0.12, *summary.CostUSD, 1e-9)
+	assert.Equal(t, dto.VideoSupplyUSD, summary.SupplyUnit)
+}
+
+func TestFillVideoSupplyReadsFreshStockPerUnit(t *testing.T) {
+	videoSupplyTestDB(t)
+	unit := int64(common.QuotaPerUnit)
+	require.NoError(t, model.AddChannelVideoSupply(1, dto.VideoSupplyUSD, 3*unit/2, 1))
+	require.NoError(t, model.AddChannelVideoSupply(2, dto.VideoSupplyCount, 4, 1))
+	require.NoError(t, model.AddChannelVideoSupply(3, dto.VideoSupplyCount, 9, 1))
+	candidates := []videosched.Candidate{
+		{ID: 1, SupplyUnit: videosched.SupplyUSD},
+		{ID: 2, SupplyUnit: videosched.SupplyCount},
+		{ID: 3, SupplyUnit: videosched.SupplyUSD}, // stock kept in count: empty until topped up in usd
+		{ID: 4, SupplyUnit: videosched.SupplyCount}, // never topped up
+		{ID: 5},                                      // unlimited
+		{ID: 6, SupplyUnit: videosched.SupplyCount, Excluded: "disabled"},
+	}
+	fillVideoSupply(healthTestContext(), candidates)
+	want := []*float64{common.GetPointer(1.5), common.GetPointer(4.0), common.GetPointer(0.0), common.GetPointer(0.0), nil, nil}
+	for i, candidate := range candidates {
+		assert.Equal(t, want[i], candidate.Supply, "candidate %d", candidate.ID)
+	}
+
+	require.NoError(t, model.AddChannelVideoSupply(4, dto.VideoSupplyCount, 2, 2), "a top-up is visible to the next selection")
+	fillVideoSupply(healthTestContext(), candidates)
+	assert.Equal(t, 2.0, *candidates[3].Supply)
+	scores := videosched.Evaluate([]videosched.Candidate{{ID: 4, SupplyUnit: videosched.SupplyCount, Supply: candidates[3].Supply, Quality: 1, Spec: videosched.Spec{Tier: "*"},
+		Cost: videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": 1}}, Sell: videosched.SellPrice{Kind: videosched.SellKnown, USD: 2},
+		Submit: videosched.HealthStat{Rate: 1}, Gen: videosched.HealthStat{Rate: 1}}}, videosched.Policy{Weights: videosched.DefaultWeights, MaxCostUSD: 100})
+	assert.Empty(t, scores[0].Reason, "restocked channel is schedulable again")
 }

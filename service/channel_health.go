@@ -365,6 +365,14 @@ func NewVideoSchedulingSummary(c *gin.Context, channel *model.Channel, modelName
 	if record, row, ok := videoScheduleSelection(c, channel.Id); ok {
 		summary.Selected, summary.SelectionSeq, summary.AttemptSeq, summary.Probe, summary.Spec, summary.CostUSD = channel.Id, record.SelectionSeq, record.AttemptSeq, record.Probe, row.Spec, row.CostUSD
 	}
+	if summary.SupplyUnit == dto.VideoSupplyUSD && summary.CostUSD == nil {
+		// A shadow pick gated before quoting, or a request that was not taken
+		// over, has no board quote; the stock is still spent, so quote now.
+		candidate, _ := assembleVideoCandidate(c, c.GetString("group"), modelName, channel, false, operation_setting.GetVideoSchedulingSetting())
+		if quote := videosched.Quote(candidate.Cost, candidate.Spec); candidate.Excluded == "" && quote.Reason == "" {
+			summary.CostUSD = &quote.TotalUSD
+		}
+	}
 	return summary
 }
 
@@ -457,8 +465,11 @@ func observeVideoTerminal(task *model.Task, counted bool, outcome VideoOutcome) 
 			}
 		}
 		if amount != 0 {
-			if err := model.AddChannelVideoSupply(task.ChannelId, -amount, time.Now().Unix()); err != nil {
+			consumed, err := model.ConsumeChannelVideoSupply(task.ChannelId, summary.SupplyUnit, amount, time.Now().Unix())
+			if err != nil {
 				common.SysError(fmt.Sprintf("video supply deduction failed: channel=%d task=%d amount=%d error=%v", task.ChannelId, task.ID, amount, err))
+			} else if !consumed {
+				common.SysError(fmt.Sprintf("video supply not deducted: channel=%d task=%d stock is no longer kept in %s", task.ChannelId, task.ID, summary.SupplyUnit))
 			}
 		}
 	}
@@ -556,12 +567,13 @@ func FillVideoSupply(views map[int]*VideoHealthView) error {
 			stocked = append(stocked, id)
 		}
 	}
-	remaining, err := model.GetChannelVideoSupplies(stocked)
+	rows, err := model.GetChannelVideoSupplies(stocked)
 	if err != nil {
 		return err
 	}
 	for _, id := range stocked {
-		value := remaining[id]
+		row, found := rows[id]
+		value := model.VideoSupplyRemaining(row, found, views[id].SupplyUnit)
 		views[id].SupplyRemaining = &value
 	}
 	return nil
@@ -662,6 +674,8 @@ type VideoChannelOverviewRow struct {
 	Health        *VideoChannelHealth         `json:"health,omitempty"` // nil when unreadable
 	Gated         bool                        `json:"gated"`
 	Unproven      bool                        `json:"unproven"`
+	SupplyUnit      string `json:"supply_unit,omitempty"`
+	SupplyRemaining *int64 `json:"supply_remaining,omitempty"`
 	Service       *float64                    `json:"service,omitempty"` // weighted_v1 only
 	Usage         model.VideoAuditChannelStat `json:"usage"`
 }
@@ -715,7 +729,7 @@ func GetVideoChannelOverview(ctx context.Context, filter model.VideoScheduleAudi
 				continue
 			}
 			row := VideoChannelOverviewRow{ChannelID: channel.Id, Name: channel.Name, Status: channel.Status, Group: channel.Group, Priority: channel.GetPriority(), Weight: channel.GetWeight(),
-				Model: modelName, Scheduled: true, Quality: cfg.Quality, CostMode: cost.Mode, Prices: cost.Prices, Capacity: cfg.Capacity, CapacityGroup: cfg.CapacityGroup}
+				Model: modelName, Scheduled: true, Quality: cfg.Quality, CostMode: cost.Mode, Prices: cost.Prices, Capacity: cfg.Capacity, CapacityGroup: cfg.CapacityGroup, SupplyUnit: cfg.SupplyUnit}
 			if health, ok := view.Models[modelName]; ok {
 				row.Health, row.GroupCapacity, row.GroupInFlight = &health, view.GroupCapacity, view.GroupInFlight
 				row.Gated = videoGated(health.Submit, health.Gen, setting.MinSubmitRate, setting.MinGenRate, setting.MinSamples)
@@ -740,6 +754,27 @@ func GetVideoChannelOverview(ctx context.Context, filter model.VideoScheduleAudi
 			row.Name, row.Status, row.Group, row.Priority, row.Weight = channel.Name, channel.Status, channel.Group, channel.GetPriority(), channel.GetWeight()
 		}
 		overview.Rows = append(overview.Rows, row)
+	}
+	var stocked []int
+	for _, row := range overview.Rows {
+		if row.SupplyUnit != "" && !slices.Contains(stocked, row.ChannelID) {
+			stocked = append(stocked, row.ChannelID)
+		}
+	}
+	if len(stocked) > 0 {
+		supplies, err := model.GetChannelVideoSupplies(stocked)
+		if err != nil {
+			return nil, err
+		}
+		for i := range overview.Rows {
+			row := &overview.Rows[i]
+			if row.SupplyUnit == "" {
+				continue
+			}
+			supply, found := supplies[row.ChannelID]
+			value := model.VideoSupplyRemaining(supply, found, row.SupplyUnit)
+			row.SupplyRemaining = &value
+		}
 	}
 	slices.SortStableFunc(overview.Rows, func(a, b VideoChannelOverviewRow) int {
 		return cmp.Or(strings.Compare(a.Model, b.Model), cmp.Compare(b.Usage.Requests, a.Usage.Requests), cmp.Compare(b.Priority, a.Priority), cmp.Compare(a.ChannelID, b.ChannelID))

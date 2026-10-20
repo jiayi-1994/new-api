@@ -67,21 +67,28 @@ func AddChannelVideoSupply(c *gin.Context) {
 		common.ApiErrorMsg(c, "delta must be a non-zero amount within the supported range")
 		return
 	}
-	if _, err := model.GetChannelById(channelID, false); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.AddChannelVideoSupply(channelID, request.Delta, time.Now().Unix()); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	remaining, err := model.GetChannelVideoSupplies([]int{channelID})
+	channel, err := model.GetChannelById(channelID, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "channel.video_supply", map[string]any{"id": channelID, "delta": request.Delta, "remaining": remaining[channelID]})
-	common.ApiSuccess(c, gin.H{"remaining": remaining[channelID]})
+	cfg, ok := service.VideoSchedulingConfigOf(channel)
+	if !ok || cfg.SupplyUnit == "" {
+		common.ApiErrorMsg(c, "the channel has no video supply unit; save one in its video scheduling settings first")
+		return
+	}
+	if err := model.AddChannelVideoSupply(channelID, cfg.SupplyUnit, request.Delta, time.Now().Unix()); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	supplies, err := model.GetChannelVideoSupplies([]int{channelID})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	remaining := supplies[channelID].Remaining
+	recordManageAudit(c, "channel.video_supply", map[string]any{"id": channelID, "unit": cfg.SupplyUnit, "delta": request.Delta, "remaining": remaining})
+	common.ApiSuccess(c, gin.H{"unit": cfg.SupplyUnit, "remaining": remaining})
 }
 
 // maxVideoSupplyDelta keeps repeated top-ups far from int64 overflow.

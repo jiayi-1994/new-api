@@ -97,6 +97,7 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
+import { formatVideoSupply } from '../lib/video-scheduling'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { TaskPluginChannelBadge } from './channel-type-badge'
@@ -227,9 +228,7 @@ export function VideoHealthCell(props: { channel: Channel }) {
         }
       >
         {t('Supply')}:{' '}
-        {health.supply_unit === 'usd'
-          ? formatQuotaWithCurrency(health.supply_remaining)
-          : formatNumber(health.supply_remaining, locale)}
+        {formatVideoSupply(health.supply_unit, health.supply_remaining, locale)}
       </StatusBadge>
     )
   if (health.selection_policy === 'stability_cost_v2') {

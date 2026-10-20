@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { getCurrencyDisplay } from '@/lib/currency'
+import { formatNumber } from '@/lib/format'
+
 import type {
   VideoCostMode,
   VideoModelCost,
@@ -362,3 +365,27 @@ export const videoSchedulingDraftSchema = z
       })
     })
   })
+
+/** USD is shown as plain dollars (no display-currency conversion); count as videos. */
+export function formatVideoSupply(
+  unit: VideoSupplyUnit,
+  remaining: number,
+  locale: string | undefined
+): string {
+  if (unit === 'usd') {
+    const usd = remaining / getCurrencyDisplay().config.quotaPerUnit
+    return `${formatNumber(usd, locale)} USD`
+  }
+  return formatNumber(remaining, locale)
+}
+
+/** Converts a top-up typed in the supply unit to the stored integer amount. */
+export function videoSupplyDelta(
+  unit: VideoSupplyUnit,
+  amount: number
+): number {
+  if (unit === 'usd') {
+    return Math.round(amount * getCurrencyDisplay().config.quotaPerUnit)
+  }
+  return amount
+}

@@ -589,32 +589,7 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		input.Probe[channel.Id] = probe
 	}
 	freezeUnifiedVideoInput(c, group, modelName, input.Candidates)
-	var stocked []int
-	for _, candidate := range input.Candidates {
-		if candidate.SupplyUnit != "" && candidate.Excluded == "" {
-			stocked = append(stocked, candidate.ID)
-		}
-	}
-	if len(stocked) > 0 {
-		// Read fresh, not from the channel cache, so an empty or refilled
-		// stock takes effect at once. Unreadable stock counts as empty, like
-		// an unreadable in-flight count counts as full.
-		remaining, err := model.GetChannelVideoSupplies(stocked)
-		if err != nil {
-			logger.LogWarn(c, "video scheduling supply read failed: error=%v", err)
-		}
-		for i := range input.Candidates {
-			candidate := &input.Candidates[i]
-			if candidate.SupplyUnit == "" || candidate.Excluded != "" {
-				continue
-			}
-			supply := float64(remaining[candidate.ID])
-			if candidate.SupplyUnit == videosched.SupplyUSD {
-				supply /= common.QuotaPerUnit
-			}
-			candidate.Supply = &supply
-		}
-	}
+	fillVideoSupply(c, input.Candidates)
 	for _, candidate := range input.Candidates {
 		if candidate.Excluded != "" || setting.ProbeMaxInFlight <= 0 && setting.SelectionPolicy != videosched.PolicyStabilityCostV2 {
 			continue
@@ -633,6 +608,38 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		}
 	}
 	return input
+}
+
+// fillVideoSupply gives every stocked, non-excluded candidate its remaining
+// stock in its own unit. It reads the database rather than the channel cache so
+// an empty or refilled stock takes effect at once; unreadable stock counts as
+// empty, like an unreadable in-flight count counts as full.
+func fillVideoSupply(c *gin.Context, candidates []videosched.Candidate) {
+	var stocked []int
+	for _, candidate := range candidates {
+		if candidate.SupplyUnit != "" && candidate.Excluded == "" {
+			stocked = append(stocked, candidate.ID)
+		}
+	}
+	if len(stocked) == 0 {
+		return
+	}
+	rows, err := model.GetChannelVideoSupplies(stocked)
+	if err != nil {
+		logger.LogWarn(c, "video scheduling supply read failed: error=%v", err)
+	}
+	for i := range candidates {
+		candidate := &candidates[i]
+		if candidate.SupplyUnit == "" || candidate.Excluded != "" {
+			continue
+		}
+		row, found := rows[candidate.ID]
+		supply := float64(model.VideoSupplyRemaining(row, found, candidate.SupplyUnit))
+		if candidate.SupplyUnit == videosched.SupplyUSD {
+			supply /= common.QuotaPerUnit
+		}
+		candidate.Supply = &supply
+	}
 }
 
 // ErrVideoInputUnmeasurable is returned by unified video selection when the

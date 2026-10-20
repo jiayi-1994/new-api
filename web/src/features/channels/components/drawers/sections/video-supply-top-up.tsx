@@ -25,12 +25,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toIntlLocale } from '@/i18n/languages'
-import { formatQuotaWithCurrency, getCurrencyDisplay } from '@/lib/currency'
-import { formatNumber } from '@/lib/format'
 import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import { addChannelVideoSupply } from '../../../api'
 import { channelsQueryKeys } from '../../../lib/channel-actions'
+import {
+  formatVideoSupply,
+  videoSupplyDelta,
+} from '../../../lib/video-scheduling'
 import type { VideoSupplyUnit } from '../../../types'
 
 type VideoSupplyTopUpProps = {
@@ -68,16 +70,11 @@ export function VideoSupplyTopUp(props: VideoSupplyTopUpProps) {
     Number.isFinite(parsed) &&
     parsed !== 0 &&
     (props.unit === 'usd' || Number.isInteger(parsed))
-  const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
-  const delta =
-    props.unit === 'usd' ? Math.round(parsed * quotaPerUnit) : parsed
-  let shown = t('Unknown')
-  if (remaining !== null) {
-    shown =
-      props.unit === 'usd'
-        ? formatQuotaWithCurrency(remaining)
-        : formatNumber(remaining, locale)
-  }
+  const delta = videoSupplyDelta(props.unit, parsed)
+  const shown =
+    remaining === null
+      ? t('Unknown')
+      : formatVideoSupply(props.unit, remaining, locale)
 
   return (
     <div
