@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "Transmettre les en-têtes",
     "Pass Through Request Headers": "Transmettre les en-têtes de la requête",
     "Pass Through Upstream Errors": "Transmettre les erreurs amont",
+    "Redirect To Upstream Media URL": "Rediriger vers l'URL média amont",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "Redirige les téléchargements d'artefacts de tâche (vidéo, image, audio) vers toute adresse https publique en amont au lieu de relayer les octets, y compris l'adresse finale vers laquelle une requête fournisseur authentifiée redirige ; les appelants voient l'hôte amont et le proxy du canal n'est pas utilisé pour ces téléchargements",
     "Pass through the anthropic-beta header for beta features": "Transmettre l'en-tête anthropic-beta pour les fonctionnalités bêta",
     "Pass through the include field for usage obfuscation": "Transmettre le champ include pour l'obfuscation d'utilisation",
     "Pass through the inference_geo field for Claude data residency region control": "Transmettre le champ inference_geo pour le contrôle de la région de résidence des données Claude",

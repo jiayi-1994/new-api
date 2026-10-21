@@ -226,7 +226,8 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 			message: "Artifact channel is unavailable", err: err,
 		}
 	}
-	proxy := strings.TrimSpace(channel.GetSetting().Proxy)
+	setting := channel.GetSetting()
+	proxy := strings.TrimSpace(setting.Proxy)
 	if err := validateTaskMediaURL(rawURL, proxy); err != nil {
 		return &taskMediaProxyError{
 			status: http.StatusBadGateway, code: "artifact_request_rejected",
@@ -236,7 +237,8 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	// Public storage links already authorize the download through the URL. Let
 	// the client fetch the bytes directly, keeping signed query parameters intact.
 	// Requests needing provider headers or a different method must stay proxied.
-	if descriptor.Credentialless && method == c.Request.Method && isObjectStorageMediaURL(parsedURL) {
+	redirectAnyHTTPS := setting.MediaRedirectEnabled
+	if descriptor.Credentialless && method == c.Request.Method && isRedirectableMediaURL(parsedURL, redirectAnyHTTPS) {
 		setTaskMediaResponseSecurityHeaders(c.Writer.Header())
 		c.Redirect(http.StatusFound, rawURL)
 		return nil
@@ -274,7 +276,7 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 		req.Header.Set(name, value)
 	}
 
-	client = taskMediaRedirectClient(client, proxy, c, clientHeaders, descriptor.Credentialless)
+	client = taskMediaRedirectClient(client, proxy, c, clientHeaders, descriptor.Credentialless, redirectAnyHTTPS)
 	clientWithoutBodyTimeout := *client
 	clientWithoutBodyTimeout.Timeout = 0
 	resp, err := doTaskMediaRequest(&clientWithoutBodyTimeout, req, taskMediaResponseHeaderTimeout)
@@ -302,7 +304,7 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	switch resp.StatusCode {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
 		target, locationErr := resp.Location()
-		if locationErr != nil || method != c.Request.Method || !isObjectStorageMediaURL(target) {
+		if locationErr != nil || method != c.Request.Method || !isRedirectableMediaURL(target, redirectAnyHTTPS) {
 			return &taskMediaProxyError{
 				status: http.StatusBadGateway, code: "artifact_upstream_error",
 				message: "Artifact upstream returned an unsupported redirect", err: locationErr,
@@ -350,14 +352,18 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	}
 }
 
-// isObjectStorageMediaURL recognizes the managed storage/CDN domains supported
-// by the video downloader. Unrecognized hosts retain the normal proxy behavior.
-func isObjectStorageMediaURL(target *url.URL) bool {
-	if target.Scheme != "https" {
+// isRedirectableMediaURL recognizes the managed storage/CDN domains supported
+// by the video downloader. Unrecognized hosts retain the normal proxy behavior
+// unless the channel opted into redirecting every https host (anyHTTPS).
+func isRedirectableMediaURL(target *url.URL, anyHTTPS bool) bool {
+	if target == nil || target.Scheme != "https" {
 		return false
 	}
 	host := strings.ToLower(target.Hostname())
-	if host == "storage.googleapis.com" {
+	if host == "" {
+		return false
+	}
+	if anyHTTPS || host == "storage.googleapis.com" {
 		return true
 	}
 	for _, suffix := range []string{
@@ -467,7 +473,7 @@ func applyTaskMediaRequestHeaders(destination http.Header, headers map[string]st
 	return nil
 }
 
-func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, clientHeaders map[string]string, credentialless bool) *http.Client {
+func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, clientHeaders map[string]string, credentialless, redirectAnyHTTPS bool) *http.Client {
 	cloned := *base
 	cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -487,7 +493,7 @@ func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, cl
 		// authenticated provider endpoint. Only its Location reaches the client;
 		// provider credentials and video bytes never travel to/from the CDN here.
 		if len(via) > 0 && via[0].Method == c.Request.Method && req.Method == c.Request.Method &&
-			(req.Method == http.MethodGet || req.Method == http.MethodHead) && isObjectStorageMediaURL(req.URL) &&
+			(req.Method == http.MethodGet || req.Method == http.MethodHead) && isRedirectableMediaURL(req.URL, redirectAnyHTTPS) &&
 			(credentialless || !sameTaskMediaOrigin(via[0].URL, req.URL)) {
 			return http.ErrUseLastResponse
 		}

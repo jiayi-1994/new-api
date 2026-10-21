@@ -79,4 +79,40 @@ describe('error passthrough channel setting', () => {
         .error_passthrough_enabled
     ).toBe(false)
   })
+
+})
+
+describe('media redirect channel setting', () => {
+  test('a stored true flag loads as enabled and a missing flag as disabled', () => {
+    expect(
+      transformChannelToFormDefaults(
+        gatewayChannel({ media_redirect_enabled: true })
+      ).media_redirect_enabled
+    ).toBe(true)
+    expect(
+      transformChannelToFormDefaults(gatewayChannel({})).media_redirect_enabled
+    ).toBe(false)
+  })
+
+  test('an enabled switch is written to the setting JSON and a disabled one stays false', () => {
+    const base = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'Gateway',
+      type: CHANNEL_TYPE_NEW_API,
+      base_url: 'https://gateway.example',
+      key: 'test-key',
+      models: 'seedance',
+    }
+    expect(
+      JSON.parse(
+        buildSettingJSON(
+          channelFormSchema.parse({ ...base, media_redirect_enabled: true })
+        )
+      ).media_redirect_enabled
+    ).toBe(true)
+    expect(
+      JSON.parse(buildSettingJSON(channelFormSchema.parse(base)))
+        .media_redirect_enabled
+    ).toBe(false)
+  })
 })

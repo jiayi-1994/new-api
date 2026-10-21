@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "请求头透传",
     "Pass Through Request Headers": "透传请求头",
     "Pass Through Upstream Errors": "透传上游错误",
+    "Redirect To Upstream Media URL": "重定向到上游媒体地址",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "任务产物（视频、图片、音频）下载直接 302 到任意公开的 https 上游地址，不再由本服务转发字节，带凭证的上游请求最终跳转到的地址也会直接交给调用方；调用方会看到上游域名，这些下载不经过渠道代理",
     "Pass through the anthropic-beta header for beta features": "透传 anthropic-beta 头部以使用 beta 功能",
     "Pass through the include field for usage obfuscation": "透传 include 字段以用于用量混淆",
     "Pass through the inference_geo field for Claude data residency region control": "透传 inference_geo 字段用于控制 Claude 数据驻留推理区域",

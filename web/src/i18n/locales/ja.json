@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "ヘッダー透過",
     "Pass Through Request Headers": "リクエストヘッダーをパススルー",
     "Pass Through Upstream Errors": "上流エラーをパススルー",
+    "Redirect To Upstream Media URL": "上流のメディア URL へリダイレクト",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "タスク成果物（動画・画像・音声）のダウンロードを任意の公開 https 上流アドレスへリダイレクトし、本サービスでバイトを中継しません。認証付きのプロバイダー要求が最終的にリダイレクトする先も呼び出し側へ直接渡されます。呼び出し側に上流ホストが見え、これらのダウンロードはチャネルのプロキシを経由しません",
     "Pass through the anthropic-beta header for beta features": "ベータ機能用に anthropic-beta ヘッダーをパススルー",
     "Pass through the include field for usage obfuscation": "使用量難読化用に include フィールドをパススルー",
     "Pass through the inference_geo field for Claude data residency region control": "Claude データ駐留推論リージョン制御用に inference_geo フィールドをパススルー",

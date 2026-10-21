@@ -62,6 +62,7 @@ const CONFIGURATION_BLOCKS = {
       'thinking_to_content',
       'pass_through_body_enabled',
       'error_passthrough_enabled',
+      'media_redirect_enabled',
       'responses_websocket_enabled',
       'ollama_openai_chat',
       'system_prompt',
@@ -158,6 +159,7 @@ export function getChannelConfigurationState(
       (values.type !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
         values.pass_through_body_enabled) ||
       values.error_passthrough_enabled ||
+      values.media_redirect_enabled ||
       (supportsResponsesWebSocket(values.type) &&
         values.responses_websocket_enabled) ||
       (values.type === CHANNEL_TYPE_OLLAMA && values.ollama_openai_chat) ||

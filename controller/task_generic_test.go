@@ -619,6 +619,155 @@ func TestTaskMediaRedirectsPublicStorageWithoutFetchingContent(t *testing.T) {
 		})
 	}
 
+	t.Run("channel media redirect covers every credentialless https host", func(t *testing.T) {
+		require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).
+			Update("setting", `{"media_redirect_enabled":true}`).Error)
+		t.Cleanup(func() {
+			require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("setting", "").Error)
+		})
+		for _, test := range []struct {
+			name     string
+			url      string
+			private  bool
+			redirect bool
+		}{
+			{name: "self-hosted MinIO", url: "https://minioapi.example.com/public-images/output.mp4", redirect: true},
+			{name: "unknown CDN", url: "https://cdn.example.com/video.mp4?token=abc%2F123", redirect: true},
+			{name: "plain http stays proxied", url: "http://cdn.example.com/video.mp4"},
+			{name: "authenticated stays proxied", url: "https://cdn.example.com/video.mp4", private: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				for _, method := range []string{http.MethodGet, http.MethodHead} {
+					t.Run(method, func(t *testing.T) {
+						fetched = 0
+						upstreamAuthorization = ""
+						recorder := httptest.NewRecorder()
+						c, _ := gin.CreateTestContext(recorder)
+						c.Request = httptest.NewRequest(method, "/v1/videos/task_generic/content", nil)
+						c.Request.Header.Set("Authorization", "Bearer client-secret")
+						descriptor := &relaychannel.TaskContentRequest{URL: test.url, Method: method, Credentialless: !test.private}
+						if test.private {
+							descriptor.Headers = map[string]string{"Authorization": "Bearer provider-secret"}
+						}
+						require.NoError(t, proxyTaskMedia(c, task, descriptor))
+						c.Writer.WriteHeaderNow()
+						assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+						if test.redirect {
+							assert.Equal(t, http.StatusFound, recorder.Code)
+							assert.Equal(t, test.url, recorder.Header().Get("Location"))
+							assert.Zero(t, fetched, "redirected video must not pass through the gateway")
+							return
+						}
+						assert.Equal(t, http.StatusOK, recorder.Code)
+						assert.Empty(t, recorder.Header().Get("Location"))
+						assert.Equal(t, 1, fetched)
+						if test.private {
+							assert.Equal(t, "Bearer provider-secret", upstreamAuthorization)
+						} else {
+							assert.Empty(t, upstreamAuthorization, "client credentials must never reach the upstream")
+						}
+						if method == http.MethodGet {
+							assert.Equal(t, "video-bytes", recorder.Body.String())
+						} else {
+							assert.Empty(t, recorder.Body.String())
+						}
+					})
+				}
+			})
+		}
+	})
+
+	t.Run("channel media redirect hands the final hop of a provider redirect chain to the client", func(t *testing.T) {
+		const finalURL = "https://minio.example/public-images/output.mp4"
+		previousTransport := client.Transport
+		t.Cleanup(func() { client.Transport = previousTransport })
+		for _, test := range []struct {
+			name           string
+			enabled        bool
+			credentialless bool
+			wantLocation   string
+			wantFetched    int
+		}{
+			// A credentialless https descriptor is handed over before any upstream call.
+			{name: "enabled public descriptor is redirected directly", enabled: true, credentialless: true, wantLocation: "https://provider.example/content"},
+			// A credentialed descriptor is still fetched by the gateway; only the final hop reaches the client.
+			{name: "enabled authenticated chain", enabled: true, wantLocation: finalURL, wantFetched: 2},
+			{name: "disabled public chain streams the final hop", credentialless: true},
+			{name: "disabled authenticated chain is rejected"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				setting := ""
+				if test.enabled {
+					setting = `{"media_redirect_enabled":true}`
+				}
+				require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("setting", setting).Error)
+				t.Cleanup(func() {
+					require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("setting", "").Error)
+				})
+				fetched = 0
+				var finalFetched bool
+				client.Transport = taskMediaTestTransport(func(request *http.Request) (*http.Response, error) {
+					fetched++
+					response := &http.Response{
+						StatusCode: http.StatusFound, Header: make(http.Header),
+						Body: io.NopCloser(strings.NewReader("")), Request: request,
+					}
+					switch request.URL.Host {
+					case "provider.example":
+						if test.credentialless {
+							assert.Empty(t, request.Header.Get("Authorization"))
+						} else {
+							assert.Equal(t, "Bearer provider-secret", request.Header.Get("Authorization"))
+						}
+						if request.URL.Path == "/content" {
+							response.Header.Set("Location", "/download")
+						} else {
+							response.Header.Set("Location", finalURL)
+						}
+					default:
+						finalFetched = true
+						assert.Empty(t, request.Header.Get("Authorization"), "provider credentials must never reach the final host")
+						response.StatusCode = http.StatusOK
+						response.Header.Set("Content-Type", "video/mp4")
+						response.Body = io.NopCloser(strings.NewReader("video-bytes"))
+					}
+					return response, nil
+				})
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+				descriptor := &relaychannel.TaskContentRequest{
+					URL: "https://provider.example/content", Method: http.MethodGet, Credentialless: test.credentialless,
+				}
+				if !test.credentialless {
+					descriptor.Headers = map[string]string{"Authorization": "Bearer provider-secret"}
+				}
+				err := proxyTaskMedia(c, task, descriptor)
+				c.Writer.WriteHeaderNow()
+				switch {
+				case test.wantLocation != "":
+					require.NoError(t, err)
+					assert.Equal(t, http.StatusFound, recorder.Code)
+					assert.Equal(t, test.wantLocation, recorder.Header().Get("Location"))
+					assert.Equal(t, test.wantFetched, fetched, "at most the provider redirect chain should be fetched")
+					assert.False(t, finalFetched, "video bytes must not pass through the gateway")
+				case test.credentialless:
+					require.NoError(t, err)
+					assert.Equal(t, http.StatusOK, recorder.Code)
+					assert.Equal(t, "video-bytes", recorder.Body.String())
+					assert.Equal(t, 3, fetched)
+					assert.True(t, finalFetched)
+				default:
+					var proxyErr *taskMediaProxyError
+					require.ErrorAs(t, err, &proxyErr)
+					assert.Equal(t, http.StatusBadGateway, proxyErr.status)
+					assert.ErrorIs(t, err, errTaskMediaRequestRejected)
+					assert.False(t, finalFetched)
+				}
+			})
+		}
+	})
+
 	task.Action = constant.TaskActionTextToVideo
 	task.PrivateData.ResultURL = "https://bucket.r2.dev/video.mp4?signature=abc%2F123"
 	require.NoError(t, model.DB.Save(task).Error)

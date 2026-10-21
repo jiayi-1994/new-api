@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "Truyền header qua",
     "Pass Through Request Headers": "Chuyển tiếp header yêu cầu",
     "Pass Through Upstream Errors": "Chuyển tiếp lỗi upstream",
+    "Redirect To Upstream Media URL": "Chuyển hướng tới URL media thượng nguồn",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "Chuyển hướng lượt tải sản phẩm tác vụ (video, hình ảnh, âm thanh) tới bất kỳ địa chỉ https công khai nào của thượng nguồn thay vì proxy dữ liệu, bao gồm cả địa chỉ cuối mà yêu cầu có xác thực tới nhà cung cấp chuyển hướng đến; người gọi sẽ thấy máy chủ thượng nguồn và proxy của kênh không được dùng cho các lượt tải này",
     "Pass through the anthropic-beta header for beta features": "Chuyển tiếp header anthropic-beta cho tính năng beta",
     "Pass through the include field for usage obfuscation": "Chuyển tiếp trường include cho che giấu sử dụng",
     "Pass through the inference_geo field for Claude data residency region control": "Chuyển tiếp trường inference_geo để kiểm soát vùng lưu trữ dữ liệu Claude",

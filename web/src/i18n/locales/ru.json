@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "Передать заголовки",
     "Pass Through Request Headers": "Проброс заголовков запроса",
     "Pass Through Upstream Errors": "Передавать ошибки апстрима",
+    "Redirect To Upstream Media URL": "Перенаправлять на URL медиа вышестоящего сервиса",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "Перенаправлять загрузки артефактов задач (видео, изображения, аудио) на любой публичный https-адрес вышестоящего сервиса вместо проксирования байтов, включая конечный адрес, на который перенаправляет авторизованный запрос к провайдеру; вызывающая сторона видит хост вышестоящего сервиса, а прокси канала для этих загрузок не используется",
     "Pass through the anthropic-beta header for beta features": "Проброс заголовка anthropic-beta для бета-функций",
     "Pass through the include field for usage obfuscation": "Проброс поля include для обфускации использования",
     "Pass through the inference_geo field for Claude data residency region control": "Проброс поля inference_geo для управления регионом размещения данных Claude",

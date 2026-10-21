@@ -21,7 +21,13 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	// ErrorPassthroughEnabled shows this channel's upstream error message to
 	// the client of a unified video sale instead of the generic failure text.
-	ErrorPassthroughEnabled   bool   `json:"error_passthrough_enabled,omitempty"`
+	ErrorPassthroughEnabled bool `json:"error_passthrough_enabled,omitempty"`
+	// MediaRedirectEnabled lets the task artifact content endpoints (video and
+	// generic artifacts) redirect clients to any https upstream media URL instead
+	// of proxying the bytes, including the final address a credentialed provider
+	// request redirects to. Without it only the managed object-storage/CDN hosts
+	// are redirected.
+	MediaRedirectEnabled      bool   `json:"media_redirect_enabled,omitempty"`
 	ResponsesWebSocketEnabled bool   `json:"responses_websocket_enabled,omitempty"`
 	SystemPrompt              string `json:"system_prompt,omitempty"`
 	SystemPromptOverride      bool   `json:"system_prompt_override,omitempty"`

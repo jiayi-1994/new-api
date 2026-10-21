@@ -4387,6 +4387,8 @@
     "Pass Through Headers": "Pass Through Headers",
     "Pass Through Request Headers": "Pass Through Request Headers",
     "Pass Through Upstream Errors": "Pass Through Upstream Errors",
+    "Redirect To Upstream Media URL": "Redirect To Upstream Media URL",
+    "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads": "Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads",
     "Pass through the anthropic-beta header for beta features": "Pass through the anthropic-beta header for beta features",
     "Pass through the include field for usage obfuscation": "Pass through the include field for usage obfuscation",
     "Pass through the inference_geo field for Claude data residency region control": "Pass through the inference_geo field for Claude data residency region control",

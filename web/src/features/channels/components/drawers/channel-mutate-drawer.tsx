@@ -303,6 +303,7 @@ const SENSITIVE_FORM_FIELDS = [
   'http2_connection_shards',
   'pass_through_body_enabled',
   'error_passthrough_enabled',
+  'media_redirect_enabled',
   'responses_websocket_enabled',
   'system_prompt',
   'system_prompt_override',
@@ -1919,6 +1920,32 @@ export function ChannelMutateDrawer({
             <FormDescription>
               {t(
                 "Show this channel's upstream error message to unified video model callers instead of the generic failure text; URLs and quota or balance details stay hidden"
+              )}
+            </FormDescription>
+          </div>
+          <FormControl>
+            <Switch
+              disabled={sensitiveLocked}
+              checked={field.value}
+              onCheckedChange={field.onChange}
+            />
+          </FormControl>
+        </FormItem>
+      )}
+    />
+  )
+
+  const mediaRedirectFields = (
+    <FormField
+      control={form.control}
+      name='media_redirect_enabled'
+      render={({ field }) => (
+        <FormItem className='flex items-center justify-between px-4 py-3'>
+          <div className='space-y-0.5'>
+            <FormLabel>{t('Redirect To Upstream Media URL')}</FormLabel>
+            <FormDescription>
+              {t(
+                'Redirect task artifact downloads (video, image, audio) to any public https upstream address instead of proxying the bytes, including the final address a credentialed provider request redirects to; callers see the upstream host, and the channel proxy is not used for these downloads'
               )}
             </FormDescription>
           </div>
@@ -4718,6 +4745,7 @@ export function ChannelMutateDrawer({
                 {currentType !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
                   passthroughFields}
                 {errorPassthroughFields}
+                {mediaRedirectFields}
                 {systemPromptFields}
                 {systemPromptOverrideFields}
               </fieldset>
