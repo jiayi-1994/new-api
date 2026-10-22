@@ -117,26 +117,26 @@ describe('pricing controls', () => {
     const toggle = screen.getByRole('button', {
       name: 'Show performance metrics',
     })
-    expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    expect(
-      screen.getAllByLabelText('Performance metrics for the last 24 hours')
-    ).toHaveLength(2)
-    await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     expect(
       screen.queryByLabelText('Performance metrics for the last 24 hours')
     ).not.toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: 'Details' })[0])
-    expect(onModelClick).toHaveBeenCalledWith('model-1')
-    toggle.focus()
-    await user.keyboard(' ')
+    await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
     expect(
       screen.getAllByLabelText('Performance metrics for the last 24 hours')
     ).toHaveLength(2)
+    await user.click(screen.getAllByRole('button', { name: 'Details' })[0])
+    expect(onModelClick).toHaveBeenCalledWith('model-1')
+    toggle.focus()
+    await user.keyboard(' ')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      screen.queryByLabelText('Performance metrics for the last 24 hours')
+    ).not.toBeInTheDocument()
   })
 
-  it('restores the hidden preference from browser storage without requesting card metrics', async () => {
+  it('hides metrics again on the next visit even after they were shown, without requesting card metrics', async () => {
     const props = toolbarProps()
     const user = userEvent.setup()
     const request = vi.spyOn(api, 'get')
@@ -144,8 +144,14 @@ describe('pricing controls', () => {
     await user.click(
       screen.getByRole('button', { name: 'Show performance metrics' })
     )
+    expect(usePricingPreferencesStore.getState().showPerformanceMetrics).toBe(
+      true
+    )
     const stored = localStorage.getItem('model-pricing-preferences')
     expect(stored).not.toBeNull()
+    expect(JSON.parse(stored ?? '{}').state).not.toHaveProperty(
+      'showPerformanceMetrics'
+    )
     unmount()
     usePricingPreferencesStore.setState(
       usePricingPreferencesStore.getInitialState()
@@ -168,16 +174,19 @@ describe('pricing controls', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it('defaults to showing metrics when restoring older currency-only preferences', async () => {
+  it('ignores a previously persisted visible preference and keeps the stored currency', async () => {
     localStorage.setItem(
       'model-pricing-preferences',
-      JSON.stringify({ state: { currency: 'site' }, version: 0 })
+      JSON.stringify({
+        state: { currency: 'site', showPerformanceMetrics: true },
+        version: 0,
+      })
     )
     await act(() => usePricingPreferencesStore.persist.rehydrate())
     render(<PricingToolbar {...toolbarProps()} />)
     expect(
       screen.getByRole('button', { name: 'Show performance metrics' })
-    ).toHaveAttribute('aria-pressed', 'true')
+    ).toHaveAttribute('aria-pressed', 'false')
     expect(usePricingPreferencesStore.getState().currency).toBe('site')
   })
 

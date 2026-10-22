@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
 
 import { api } from '@/lib/api'
+import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -79,6 +80,9 @@ beforeEach(() => {
 })
 afterEach(() => {
   queryClient.clear()
+  usePricingPreferencesStore.setState(
+    usePricingPreferencesStore.getInitialState()
+  )
   useSystemConfigStore
     .getState()
     .setConfig({ currency: { ...DEFAULT_CURRENCY_CONFIG } })
@@ -424,6 +428,7 @@ describe('model cards', () => {
       .spyOn(api, 'get')
       .mockRejectedValue(new Error('metrics unavailable'))
     const onModelClick = vi.fn()
+    usePricingPreferencesStore.setState({ showPerformanceMetrics: true })
     render(
       <QueryClientProvider client={queryClient}>
         <ModelCardGrid models={[pricingModel()]} onModelClick={onModelClick} />

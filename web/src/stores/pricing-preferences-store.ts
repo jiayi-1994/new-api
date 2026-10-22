@@ -33,15 +33,18 @@ export const usePricingPreferencesStore = create<PricingPreferences>()(
     (set) => ({
       currency: 'USD',
       setCurrency: (currency) => set({ currency }),
-      showPerformanceMetrics: true,
+      // Session-only: the model square always opens with metrics hidden.
+      showPerformanceMetrics: false,
       setShowPerformanceMetrics: (showPerformanceMetrics) =>
         set({ showPerformanceMetrics }),
     }),
     {
       name: 'model-pricing-preferences',
-      partialize: (state) => ({
-        currency: state.currency,
-        showPerformanceMetrics: state.showPerformanceMetrics,
+      partialize: (state) => ({ currency: state.currency }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<PricingPreferences>),
+        showPerformanceMetrics: current.showPerformanceMetrics,
       }),
     }
   )
