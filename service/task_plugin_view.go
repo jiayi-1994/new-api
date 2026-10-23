@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,65 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	videodto "github.com/QuantumNous/new-api/relaykit/dto"
 )
+
+var (
+	upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|余量|欠费|欠款|充值|扣费|quota|balance|insufficient|credit|billing|overdue|arrear|[$￥¥€£]\s*\d|\d(?:\.\d+)?\s*(?:USD|CNY|RMB|EUR|GBP)\b`)
+	upstreamCredentialPattern   = regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential)\b["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic)\s+)?[^\s"',;}\]]+`)
+	upstreamBearerPattern       = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+`)
+	upstreamAPIKeyPattern       = regexp.MustCompile(`\bsk-[a-zA-Z0-9_-]+`)
+)
+
+// SanitizeUnifiedVideoUpstreamError applies the same public error policy to
+// submission errors and persisted task failures. Callers first check opt-in.
+func SanitizeUnifiedVideoUpstreamError(message string, secrets ...string) string {
+	var body videodto.GeneralErrorResponse
+	if common.UnmarshalJsonStr(message, &body) == nil {
+		if parsed := body.ToMessage(); parsed != "" {
+			message = parsed
+		}
+	}
+	if upstreamQuotaMessagePattern.MatchString(message) {
+		return "上游账户状态异常，暂时无法处理该请求，请联系管理员"
+	}
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "***")
+		}
+	}
+	message = upstreamCredentialPattern.ReplaceAllString(message, "${1}***")
+	message = upstreamBearerPattern.ReplaceAllString(message, "${1} ***")
+	message = upstreamAPIKeyPattern.ReplaceAllString(message, "***")
+	message = strings.TrimSpace(common.MaskSensitiveInfo(message))
+	if message == "" {
+		return "Video generation failed"
+	}
+	return message
+}
+
+func unifiedVideoHostFailure(task *model.Task) bool {
+	return task.VideoHealthAttribution == "host" || task.VideoHealthAttribution == taskAttributionHostLag ||
+		strings.HasPrefix(task.FailReason, "poll failed:") || strings.HasPrefix(task.FailReason, "upstream task not found (HTTP ")
+}
+
+func unifiedVideoTaskFailureMessage(task *model.Task) string {
+	const generic = "Video generation failed"
+	if task.ChannelId <= 0 || strings.TrimSpace(task.FailReason) == "" || unifiedVideoHostFailure(task) {
+		return generic
+	}
+	channel, err := model.CacheGetChannel(task.ChannelId)
+	if err != nil || channel == nil || channel.Setting == nil {
+		return generic
+	}
+	// GetSetting repairs malformed JSON by writing the channel. Public reads
+	// must instead fail closed without mutating the channel or cached object.
+	var setting videodto.ChannelSettings
+	if common.UnmarshalJsonStr(*channel.Setting, &setting) != nil || !setting.ErrorPassthroughEnabled {
+		return generic
+	}
+	secrets := []string{task.PrivateData.Key, task.PrivateData.UpstreamTaskID}
+	secrets = append(secrets, channel.GetKeys()...)
+	return SanitizeUnifiedVideoUpstreamError(task.FailReason, secrets...)
+}
 
 // RedactUnifiedVideoTaskDTO keeps execution details out of the public sale
 // without changing the persisted task used for polling and administration.
@@ -29,7 +89,7 @@ func RedactUnifiedVideoTaskDTO(task *model.Task, item *dto.TaskDto) {
 	item.Properties = properties
 	item.FailReason = ""
 	if task.Status == model.TaskStatusFailure {
-		item.FailReason = "Video generation failed"
+		item.FailReason = unifiedVideoTaskFailureMessage(task)
 	}
 }
 
@@ -117,12 +177,10 @@ func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
 	if task.Status != model.TaskStatusFailure {
 		return video
 	}
-	video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: "Video generation failed"}
-	// Publish only a stable category, never the provider's failure details.
+	video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: unifiedVideoTaskFailureMessage(task)}
+	// Keep stable failure categories independent of the message opt-in.
 	// Older untracked tasks lack the host marker, but retain these poll reasons.
-	if task.VideoHealthAttribution == "host" || task.VideoHealthAttribution == taskAttributionHostLag ||
-		strings.HasPrefix(task.FailReason, "poll failed:") || strings.HasPrefix(task.FailReason, "upstream task not found (HTTP ") ||
-		GetTaskAdaptorFunc == nil {
+	if unifiedVideoHostFailure(task) || GetTaskAdaptorFunc == nil {
 		return video
 	}
 	classifier, ok := GetTaskAdaptorFunc(task.Platform).(VideoFailureClassifier)

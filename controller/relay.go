@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -863,11 +862,6 @@ func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 	respondTaskError(c, taskErr)
 }
 
-// upstreamQuotaMessagePattern spots upstream wording about the operator's own
-// account funds (额度/余额, "$1.800000", "insufficient credits"), which a buyer
-// of a unified video sale must never see.
-var upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|余量|欠费|欠款|充值|扣费|quota|balance|insufficient|credit|billing|overdue|arrear|[$￥¥€£]\s*\d|\d(?:\.\d+)?\s*(?:USD|CNY|RMB|EUR|GBP)`)
-
 // unifiedVideoPublicErrorMessage projects a submission failure onto the public
 // unified video sale. The upstream message is shown only when the serving
 // channel opts in; even then its credentials and fund details stay hidden.
@@ -883,17 +877,7 @@ func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) 
 	upstreamBody := taskErr.Code == "fail_to_fetch_task" || taskErr.Code == "plugin_submit_rejected"
 	upstreamAuth := taskErr.StatusCode == http.StatusUnauthorized || taskErr.StatusCode == http.StatusForbidden
 	if setting.ErrorPassthroughEnabled && upstreamBody && !upstreamAuth {
-		message := taskErr.Message
-		var body dto.GeneralErrorResponse
-		if common.UnmarshalJsonStr(message, &body) == nil {
-			if parsed := body.ToMessage(); parsed != "" {
-				message = parsed
-			}
-		}
-		if upstreamQuotaMessagePattern.MatchString(message) {
-			return "上游账户状态异常，暂时无法处理该请求，请联系管理员"
-		}
-		return common.MaskSensitiveInfo(message)
+		return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, common.GetContextKeyString(c, constant.ContextKeyChannelKey))
 	}
 	switch {
 	case taskErr.LocalError:

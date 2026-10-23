@@ -225,8 +225,11 @@ test("a definite failure without a task id is rejected while ambiguous creates s
 
 test("public failure codes preserve safe attribution in both creation and polling", () => {
   for (const [code, message, reason, classification] of [
-    ["video_request_rejected", "upstream quota exhausted: private detail", "video request rejected", "user"],
-    ["video_generation_cancelled", "upstream internal error: private detail", "cancelled: video generation cancelled", "cancelled"],
+    ["video_request_rejected", "upstream quota exhausted: sanitized detail", "video request rejected: upstream quota exhausted: sanitized detail", "user"],
+    ["video_request_rejected", "input image may be related to copyright restrictions", "video request rejected: input image may be related to copyright restrictions", "user"],
+    ["video_request_rejected", "Video generation failed", "video request rejected", "user"],
+    ["video_generation_cancelled", "upstream internal error: sanitized detail", "cancelled: upstream internal error: sanitized detail", "cancelled"],
+    ["video_generation_cancelled", "Video generation failed", "cancelled: video generation cancelled", "cancelled"],
     ["video_generation_failed", "Video generation failed", "Video generation failed", "upstream"],
     ["unknown_code", "Video generation failed", "Video generation failed", "upstream"],
     ["VIDEO_REQUEST_REJECTED", "Video generation failed", "Video generation failed", "upstream"],

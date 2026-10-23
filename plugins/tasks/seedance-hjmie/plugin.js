@@ -37,7 +37,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-hjmie",
   name: "Seedance via Po Xiao",
-  version: "1.0.12",
+  version: "1.0.14",
   author: { name: "jiayi-1994" },
   description: {
     en: "Video generation through the Po Xiao API",
@@ -416,13 +416,16 @@ export function parseTaskResult(_ctx, body) {
   if (mapped === "FAILURE") {
     const error = body.error;
     const code = error && typeof error === "object" ? error.code : undefined;
-    // Unified gateways redact provider messages but preserve this public attribution.
+    const message = error && typeof error.message === "string" ? error.message.trim() : "";
+    const detail = message && message.toLowerCase() !== "video generation failed" ? message : "";
+    // Gateways may opt in to sanitized details. Keep both those details and
+    // their explicit public attribution when forwarding through another gateway.
     if (code === "video_request_rejected") {
-      result.reason = "video request rejected";
+      result.reason = "video request rejected" + (detail ? ": " + detail : "");
       return result;
     }
     if (code === "video_generation_cancelled") {
-      result.reason = "cancelled: video generation cancelled";
+      result.reason = "cancelled: " + (detail || "video generation cancelled");
       return result;
     }
     const text = (error && typeof error === "object" && error.message) ||
@@ -488,7 +491,7 @@ export function describeSpec(ctx) {
 // anything else counts against the upstream channel.
 export function classifyFailure(reason) {
   const text = String(reason || "").toLowerCase();
-  if (text === "video request rejected") return "user";
+  if (text === "video request rejected" || text.startsWith("video request rejected: ")) return "user";
   // Only the marker this plugin writes for a cancelled status, or an explicit
   // user cancellation, is neutral; a provider-side cancellation is upstream.
   if (/^cancelled: |cancell?ed by (the )?user\b/.test(text)) return "cancelled";

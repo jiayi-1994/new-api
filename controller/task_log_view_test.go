@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -417,6 +418,126 @@ func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
 			assert.Equal(t, tc.wantMessage+" (request id: req-passthrough)", body["message"])
 			assert.NotContains(t, recorder.Body.String(), tc.wantAbsent)
 		})
+	}
+}
+
+func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	previousMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemory })
+	task.Status = model.TaskStatusFailure
+	task.Platform = "missing-plugin"
+	task.PrivateData.Key = "old-private-key"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+		SalesSource: billingexpr.SalesSourceVideoRequest,
+		UsageFacts:  map[string]any{"seconds": 5, "resolution": "720p"},
+	}}
+	channel, err := model.GetChannelById(task.ChannelId, true)
+	require.NoError(t, err)
+	channel.Key = "current-private-key"
+	source, err := plugins.Source("seedance-hjmie")
+	require.NoError(t, err)
+	plugin, err := pluginruntime.CompilePlugin(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	const policyReason = "The input image content[1] may be related to copyright restrictions"
+	for _, tc := range []struct {
+		name, setting, reason, attribution, want string
+		missingChannel                           bool
+	}{
+		{name: "off", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: "Video generation failed"},
+		{name: "on", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, want: policyReason},
+		{name: "off again hides existing task", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: "Video generation failed"},
+		{name: "URL and keys", setting: `{"error_passthrough_enabled":true}`, reason: "invalid image https://private.example/a.png?token=secret current-private-key old-private-key", want: "invalid image https://***.example/***?token=*** *** ***"},
+		{name: "credentials", setting: `{"error_passthrough_enabled":true}`, reason: "request rejected; Authorization: Bearer test-secret; api_key=another-secret", want: "request rejected; Authorization: ***; api_key=***"},
+		{name: "funds", setting: `{"error_passthrough_enabled":true}`, reason: "insufficient balance $1.80", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
+		{name: "currency amount", setting: `{"error_passthrough_enabled":true}`, reason: "request requires 3.50 USD", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
+		{name: "unlabelled credentials", setting: `{"error_passthrough_enabled":true}`, reason: "rejected Bearer opaque-secret and sk-example-secret", want: "rejected Bearer *** and ***"},
+		{name: "JSON error", setting: `{"error_passthrough_enabled":true}`, reason: `{"error":{"message":"invalid input image","type":"private-type"}}`, want: "invalid input image"},
+		{name: "host failure", setting: `{"error_passthrough_enabled":true}`, attribution: "host", reason: "private host detail", want: "Video generation failed"},
+		{name: "legacy poll failure", setting: `{"error_passthrough_enabled":true}`, reason: "poll failed: hook_error private detail", want: "Video generation failed"},
+		{name: "legacy missing upstream task", setting: `{"error_passthrough_enabled":true}`, reason: "upstream task not found (HTTP 404)", want: "Video generation failed"},
+		{name: "empty reason", setting: `{"error_passthrough_enabled":true}`, reason: "  ", want: "Video generation failed"},
+		{name: "invalid setting", setting: `{"error_passthrough_enabled":true,`, reason: policyReason, want: "Video generation failed"},
+		{name: "missing channel", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, missingChannel: true, want: "Video generation failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel.Setting = &tc.setting
+			require.NoError(t, model.DB.Save(channel).Error)
+			task.ChannelId = channel.Id
+			if tc.missingChannel {
+				task.ChannelId = 404
+			}
+			task.FailReason, task.VideoHealthAttribution = tc.reason, tc.attribution
+			require.NoError(t, model.DB.Save(task).Error)
+			for _, endpoint := range []string{"/v1/tasks/", "/v1/videos/", "/v1/video/generations/"} {
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Set("id", task.UserId)
+				c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}, {Key: "key", Value: task.TaskID}}
+				c.Request = httptest.NewRequest(http.MethodGet, endpoint+task.TaskID, nil)
+				if endpoint == "/v1/tasks/" {
+					GetTask(c)
+				} else {
+					require.Nil(t, relay.RelayTaskFetch(c, relayconstant.RelayModeVideoFetchByID))
+				}
+				require.Equal(t, http.StatusOK, recorder.Code)
+				var response struct {
+					FailReason string                `json:"fail_reason"`
+					Error      *dto.OpenAIVideoError `json:"error"`
+					Data       *taskdto.TaskDto      `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				switch endpoint {
+				case "/v1/videos/":
+					require.NotNil(t, response.Error)
+					assert.Equal(t, tc.want, response.Error.Message)
+					// Replay the actual public response through the receiving gateway's Sobek plugin.
+					var upstream map[string]any
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &upstream))
+					parsed, err := plugin.Engine.Call(t.Context(), "parseTaskResult", map[string]any{}, upstream)
+					require.NoError(t, err)
+					assert.Equal(t, tc.want, parsed.(map[string]any)["reason"])
+				case "/v1/video/generations/":
+					require.NotNil(t, response.Data)
+					assert.Equal(t, tc.want, response.Data.FailReason)
+				default:
+					assert.Equal(t, tc.want, response.FailReason)
+				}
+				assert.NotContains(t, recorder.Body.String(), "private-key")
+			}
+			assert.Equal(t, tc.want, tasksToDto([]*model.Task{task}, false, common.RoleCommonUser)[0].FailReason)
+			assert.Equal(t, tc.reason, tasksToDto([]*model.Task{task}, false, common.RoleAdminUser)[0].FailReason)
+			stored, exists, err := model.GetByTaskId(task.UserId, task.TaskID)
+			require.NoError(t, err)
+			require.True(t, exists)
+			assert.Equal(t, tc.reason, stored.FailReason)
+			storedChannel, err := model.GetChannelById(channel.Id, true)
+			require.NoError(t, err)
+			require.NotNil(t, storedChannel.Setting)
+			assert.Equal(t, tc.setting, *storedChannel.Setting, "reading malformed settings must not mutate the channel")
+		})
+	}
+	// The current cached switch also applies to already completed tasks.
+	common.MemoryCacheEnabled = true
+	cached := &model.Channel{Id: 880061, Key: "cached-private-key"}
+	task.ChannelId, task.FailReason, task.VideoHealthAttribution = cached.Id, policyReason, ""
+	for _, enabled := range []bool{true, false} {
+		copy := *cached
+		copy.SetSetting(dto.ChannelSettings{ErrorPassthroughEnabled: enabled})
+		model.CacheUpdateChannel(&copy)
+		want := "Video generation failed"
+		if enabled {
+			want = policyReason
+		}
+		assert.Equal(t, want, service.BuildUnifiedVideoResponse(task).Error.Message)
+	}
+	for _, code := range []string{"video_request_rejected", "video_generation_cancelled"} {
+		parsed, err := plugin.Engine.Call(t.Context(), "parseTaskResult", map[string]any{}, map[string]any{
+			"status": "failed", "error": map[string]any{"code": code, "message": policyReason},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, parsed.(map[string]any)["reason"], policyReason)
 	}
 }
 
