@@ -317,7 +317,33 @@ func is64BitIntegerType(dbType common.DatabaseType, dataType string) bool {
 	}
 }
 
+func migrateChannelGroupLength(db *gorm.DB) error {
+	if db.Dialector.Name() == "sqlite" || !db.Migrator().HasTable(&Channel{}) {
+		return nil
+	}
+	columns, err := db.Migrator().ColumnTypes(&Channel{})
+	if err != nil {
+		return fmt.Errorf("inspect channels group column: %w", err)
+	}
+	for _, column := range columns {
+		if !strings.EqualFold(column.Name(), "group") {
+			continue
+		}
+		length, ok := column.Length()
+		if ok && length > 0 && length < 256 {
+			if err := db.Migrator().AlterColumn(&Channel{}, "Group"); err != nil {
+				return fmt.Errorf("expand channels group column: %w", err)
+			}
+		}
+		break
+	}
+	return nil
+}
+
 func migrateDB() error {
+	if err := migrateChannelGroupLength(DB); err != nil {
+		return err
+	}
 	if err := migrateTokenKeyUniqueness(DB); err != nil {
 		return err
 	}

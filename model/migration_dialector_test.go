@@ -57,6 +57,20 @@ type migrationDecimalV3 struct {
 	Price float64 `gorm:"type:decimal(12,6);not null;default:1.25"`
 }
 
+type migrationChannelGroupV1 struct {
+	ID    int    `gorm:"primaryKey"`
+	Key   string `gorm:"not null"`
+	Name  string `gorm:"index"`
+	Group string `gorm:"type:varchar(64);default:'default'"`
+}
+
+type migrationChannelGroupWide struct {
+	ID    int    `gorm:"primaryKey"`
+	Key   string `gorm:"not null"`
+	Name  string `gorm:"index"`
+	Group string `gorm:"type:varchar(512);default:'default'"`
+}
+
 func TestMigrationSchemaStability(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
@@ -83,6 +97,89 @@ func TestMigrationSchemaStability(t *testing.T) {
 			t.Cleanup(func() { _ = sqlDB.Close() })
 			recorder := &migrationSQLRecorder{}
 			db = db.Session(&gorm.Session{Logger: recorder})
+			if dialect == "sqlite" {
+				var version string
+				require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+				t.Logf("SQLite version: %s", version)
+			}
+
+			t.Run("channel_group_length", func(t *testing.T) {
+				for _, upgrade := range []bool{false, true} {
+					name := "fresh"
+					if upgrade {
+						name = "upgrade"
+					}
+					t.Run(name, func(t *testing.T) {
+						const table = "migration_channel_group_test"
+						t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(table)) })
+						if upgrade {
+							require.NoError(t, db.Table(table).AutoMigrate(&migrationChannelGroupV1{}))
+							require.NoError(t, db.Table(table).Create(&migrationChannelGroupV1{ID: 1, Key: "fixture", Name: "existing", Group: "default,old"}).Error)
+						}
+						require.NoError(t, migrateChannelGroupLength(db.Table(table)))
+						require.NoError(t, db.Table(table).AutoMigrate(&Channel{}))
+						columns, err := db.Table(table).Migrator().ColumnTypes(&Channel{})
+						require.NoError(t, err)
+						found := false
+						for _, column := range columns {
+							if column.Name() == "group" {
+								found = true
+								length, ok := column.Length()
+								require.True(t, ok)
+								if dialect == "sqlite" && upgrade {
+									// SQLite does not enforce VARCHAR lengths and GORM leaves the old declaration intact.
+									assert.EqualValues(t, 64, length)
+								} else {
+									assert.EqualValues(t, 256, length)
+								}
+							}
+						}
+						require.True(t, found)
+						assert.True(t, db.Table(table).Migrator().HasIndex(&Channel{}, "Name"))
+						if upgrade {
+							var existing Channel
+							require.NoError(t, db.Table(table).First(&existing, 1).Error)
+							assert.Equal(t, "default,old", existing.Group)
+							assert.Equal(t, "existing", existing.Name)
+						}
+						groups := strings.Repeat("分组,", 85) + "x"
+						require.NoError(t, db.Table(table).Create(&Channel{Id: 2, Key: "fixture", Name: "new", Group: groups}).Error)
+						var saved Channel
+						require.NoError(t, db.Table(table).First(&saved, 2).Error)
+						assert.Equal(t, groups, saved.Group)
+						if dialect != "sqlite" {
+							assert.Error(t, db.Table(table).Create(&Channel{Id: 3, Key: "fixture", Group: groups + "x"}).Error)
+						}
+						recorder.reset()
+						require.NoError(t, migrateChannelGroupLength(db.Table(table)))
+						require.NoError(t, db.Table(table).AutoMigrate(&Channel{}))
+						assert.Empty(t, recorder.schemaMutations())
+					})
+				}
+				if dialect != "sqlite" {
+					t.Run("preserve_wider_column", func(t *testing.T) {
+						const table = "migration_channel_group_wide_test"
+						t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(table)) })
+						require.NoError(t, db.Table(table).AutoMigrate(&migrationChannelGroupWide{}))
+						groups := strings.Repeat("x", 300)
+						require.NoError(t, db.Table(table).Create(&migrationChannelGroupWide{ID: 1, Key: "fixture", Group: groups}).Error)
+						require.NoError(t, migrateChannelGroupLength(db.Table(table)))
+						require.NoError(t, db.Table(table).AutoMigrate(&Channel{}))
+						columns, err := db.Table(table).Migrator().ColumnTypes(&Channel{})
+						require.NoError(t, err)
+						for _, column := range columns {
+							if column.Name() == "group" {
+								length, ok := column.Length()
+								require.True(t, ok)
+								assert.EqualValues(t, 512, length)
+							}
+						}
+						var saved Channel
+						require.NoError(t, db.Table(table).First(&saved, 1).Error)
+						assert.Equal(t, groups, saved.Group)
+					})
+				}
+			})
 
 			t.Run("identity_and_indexes", func(t *testing.T) {
 				const table = "migration_identity_test"
