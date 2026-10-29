@@ -163,6 +163,9 @@ func publishPersistedVideoReliability(ctx context.Context, channelID int, modelN
 }
 
 func RefreshReviewedVideoHealth(ctx context.Context, attempt *model.VideoHealthAttempt) {
+	if attempt.SlotKey != "" {
+		releaseVideoProbeSlot(attempt.SlotKey, attempt.SlotToken)
+	}
 	view, err := model.RefreshVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName, videoReliabilityPolicy(operation_setting.GetVideoSchedulingSetting()), time.Now().Unix())
 	if err == nil {
 		err = publishVideoReliability(attempt.ChannelID, view)
@@ -579,7 +582,7 @@ func reconcileVideoReliability(ctx context.Context) error {
 		return err
 	}
 	var attempts []model.VideoHealthAttempt
-	if err := model.DB.WithContext(ctx).Where("id > ? AND final_outcome IN ?", videoReliabilityReconcileCursor.Load(), []string{"", "unknown"}).Order("id ASC").Limit(500).Find(&attempts).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Where("id > ? AND final_outcome IN ? AND COALESCE(reviewed_at, 0) = 0", videoReliabilityReconcileCursor.Load(), []string{"", "unknown"}).Order("id ASC").Limit(500).Find(&attempts).Error; err != nil {
 		return err
 	}
 	if len(attempts) == 0 {
@@ -623,6 +626,16 @@ func reconcileVideoReliability(ctx context.Context) error {
 			// submission owner permits reconciliation to declare it missing.
 			if err := model.ExpireVideoHealthSubmission(ctx, a.RequestID, a.AttemptSeq, now); err != nil {
 				return err
+			}
+		}
+		if byAttempt[a.ID] == nil && !liveOwner && a.SlotExpires <= now && a.CapacityExpires <= now {
+			reviewed, err := model.CloseExpiredVideoHealthUnknown(ctx, a.ID, now)
+			if err != nil {
+				return err
+			}
+			if reviewed != nil {
+				RefreshReviewedVideoHealth(ctx, reviewed)
+				continue
 			}
 		}
 		if a.SlotKey != "" && (a.SlotExpires > now || liveOwner) {
