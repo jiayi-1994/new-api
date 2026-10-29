@@ -28,6 +28,8 @@ type OpenAIVideo struct {
 	RemixedFromVideoID string            `json:"remixed_from_video_id,omitempty"`
 	Error              *OpenAIVideoError `json:"error,omitempty"`
 	Metadata           map[string]any    `json:"metadata,omitempty"`
+	// VideoTokens is the gateway's billed output plus reference video quantity.
+	VideoTokens *float64 `json:"video-tokens,omitempty"`
 }
 
 func (m *OpenAIVideo) SetProgressStr(progress string) {

@@ -64,6 +64,7 @@ type TaskDto struct {
 	Seconds          float64         `json:"seconds,omitempty"`
 	VideoMode        string          `json:"video_mode,omitempty"`
 	ReferenceSeconds *float64        `json:"reference_seconds,omitempty"`
+	VideoTokens      *float64        `json:"video-tokens,omitempty"`
 	Username         string          `json:"username,omitempty"`
 	Data             json.RawMessage `json:"data"`
 	AdminInfo        *TaskAdminInfo  `json:"admin_info,omitempty"`

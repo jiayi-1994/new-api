@@ -259,6 +259,111 @@ func TestUnifiedVideoTaskViewsHideUpstreamDetails(t *testing.T) {
 	}
 }
 
+func TestUnifiedVideoPollingReturnsFrozenBillingTokens(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	task.Platform = "private-plugin"
+	task.Data = []byte(`{"video-tokens":999,"usage":{"total_tokens":999}}`)
+	for _, tc := range []struct {
+		name   string
+		status model.TaskStatus
+		facts  map[string]any
+		want   any
+	}{
+		{name: "output only", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 324000.0}, want: 324000.0},
+		{name: "reference minimum is already billed", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 324000.0, "input_video_tokens": 216000.0, "input_video_seconds": 5.0, "input_video_billable_seconds": 10.0}, want: 540000.0},
+		{name: "fractional tokens keep billing precision", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 108680.625, "input_video_tokens": 86400.0}, want: 195080.625},
+		{name: "explicit zero reference", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 108000.0, "input_video_tokens": 0.0}, want: 108000.0},
+		{name: "explicit zero output is preserved", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 0.0}, want: 0.0},
+		{name: "queued has no completed usage", status: model.TaskStatusQueued,
+			facts: map[string]any{"video_tokens": 324000.0}},
+		{name: "running has no completed usage", status: model.TaskStatusInProgress,
+			facts: map[string]any{"video_tokens": 324000.0}},
+		{name: "failed reservation is not completed usage", status: model.TaskStatusFailure,
+			facts: map[string]any{"video_tokens": 324000.0, "input_video_tokens": 216000.0}},
+		{name: "per-second sale has no tokens", status: model.TaskStatusSuccess,
+			facts: map[string]any{"seconds": 5.0, "resolution": "720p"}},
+		{name: "historical missing facts", status: model.TaskStatusSuccess},
+		{name: "incomplete output facts", status: model.TaskStatusSuccess,
+			facts: map[string]any{"input_video_tokens": 86400.0}},
+		{name: "invalid input is not silently dropped", status: model.TaskStatusSuccess,
+			facts: map[string]any{"video_tokens": 324000.0, "input_video_tokens": -1.0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task.Status = tc.status
+			task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+				SalesSource: billingexpr.SalesSourceVideoRequest, UsageFacts: tc.facts,
+			}}
+			require.NoError(t, model.DB.Save(task).Error)
+			before, err := common.Marshal(task.PrivateData)
+			require.NoError(t, err)
+			for _, endpoint := range []string{"/v1/tasks/", "/v1/videos/", "/v1/video/generations/"} {
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Set("id", task.UserId)
+				c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}, {Key: "key", Value: task.TaskID}}
+				c.Request = httptest.NewRequest(http.MethodGet, endpoint+task.TaskID, nil)
+				if endpoint == "/v1/tasks/" {
+					GetTask(c)
+				} else {
+					require.Nil(t, relay.RelayTaskFetch(c, relayconstant.RelayModeVideoFetchByID))
+				}
+				require.Equal(t, http.StatusOK, recorder.Code)
+				var payload map[string]any
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+				if endpoint == "/v1/video/generations/" {
+					var ok bool
+					payload, ok = payload["data"].(map[string]any)
+					require.True(t, ok)
+				}
+				if tc.want == nil {
+					assert.NotContains(t, payload, "video-tokens", endpoint)
+				} else {
+					assert.Equal(t, tc.want, payload["video-tokens"], endpoint)
+				}
+				assert.NotContains(t, recorder.Body.String(), "billing_context")
+				assert.NotContains(t, recorder.Body.String(), "private-plugin")
+			}
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			after, err := common.Marshal(persisted.PrivateData)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(before), string(after), "polling must not modify the billing snapshot")
+		})
+	}
+}
+
+func TestUnifiedVideoTokensOmitUnavailableAndInvalidBillingFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+		facts  map[string]any
+	}{
+		{name: "other task billing is not unified video", facts: map[string]any{"video_tokens": 100.0}},
+		{name: "negative output", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": -1.0}},
+		{name: "output is not numeric", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": "100"}},
+		{name: "input is not numeric", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": 100.0, "input_video_tokens": "50"}},
+		{name: "non-finite output", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": math.NaN()}},
+		{name: "non-finite input", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": 100.0, "input_video_tokens": math.Inf(1)}},
+		{name: "overflowing total", source: billingexpr.SalesSourceVideoRequest, facts: map[string]any{"video_tokens": math.MaxFloat64, "input_video_tokens": math.MaxFloat64}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{Status: model.TaskStatusSuccess, PrivateData: model.TaskPrivateData{
+				BillingContext: &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{SalesSource: tc.source, UsageFacts: tc.facts}},
+			}}
+			encoded, err := common.Marshal(service.BuildUnifiedVideoResponse(task))
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "video-tokens")
+		})
+	}
+	assert.Nil(t, service.TaskVideoTokens(nil))
+	assert.Nil(t, service.TaskVideoTokens(&model.Task{Status: model.TaskStatusSuccess}))
+}
+
 func TestUnifiedVideoErrorsKeepDiagnosticsOutOfUserViews(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Log{}))

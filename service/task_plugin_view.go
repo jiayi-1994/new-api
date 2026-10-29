@@ -155,10 +155,37 @@ func TaskVideoInputFacts(task *model.Task) (mode string, referenceSeconds *float
 	return
 }
 
+// TaskVideoTokens returns the total billed video quantity for a successful
+// unified token sale. Use the frozen output and billable reference tokens,
+// including any reference minimum, without rounding or reading provider usage.
+// Missing facts and unfinished/failed tasks have no completed usage to report.
+func TaskVideoTokens(task *model.Task) *float64 {
+	if !task.IsUnifiedVideoSale() || task.Status != model.TaskStatusSuccess {
+		return nil
+	}
+	facts := task.PrivateData.BillingContext.TieredSnapshot.UsageFacts
+	tokens, ok := facts["video_tokens"].(float64)
+	if !ok || tokens < 0 || math.IsNaN(tokens) || math.IsInf(tokens, 0) {
+		return nil
+	}
+	if value, exists := facts["input_video_tokens"]; exists {
+		input, ok := value.(float64)
+		if !ok || input < 0 || math.IsNaN(input) || math.IsInf(input, 0) {
+			return nil
+		}
+		tokens += input
+	}
+	if math.IsInf(tokens, 0) {
+		return nil
+	}
+	return &tokens
+}
+
 // BuildUnifiedVideoResponse uses only host lifecycle and frozen sale fields.
 // Provider renderers may include arbitrary metadata and upstream URLs.
 func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
 	video := task.ToOpenAIVideo()
+	video.VideoTokens = TaskVideoTokens(task)
 	if video.CreatedAt == 0 {
 		video.CreatedAt = task.SubmitTime
 	}
