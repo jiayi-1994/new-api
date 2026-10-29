@@ -141,9 +141,16 @@ func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 
 func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
 	task := setupGenericTaskTest(t)
-	require.NoError(t, model.DB.Create(&model.TaskRequestBody{
-		TaskRowID: task.ID, ContentType: "application/json", Size: 14, Body: `{"prompt":"a"}`,
-	}).Error)
+	// Persist the actual snapshot, then read it through the owner/admin API.
+	body := `{"prompt":"` + strings.Repeat("中", 4000) + `","videos":["https://example.com/video.mp4?signature=` + strings.Repeat("A", 9000) + `"]}`
+	submit, _ := gin.CreateTestContext(httptest.NewRecorder())
+	submit.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+	submit.Request.Header.Set("Content-Type", "application/json")
+	t.Cleanup(func() { common.CleanupBodyStorage(submit) })
+	snapshot := service.TaskRequestBodySnapshot(submit)
+	require.NotNil(t, snapshot)
+	snapshot.TaskRowID = task.ID
+	require.NoError(t, model.DB.Create(snapshot).Error)
 	legacy := &model.Task{TaskID: "task_legacy", Platform: "document", UserId: 7, ChannelId: 1, Status: model.TaskStatusSuccess}
 	require.NoError(t, model.DB.Create(legacy).Error)
 
@@ -156,8 +163,8 @@ func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
 		wantFound bool
 		wantBody  string
 	}{
-		{name: "owner", taskID: task.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true, wantBody: `{"prompt":"a"}`},
-		{name: "admin session", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true, wantBody: `{"prompt":"a"}`},
+		{name: "owner", taskID: task.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true, wantBody: body},
+		{name: "admin session", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true, wantBody: body},
 		{name: "other user", taskID: task.TaskID, userID: 8, role: common.RoleCommonUser},
 		{name: "root api token", taskID: task.TaskID, userID: 8, role: common.RoleRootUser, tokenID: 99},
 		{name: "owner of an unrecorded task", taskID: legacy.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true},
@@ -187,6 +194,7 @@ func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
 			}
 			require.NotNil(t, response.Data)
 			assert.Equal(t, tc.wantBody, response.Data.Body)
+			assert.Equal(t, int64(len(body)), response.Data.Size)
 		})
 	}
 }
