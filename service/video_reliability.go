@@ -628,7 +628,7 @@ func reconcileVideoReliability(ctx context.Context) error {
 				return err
 			}
 		}
-		if byAttempt[a.ID] == nil && !liveOwner && a.SlotExpires <= now && a.CapacityExpires <= now {
+		if byAttempt[a.ID] == nil && !liveOwner && max(a.StartedAt, a.FinishedAt) <= now-int64(model.VideoHealthUnknownRetention/time.Second) {
 			reviewed, err := model.CloseExpiredVideoHealthUnknown(ctx, a.ID, now)
 			if err != nil {
 				return err

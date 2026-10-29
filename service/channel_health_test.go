@@ -236,9 +236,9 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	assert.Zero(t, count)
 	// An abandoned submit has no task to trigger the terminal callback. The
 	// background pass retires expired uncertainty and cannot restore its slot.
-	abandoned := model.VideoHealthAttempt{RequestID: "health-expired-submit", AttemptSeq: 1, ChannelID: 7, ModelName: "video", ConfigIdentity: ch.VideoHealthIdentity(), StartedAt: now - 400, WindowSeconds: 1800, Flow: "shadow", SlotKey: videoValidationKeys(7)[0], SlotToken: "expired-owner", SlotExpires: now - 1}
+	abandoned := model.VideoHealthAttempt{RequestID: "health-expired-submit", AttemptSeq: 1, ChannelID: 7, ModelName: "video", ConfigIdentity: ch.VideoHealthIdentity(), StartedAt: now - 4000, WindowSeconds: 1800, Flow: "shadow", SlotKey: videoValidationKeys(7)[0], SlotToken: "expired-owner", SlotExpires: now + 86400}
 	require.NoError(t, model.BeginVideoHealthAttempt(ctx, &abandoned, false))
-	require.NoError(t, model.ObserveVideoHealthAttempt(ctx, abandoned.RequestID, 1, nil, "unknown", "unknown", "transport", now-399))
+	require.NoError(t, model.ObserveVideoHealthAttempt(ctx, abandoned.RequestID, 1, nil, "unknown", "unknown", "transport", now-3999))
 	_, err = videoHealthStore().acquire(abandoned.SlotKey, abandoned.SlotToken, time.Hour)
 	require.NoError(t, err)
 	for range 2 {

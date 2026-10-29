@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	VideoHealthRetention   = 30 * 24 * time.Hour
-	VideoHealthRecoveryTTL = 7 * 24 * time.Hour
+	VideoHealthRetention        = 30 * 24 * time.Hour
+	VideoHealthRecoveryTTL      = 7 * 24 * time.Hour
+	VideoHealthUnknownRetention = time.Hour
 )
 
 var ErrVideoHealthStateChanged = errors.New("video health state changed before admission")
@@ -362,10 +363,10 @@ func ReviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, n
 }
 
 // CloseExpiredVideoHealthUnknown retires only health admission uncertainty
-// after every durable hold expires. It does not establish an upstream outcome
+// after one hour without a live submit owner or linked task. It does not establish an upstream outcome
 // or change the original request, task, billing or retry history.
 func CloseExpiredVideoHealthUnknown(ctx context.Context, attemptID, now int64) (*VideoHealthAttempt, error) {
-	return reviewVideoHealthUnknown(ctx, attemptID, 0, "Submission and capacity leases expired without a linked task; upstream outcome remains unknown", now, true)
+	return reviewVideoHealthUnknown(ctx, attemptID, 0, "One-hour unknown-submission retention elapsed without a live submit owner or linked task; upstream outcome remains unknown", now, true)
 }
 
 func reviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, note string, now int64, expiredOnly bool) (*VideoHealthAttempt, error) {
@@ -379,7 +380,8 @@ func reviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, n
 			eligible = true
 			return nil // idempotent: preserve the first operator and their evidence
 		}
-		if attempt.FinalOutcome != "unknown" || attempt.TaskPK != nil || attempt.SubmitLeaseExpires > now || attempt.StartedAt >= now-120 || expiredOnly && (attempt.SlotExpires > now || attempt.CapacityExpires > now) {
+		unknownAt := max(attempt.StartedAt, attempt.FinishedAt)
+		if attempt.FinalOutcome != "unknown" || attempt.TaskPK != nil || attempt.SubmitLeaseExpires > now || attempt.StartedAt >= now-120 || expiredOnly && unknownAt > now-int64(VideoHealthUnknownRetention/time.Second) {
 			if expiredOnly {
 				return nil
 			}
