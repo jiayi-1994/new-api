@@ -26,6 +26,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type publicVideoFailureAdaptor struct {
+	service.TaskPollingAdaptor
+	class string
+}
+
+func (a *publicVideoFailureAdaptor) ClassifyFailure(string) (string, bool) {
+	return a.class, a.class != ""
+}
+
 func TestTaskLogChannelNamesAreAdminOnlyAndFollowChannelUpdates(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", task.ChannelId).Update("name", "破晓站").Error)
@@ -241,7 +250,7 @@ func TestUnifiedVideoTaskViewsHideUpstreamDetails(t *testing.T) {
 			assert.NotContains(t, recorder.Body.String(), "private-", endpoint)
 			assert.Contains(t, recorder.Body.String(), task.TaskID)
 			if status == model.TaskStatusFailure {
-				assert.Contains(t, recorder.Body.String(), "Video generation failed")
+				assert.Contains(t, recorder.Body.String(), model.UnifiedVideoRequestFailedMessage)
 			}
 			if endpoint == "/v1/videos/" {
 				assert.Contains(t, recorder.Body.String(), `"seconds":"7"`)
@@ -308,24 +317,28 @@ func TestUnifiedVideoErrorsKeepDiagnosticsOutOfUserViews(t *testing.T) {
 	respondTaskSubmissionError(c, taskErr)
 	assert.Equal(t, http.StatusBadGateway, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), "private-")
-	assert.Contains(t, recorder.Body.String(), "视频生成服务暂时不可用，请稍后重试")
+	assert.Contains(t, recorder.Body.String(), model.UnifiedVideoRequestFailedMessage)
 	assert.Contains(t, recorder.Body.String(), `"code":"video_request_failed"`)
 	assert.Equal(t, "private-plugin-error", taskErr.Code, "public projection must not mutate diagnostics")
 	assert.Contains(t, taskErr.Message, "private-provider")
 }
 
 func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
+	previousFactory := service.GetTaskAdaptorFunc
+	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousFactory })
 	cases := []struct {
 		name        string
 		passthrough bool
 		taskErr     *taskdto.TaskError
+		class       string
+		submitClass string
 		wantMessage string
 		wantAbsent  string
 	}{
 		{
 			name:        "off keeps upstream validation failures generic",
 			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"prompt rejected by private-provider"}}`), "fail_to_fetch_task", http.StatusBadRequest),
-			wantMessage: "视频生成请求未通过上游校验，请调整提示词或参数后重试",
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
 			wantAbsent:  "private-provider",
 		},
 		{
@@ -367,14 +380,16 @@ func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
 			name:        "on keeps internal non-local errors hidden",
 			passthrough: true,
 			taskErr:     service.TaskErrorWrapper(errors.New("task model private-video has no usage expression or meter"), "model_price_error", http.StatusBadRequest),
-			wantMessage: "视频生成请求未通过上游校验，请调整提示词或参数后重试",
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
 			wantAbsent:  "usage expression",
 		},
 		{
 			name:        "on keeps upstream auth failures generic",
 			passthrough: true,
 			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"Incorrect API key provided: sk-live-secret"}}`), "fail_to_fetch_task", http.StatusUnauthorized),
-			wantMessage: "视频生成服务暂时不可用，请稍后重试",
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
 			wantAbsent:  "sk-live",
 		},
 		{
@@ -398,12 +413,66 @@ func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
 			wantMessage: "账户额度不足，请充值后重试",
 			wantAbsent:  "上游账户",
 		},
+		{
+			name:        "classified business rejection",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider rejected content"), "plugin_submit_rejected", http.StatusBadGateway),
+			submitClass: service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestRejectedMessage,
+			wantAbsent:  "private-provider",
+		},
+		{
+			name:        "classified HTTP input rejection",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider invalid image"), "fail_to_fetch_task", http.StatusBadRequest),
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestRejectedMessage,
+			wantAbsent:  "private-provider",
+		},
+		{
+			name:        "classified HTTP media rejection",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider invalid video"), "fail_to_fetch_task", http.StatusUnprocessableEntity),
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestRejectedMessage,
+			wantAbsent:  "private-provider",
+		},
+		{
+			name:        "upstream business failure",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider moderation service unavailable"), "plugin_submit_rejected", http.StatusBadGateway),
+			submitClass: service.VideoFailureUpstream,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
+			wantAbsent:  "安全审核",
+		},
+		{
+			name:        "actual service error cannot become a content rejection",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider content policy service failed"), "fail_to_fetch_task", http.StatusServiceUnavailable),
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
+			wantAbsent:  "安全审核",
+		},
+		{
+			name:        "timeout cannot become a content rejection",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider moderation timed out"), "fail_to_fetch_task", http.StatusRequestTimeout),
+			class:       service.VideoFailureUser,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
+			wantAbsent:  "安全审核",
+		},
+		{
+			name:        "cancellation remains generic",
+			taskErr:     service.TaskErrorWrapper(errors.New("private-provider cancelled"), "plugin_submit_rejected", http.StatusBadGateway),
+			submitClass: service.VideoFailureCancelled,
+			wantMessage: model.UnifiedVideoRequestFailedMessage,
+			wantAbsent:  "安全审核",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			service.GetTaskAdaptorFunc = func(constant.TaskPlatform) service.TaskPollingAdaptor {
+				return &publicVideoFailureAdaptor{class: tc.class}
+			}
+			tc.taskErr.SubmitFailureClass = tc.submitClass
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			c.Set("platform", "test-video")
 			c.Set(common.RequestIdKey, "req-passthrough")
 			service.SetVideoSalesFacts(c, service.VideoSalesFacts{Model: "public-video", Seconds: 7, Resolution: "720p", USDPerSecond: 1})
 			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ErrorPassthroughEnabled: tc.passthrough})
@@ -423,6 +492,8 @@ func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
 
 func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 	task := setupGenericTaskTest(t)
+	previousFactory := service.GetTaskAdaptorFunc
+	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousFactory })
 	previousMemory := common.MemoryCacheEnabled
 	common.MemoryCacheEnabled = false
 	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemory })
@@ -442,26 +513,32 @@ func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 	require.NoError(t, err)
 	const policyReason = "The input image content[1] may be related to copyright restrictions"
 	for _, tc := range []struct {
-		name, setting, reason, attribution, want string
-		missingChannel                           bool
+		name, setting, reason, attribution, class, want string
+		missingChannel                                  bool
 	}{
-		{name: "off", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: "Video generation failed"},
+		{name: "classified rejection without passthrough", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, class: service.VideoFailureUser, want: model.UnifiedVideoRequestRejectedMessage},
+		{name: "classified rejection with passthrough", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, class: service.VideoFailureUser, want: policyReason},
+		{name: "host failure overrides user classification", setting: `{"error_passthrough_enabled":false}`, attribution: "host", reason: policyReason, class: service.VideoFailureUser, want: model.UnifiedVideoRequestFailedMessage},
+		{name: "off", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: model.UnifiedVideoRequestFailedMessage},
 		{name: "on", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, want: policyReason},
-		{name: "off again hides existing task", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: "Video generation failed"},
+		{name: "off again hides existing task", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: model.UnifiedVideoRequestFailedMessage},
 		{name: "URL and keys", setting: `{"error_passthrough_enabled":true}`, reason: "invalid image https://private.example/a.png?token=secret current-private-key old-private-key", want: "invalid image https://***.example/***?token=*** *** ***"},
 		{name: "credentials", setting: `{"error_passthrough_enabled":true}`, reason: "request rejected; Authorization: Bearer test-secret; api_key=another-secret", want: "request rejected; Authorization: ***; api_key=***"},
 		{name: "funds", setting: `{"error_passthrough_enabled":true}`, reason: "insufficient balance $1.80", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
 		{name: "currency amount", setting: `{"error_passthrough_enabled":true}`, reason: "request requires 3.50 USD", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
 		{name: "unlabelled credentials", setting: `{"error_passthrough_enabled":true}`, reason: "rejected Bearer opaque-secret and sk-example-secret", want: "rejected Bearer *** and ***"},
 		{name: "JSON error", setting: `{"error_passthrough_enabled":true}`, reason: `{"error":{"message":"invalid input image","type":"private-type"}}`, want: "invalid input image"},
-		{name: "host failure", setting: `{"error_passthrough_enabled":true}`, attribution: "host", reason: "private host detail", want: "Video generation failed"},
-		{name: "legacy poll failure", setting: `{"error_passthrough_enabled":true}`, reason: "poll failed: hook_error private detail", want: "Video generation failed"},
-		{name: "legacy missing upstream task", setting: `{"error_passthrough_enabled":true}`, reason: "upstream task not found (HTTP 404)", want: "Video generation failed"},
-		{name: "empty reason", setting: `{"error_passthrough_enabled":true}`, reason: "  ", want: "Video generation failed"},
-		{name: "invalid setting", setting: `{"error_passthrough_enabled":true,`, reason: policyReason, want: "Video generation failed"},
-		{name: "missing channel", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, missingChannel: true, want: "Video generation failed"},
+		{name: "host failure", setting: `{"error_passthrough_enabled":true}`, attribution: "host", reason: "private host detail", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "legacy poll failure", setting: `{"error_passthrough_enabled":true}`, reason: "poll failed: hook_error private detail", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "legacy missing upstream task", setting: `{"error_passthrough_enabled":true}`, reason: "upstream task not found (HTTP 404)", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "empty reason", setting: `{"error_passthrough_enabled":true}`, reason: "  ", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "invalid setting", setting: `{"error_passthrough_enabled":true,`, reason: policyReason, want: model.UnifiedVideoRequestFailedMessage},
+		{name: "missing channel", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, missingChannel: true, want: model.UnifiedVideoRequestFailedMessage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			service.GetTaskAdaptorFunc = func(constant.TaskPlatform) service.TaskPollingAdaptor {
+				return &publicVideoFailureAdaptor{class: tc.class}
+			}
 			channel.Setting = &tc.setting
 			require.NoError(t, model.DB.Save(channel).Error)
 			task.ChannelId = channel.Id
@@ -492,12 +569,17 @@ func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 				case "/v1/videos/":
 					require.NotNil(t, response.Error)
 					assert.Equal(t, tc.want, response.Error.Message)
+					wantCode, wantReason := "video_generation_failed", tc.want
+					if tc.class == service.VideoFailureUser && tc.attribution != "host" {
+						wantCode, wantReason = "video_request_rejected", "video request rejected: "+tc.want
+					}
+					assert.Equal(t, wantCode, response.Error.Code)
 					// Replay the actual public response through the receiving gateway's Sobek plugin.
 					var upstream map[string]any
 					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &upstream))
 					parsed, err := plugin.Engine.Call(t.Context(), "parseTaskResult", map[string]any{}, upstream)
 					require.NoError(t, err)
-					assert.Equal(t, tc.want, parsed.(map[string]any)["reason"])
+					assert.Equal(t, wantReason, parsed.(map[string]any)["reason"])
 				case "/v1/video/generations/":
 					require.NotNil(t, response.Data)
 					assert.Equal(t, tc.want, response.Data.FailReason)
@@ -526,7 +608,7 @@ func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 		copy := *cached
 		copy.SetSetting(dto.ChannelSettings{ErrorPassthroughEnabled: enabled})
 		model.CacheUpdateChannel(&copy)
-		want := "Video generation failed"
+		want := model.UnifiedVideoRequestFailedMessage
 		if enabled {
 			want = policyReason
 		}

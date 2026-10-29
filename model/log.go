@@ -117,7 +117,10 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 
 // UnifiedVideoRequestFailedMessage is the public wording of a unified video
 // sale failure whose cause must stay hidden from the buyer.
-const UnifiedVideoRequestFailedMessage = "视频生成请求失败，请稍后重试；如多次失败请联系管理员"
+const UnifiedVideoRequestFailedMessage = "❌ 本次视频生成未能完成，请稍后重新提交；如持续失败，请联系管理员协助处理。"
+
+// UnifiedVideoRequestRejectedMessage is reserved for classified input failures.
+const UnifiedVideoRequestRejectedMessage = "❌ 本次视频生成未能完成，提示词或参考素材可能未通过安全审核，或不符合视频生成要求，请调整后重新提交。"
 
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {

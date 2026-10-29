@@ -879,14 +879,24 @@ func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) 
 	if setting.ErrorPassthroughEnabled && upstreamBody && !upstreamAuth {
 		return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, common.GetContextKeyString(c, constant.ContextKeyChannelKey))
 	}
-	switch {
-	case taskErr.LocalError:
-		return model.UnifiedVideoRequestFailedMessage
-	case taskErr.StatusCode == http.StatusBadRequest, taskErr.StatusCode == http.StatusUnprocessableEntity:
-		return "视频生成请求未通过上游校验，请调整提示词或参数后重试"
-	default:
-		return "视频生成服务暂时不可用，请稍后重试"
+	if !taskErr.LocalError && !upstreamAuth {
+		// Explicit business rejections have a synthetic 502 status; their
+		// recorded class distinguishes them from actual service failures.
+		if taskErr.Code == "plugin_submit_rejected" && taskErr.SubmitFailureClass == service.VideoFailureUser {
+			return model.UnifiedVideoRequestRejectedMessage
+		}
+		// An HTTP status alone does not establish a content/input problem.
+		if taskErr.Code == "fail_to_fetch_task" &&
+			(taskErr.StatusCode == http.StatusBadRequest || taskErr.StatusCode == http.StatusUnprocessableEntity) &&
+			service.GetTaskAdaptorFunc != nil {
+			if classifier, ok := service.GetTaskAdaptorFunc(constant.TaskPlatform(c.GetString("platform"))).(service.VideoFailureClassifier); ok {
+				if class, valid := classifier.ClassifyFailure(taskErr.Message); valid && class == service.VideoFailureUser {
+					return model.UnifiedVideoRequestRejectedMessage
+				}
+			}
+		}
 	}
+	return model.UnifiedVideoRequestFailedMessage
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）

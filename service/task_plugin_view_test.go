@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 )
@@ -77,7 +78,14 @@ func TestUnifiedVideoFailureCodesPreserveAttributionWithoutPrivateDetails(t *tes
 			video := BuildUnifiedVideoResponse(task)
 			require.NotNil(t, video.Error)
 			assert.Equal(t, tc.wantCode, video.Error.Code)
-			assert.Equal(t, "Video generation failed", video.Error.Message)
+			wantMessage := "❌ 本次视频生成未能完成，请稍后重新提交；如持续失败，请联系管理员协助处理。"
+			if tc.wantCode == "video_request_rejected" {
+				wantMessage = "❌ 本次视频生成未能完成，提示词或参考素材可能未通过安全审核，或不符合视频生成要求，请调整后重新提交。"
+			}
+			assert.Equal(t, wantMessage, video.Error.Message)
+			item := &dto.TaskDto{FailReason: reason}
+			RedactUnifiedVideoTaskDTO(task, item)
+			assert.Equal(t, wantMessage, item.FailReason)
 			assert.Equal(t, "failed", video.Status)
 			assert.Equal(t, "5", video.Seconds)
 			encoded, err := common.Marshal(video)
