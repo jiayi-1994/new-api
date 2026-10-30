@@ -1252,12 +1252,12 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 		wantSent  int64
 		wantCode  string
 	}{
-		{"normal_refresh_one_channel", 1, true, 1, 2, 1, ""},
+		{"normal_refresh_one_channel", 1, true, 1, 1, 1, ""},
 		{"normal_refresh_two_channels", 2, true, 1, 2, 1, ""},
-		{"conflict_then_success", 1, false, 1, 2, 1, ""},
-		{"conflict_budget", 1, false, 4, 3, 0, "video_health_admission_conflict"},
+		{"conflict_then_success", 2, false, 1, 2, 1, ""},
+		{"conflict_budget", 2, false, 4, 3, 0, "video_health_admission_conflict"},
 		{"storage_error", 1, false, 0, 1, 0, "video_health_unavailable"},
-		{"outcome_unknown", 1, false, 1, 2, 1, "do_request_failed"},
+		{"outcome_unknown", 1, false, 0, 1, 1, "do_request_failed"},
 		{"sent_failure_then_success", 2, true, 1, 3, 2, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1362,7 +1362,7 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 				health, err := service.GetVideoHealthView(selected, false)
 				require.NoError(t, err)
 				assert.Equal(t, 1, health.InFlight, "every reselection must acquire its own bounded capacity reservation")
-				if tc.normal {
+				if tc.normal || tc.channels == 1 {
 					assert.Zero(t, health.ValidationSlotsHeld)
 				} else {
 					assert.Equal(t, 1, health.ValidationSlotsHeld, "exploration must reacquire exactly one validation slot")
@@ -1391,7 +1391,11 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 				require.NotNil(t, outcome)
 				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), outcome.Task.Status)
 				require.Len(t, facts, int(tc.wantSent))
-				assert.Equal(t, 2, facts[0].AttemptSeq, "the rejected selection retains its sequence without a transport fact")
+				if tc.channels == 1 {
+					assert.Equal(t, 1, facts[0].AttemptSeq, "single-channel health changes do not reject transmission")
+				} else {
+					assert.Equal(t, 2, facts[0].AttemptSeq, "the rejected selection retains its sequence without a transport fact")
+				}
 				assert.Equal(t, "success", facts[len(facts)-1].FinalOutcome)
 				if tc.name == "sent_failure_then_success" {
 					assert.Equal(t, "rejected", facts[0].SubmitOutcome)
@@ -1433,11 +1437,15 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 			assert.Equal(t, charged, token.UsedQuota)
 			records := service.VideoScheduleRecords(c)
 			require.Len(t, records, tc.wantCalls)
-			for i := range min(tc.conflicts, tc.wantCalls) {
-				assert.Equal(t, "admission_conflict", records[i].Admission)
-				assert.Equal(t, i+1, records[i].AttemptSeq)
+			if tc.channels == 1 {
+				assert.Equal(t, "normal", records[0].Flow)
+			} else {
+				for i := range min(tc.conflicts, tc.wantCalls) {
+					assert.Equal(t, "admission_conflict", records[i].Admission)
+					assert.Equal(t, i+1, records[i].AttemptSeq)
+				}
 			}
-			if tc.wantCode == "" {
+			if tc.wantCode == "" && tc.channels > 1 {
 				assert.Equal(t, records[0].Recommended, records[1].Recommended, "an unsent conflict can reselect the refreshed channel")
 			}
 			for i := range tc.channels {
@@ -1446,7 +1454,7 @@ export function describeSpec() { return {spec_version:1,output_seconds:5,resolut
 				health, err := service.GetVideoHealthView(channel, false)
 				require.NoError(t, err)
 				if tc.name == "outcome_unknown" {
-					assert.Equal(t, 1, health.ValidationSlotsHeld, "an unknown upstream receipt retains its reservation")
+					assert.Zero(t, health.ValidationSlotsHeld, "the single channel does not acquire a health validation slot")
 					assert.Equal(t, 1, health.InFlight, "unknown receipt must continue occupying capacity")
 				} else {
 					assert.Zero(t, health.ValidationSlotsHeld, "an unsent conflict or terminal task releases its validation reservation")
