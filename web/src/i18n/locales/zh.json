@@ -5135,6 +5135,7 @@
     "Request": "请求",
     "Request & Response": "请求与响应",
     "Request body": "请求体",
+    "Response body": "响应体",
     "Request Body Disk Cache": "请求体磁盘缓存",
     "Request Body Field": "请求体字段",
     "Request Body Memory Cache": "请求体内存缓存",

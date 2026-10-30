@@ -5135,6 +5135,7 @@
     "Request": "Запрос",
     "Request & Response": "Запрос и ответ",
     "Request body": "Тело запроса",
+    "Response body": "Тело ответа",
     "Request Body Disk Cache": "Дисковый кэш тела запроса",
     "Request Body Field": "Поле тела запроса",
     "Request Body Memory Cache": "Кэш памяти тела запроса",

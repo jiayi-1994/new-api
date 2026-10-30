@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Shield01Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
@@ -121,6 +122,38 @@ function TaskRequestBodySection(props: { taskId: string; open: boolean }) {
   )
 }
 
+// The task row already carries the latest upstream result the gateway
+// persisted (null when never recorded). It names the upstream account, task
+// id and wholesale quota, so only administrators see it.
+function TaskResponseBodySection(props: { data: unknown }) {
+  const { t } = useTranslation()
+  const body = useMemo(
+    () => (props.data == null ? '' : JSON.stringify(props.data, null, 2)),
+    [props.data]
+  )
+
+  return (
+    <DetailSection label={t('Response body')}>
+      {body ? (
+        <>
+          <div className='flex items-center justify-end'>
+            <CopyButton
+              value={body}
+              className='size-6'
+              iconClassName='size-3.5'
+            />
+          </div>
+          <pre className='bg-background/60 max-h-80 overflow-y-auto rounded border p-2 font-mono text-[11px] leading-relaxed wrap-anywhere whitespace-pre-wrap'>
+            {body}
+          </pre>
+        </>
+      ) : (
+        <span className='text-muted-foreground text-xs'>{t('Not recorded')}</span>
+      )}
+    </DetailSection>
+  )
+}
+
 function formatTaskTimestamp(value?: number): string {
   return value ? formatTimestampToDate(value, 'seconds') : '-'
 }
@@ -215,6 +248,10 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
         </DetailSection>
 
         <TaskRequestBodySection taskId={props.log.task_id} open={props.open} />
+
+        {props.isAdmin ? (
+          <TaskResponseBodySection data={props.log.data} />
+        ) : null}
 
         {props.isAdmin ? (
           <DetailSection

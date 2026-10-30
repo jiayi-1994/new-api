@@ -221,12 +221,51 @@ func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
 	}
 	if task.Status == model.TaskStatusSuccess {
 		video.SetMetadata("url", "/v1/videos/"+url.PathEscape(task.TaskID)+"/content")
+		for key, value := range unifiedVideoOriginFields(task) {
+			video.SetMetadata(key, value)
+		}
 	}
 	if task.Status != model.TaskStatusFailure {
 		return video
 	}
 	video.Error = unifiedVideoTaskError(task)
 	return video
+}
+
+// unifiedVideoOriginNames are the only vendor origin fields the unified sale
+// exposes. Each plugin's openai_video renderer maps its vendor's naming onto
+// these names, so a new upstream changes its plugin, never the host.
+var unifiedVideoOriginNames = []string{"volcesVideoUrl", "volcesCgt"}
+
+type openAIVideoRenderer interface {
+	ConvertToOpenAIVideo(task *model.Task) ([]byte, error)
+}
+
+// unifiedVideoOriginFields asks the executing plugin's renderer for the origin
+// links of a successful task and keeps only the fixed public names.
+func unifiedVideoOriginFields(task *model.Task) map[string]string {
+	if GetTaskAdaptorFunc == nil {
+		return nil
+	}
+	renderer, ok := GetTaskAdaptorFunc(task.Platform).(openAIVideoRenderer)
+	if !ok {
+		return nil
+	}
+	rendered, err := renderer.ConvertToOpenAIVideo(task)
+	if err != nil {
+		return nil
+	}
+	var fields map[string]any
+	if common.Unmarshal(rendered, &fields) != nil {
+		return nil
+	}
+	origin := map[string]string{}
+	for _, name := range unifiedVideoOriginNames {
+		if value, ok := fields[name].(string); ok && value != "" {
+			origin[name] = value
+		}
+	}
+	return origin
 }
 
 // BuildTaskPluginView converts a persisted task into the deliberately narrow

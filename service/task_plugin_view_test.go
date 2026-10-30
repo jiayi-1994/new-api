@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,65 @@ type taskViewFailureClassifier struct {
 
 func (a *taskViewFailureClassifier) ClassifyFailure(string) (string, bool) {
 	return a.class, a.valid
+}
+
+type taskViewOriginRenderer struct {
+	TaskPollingAdaptor
+	rendered string
+	err      error
+}
+
+func (a *taskViewOriginRenderer) ConvertToOpenAIVideo(*model.Task) ([]byte, error) {
+	return []byte(a.rendered), a.err
+}
+
+func TestUnifiedVideoResponseExposesOnlyPluginMappedOriginFields(t *testing.T) {
+	previousFactory := GetTaskAdaptorFunc
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+	unified := model.TaskPrivateData{BillingContext: &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+		SalesSource: billingexpr.SalesSourceVideoRequest, UsageFacts: map[string]any{"seconds": 5},
+	}}}
+	for _, tc := range []struct {
+		name     string
+		status   model.TaskStatus
+		adaptor  TaskPollingAdaptor
+		rendered string
+		err      error
+		want     map[string]any
+	}{
+		{name: "mapped origin fields are lifted, other renderer keys are not", status: model.TaskStatusSuccess,
+			rendered: `{"url":"https://vendor.example/v.mp4","volcesVideoUrl":"https://ark.tos.volces.com/v.mp4?sig=1","volcesCgt":"cgt-1","credits":9}`,
+			want:     map[string]any{"volcesVideoUrl": "https://ark.tos.volces.com/v.mp4?sig=1", "volcesCgt": "cgt-1"}},
+		{name: "empty and non-string values are omitted", status: model.TaskStatusSuccess,
+			rendered: `{"volcesVideoUrl":"","volcesCgt":{"id":1}}`},
+		{name: "renderer failure leaves the sale intact", status: model.TaskStatusSuccess, err: errors.New("render failed")},
+		{name: "adaptor without a renderer", status: model.TaskStatusSuccess, adaptor: &taskViewFailureClassifier{}},
+		{name: "unfinished tasks expose nothing", status: model.TaskStatusInProgress,
+			rendered: `{"volcesVideoUrl":"https://ark.tos.volces.com/v.mp4"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+				if tc.adaptor != nil {
+					return tc.adaptor
+				}
+				return &taskViewOriginRenderer{rendered: tc.rendered, err: tc.err}
+			}
+			task := &model.Task{TaskID: "task_public", Status: tc.status, PrivateData: unified, Data: []byte(`{"data":{"volcesVideoUrl":"private"}}`)}
+			video := BuildUnifiedVideoResponse(task)
+			want := map[string]any{}
+			if tc.status == model.TaskStatusSuccess {
+				want["url"] = "/v1/videos/task_public/content"
+			}
+			for key, value := range tc.want {
+				want[key] = value
+			}
+			if len(want) == 0 {
+				assert.Empty(t, video.Metadata)
+				return
+			}
+			assert.Equal(t, want, video.Metadata)
+		})
+	}
 }
 
 func TestUnifiedVideoFailureCodesPreserveAttributionWithoutPrivateDetails(t *testing.T) {
