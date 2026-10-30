@@ -19,8 +19,8 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/videosched"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -234,6 +234,25 @@ func TestVideoReliabilityTransportAndDurableTaskLink(t *testing.T) {
 	count, err := videoHealthStore().held(videoValidationKeys(7))
 	require.NoError(t, err)
 	assert.Zero(t, count)
+	// An abandoned submit has no task to trigger the terminal callback. The
+	// background pass retires expired uncertainty and cannot restore its slot.
+	abandoned := model.VideoHealthAttempt{RequestID: "health-expired-submit", AttemptSeq: 1, ChannelID: 7, ModelName: "video", ConfigIdentity: ch.VideoHealthIdentity(), StartedAt: now - 4000, WindowSeconds: 1800, Flow: "shadow", SlotKey: videoValidationKeys(7)[0], SlotToken: "expired-owner", SlotExpires: now + 86400}
+	require.NoError(t, model.BeginVideoHealthAttempt(ctx, &abandoned, false))
+	require.NoError(t, model.ObserveVideoHealthAttempt(ctx, abandoned.RequestID, 1, nil, "unknown", "unknown", "transport", now-3999))
+	_, err = videoHealthStore().acquire(abandoned.SlotKey, abandoned.SlotToken, time.Hour)
+	require.NoError(t, err)
+	for range 2 {
+		videoReliabilityReconcileCursor.Store(0)
+		require.NoError(t, reconcileVideoReliability(ctx))
+		count, err = videoHealthStore().held(videoValidationKeys(7))
+		require.NoError(t, err)
+		assert.Zero(t, count)
+	}
+	facts, err := model.ListVideoHealthAttempts(ctx, abandoned.RequestID)
+	require.NoError(t, err)
+	require.Len(t, facts, 1)
+	assert.Positive(t, facts[0].ReviewedAt)
+	assert.Equal(t, "unknown", facts[0].FinalOutcome)
 	// A persisted state deletion is not a new channel or a reason to send.
 	require.NoError(t, db.Where("channel_id = ?", 7).Delete(&model.VideoHealthState{}).Error)
 	RequestPolicy(c).BeginAttempt(ch, "default")
@@ -1392,9 +1411,9 @@ func TestFillVideoSupplyReadsFreshStockPerUnit(t *testing.T) {
 	candidates := []videosched.Candidate{
 		{ID: 1, SupplyUnit: videosched.SupplyUSD},
 		{ID: 2, SupplyUnit: videosched.SupplyCount},
-		{ID: 3, SupplyUnit: videosched.SupplyUSD}, // stock kept in count: empty until topped up in usd
+		{ID: 3, SupplyUnit: videosched.SupplyUSD},   // stock kept in count: empty until topped up in usd
 		{ID: 4, SupplyUnit: videosched.SupplyCount}, // never topped up
-		{ID: 5},                                      // unlimited
+		{ID: 5}, // unlimited
 		{ID: 6, SupplyUnit: videosched.SupplyCount, Excluded: "disabled"},
 	}
 	fillVideoSupply(healthTestContext(), candidates)

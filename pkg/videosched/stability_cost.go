@@ -59,6 +59,9 @@ func evaluateStabilityCost(cands []Candidate, p Policy, validation bool) []Score
 			continue
 		}
 		s.Quality = c.Quality
+		if p.BypassHealth {
+			continue
+		}
 		if c.Reliability == nil || c.Reliability.Validate() != nil || c.Reliability.Integrity == "unavailable" {
 			s.Reason = "health_state_unavailable"
 			continue
@@ -72,7 +75,7 @@ func evaluateStabilityCost(cands []Candidate, p Policy, validation bool) []Score
 		}
 		s.Unproven = s.Reason != "" || c.Reliability.State != HealthNormal
 	}
-	if !validation {
+	if !validation && !p.BypassHealth {
 		top, found, best := int64(0), false, 0.0
 		for _, s := range scores {
 			if s.Reason == "" && (!found || s.Candidate.Priority > top) {

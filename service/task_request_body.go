@@ -19,9 +19,10 @@ const (
 	taskRequestBodyReadLimit = 8 << 20
 	// Stored bodies must fit MySQL TEXT (65535 bytes).
 	taskRequestBodyStoreLimit = 60000
-	// Longer string values are almost always inline media (base64); prompts fit.
-	taskRequestBodyValueLimit = 8192
-	taskRequestBodyValueKeep  = 256
+	// Only explicit base64 data URLs are shortened per value. Ordinary text
+	// and public media URLs are preserved up to the overall storage limit.
+	taskRequestBodyInlineMediaLimit = 8192
+	taskRequestBodyInlineMediaKeep  = 256
 )
 
 // TaskRequestBodySnapshot captures the client's submit payload for the task
@@ -55,10 +56,11 @@ func TaskRequestBodySnapshot(c *gin.Context) *model.TaskRequestBody {
 		if err != nil {
 			return nil
 		}
-		record.Body = string(shortenJSONStrings(raw))
+		record.Body = string(shortenInlineJSONMedia(raw))
 	}
 	if len(record.Body) > taskRequestBodyStoreLimit {
-		record.Body = record.Body[:taskRequestBodyStoreLimit] + "...[truncated]"
+		const marker = "...[truncated]"
+		record.Body = record.Body[:taskRequestBodyStoreLimit-len(marker)] + marker
 	}
 	// PostgreSQL text rejects invalid UTF-8 and NUL bytes.
 	record.Body = strings.ReplaceAll(strings.ToValidUTF8(record.Body, ""), "\x00", "")
@@ -83,19 +85,16 @@ func summarizeMultipartBody(r io.Reader, boundary string) string {
 			fmt.Fprintf(&b, "%s=[file %s, %d bytes]\n", part.FormName(), part.FileName(), size)
 			continue
 		}
-		value, _ := io.ReadAll(io.LimitReader(part, taskRequestBodyValueLimit+1))
-		if len(value) > taskRequestBodyValueLimit {
-			value = append(value[:taskRequestBodyValueKeep], "...[truncated]"...)
-		}
+		value, _ := io.ReadAll(io.LimitReader(part, taskRequestBodyStoreLimit+1))
 		fmt.Fprintf(&b, "%s=%s\n", part.FormName(), value)
 	}
 	return b.String()
 }
 
-// shortenJSONStrings cuts oversized JSON string literals in place, keeping
+// shortenInlineJSONMedia cuts oversized base64 data URLs in place, keeping
 // key order and number text exactly as the client sent them. Malformed input
 // is scanned safely and returned as is from the first unterminated string.
-func shortenJSONStrings(raw []byte) []byte {
+func shortenInlineJSONMedia(raw []byte) []byte {
 	var out bytes.Buffer
 	last := 0
 	for i := 0; i < len(raw); i++ {
@@ -113,7 +112,8 @@ func shortenJSONStrings(raw []byte) []byte {
 			break
 		}
 		content := raw[i+1 : end]
-		if len(content) > taskRequestBodyValueLimit {
+		header, _, hasPayload := bytes.Cut(content, []byte(","))
+		if len(content) > taskRequestBodyInlineMediaLimit && hasPayload && bytes.HasPrefix(header, []byte("data:")) && bytes.HasSuffix(header, []byte(";base64")) {
 			// Keep whole escapes and UTF-8 runes so the result stays valid JSON.
 			keep := 0
 			for keep < len(content) {
@@ -126,14 +126,14 @@ func shortenJSONStrings(raw []byte) []byte {
 				} else if content[keep] >= utf8.RuneSelf {
 					_, step = utf8.DecodeRune(content[keep:])
 				}
-				if keep+step > taskRequestBodyValueKeep {
+				if keep+step > taskRequestBodyInlineMediaKeep {
 					break
 				}
 				keep += step
 			}
 			out.Write(raw[last : i+1])
 			out.Write(content[:keep])
-			fmt.Fprintf(&out, "...[truncated %d bytes]\"", len(content))
+			fmt.Fprintf(&out, "...[truncated %d bytes]\"", len(content)-keep)
 			last = end + 1
 		}
 		i = end

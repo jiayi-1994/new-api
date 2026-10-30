@@ -243,9 +243,12 @@ type VideoExploreSettings struct {
 // itself reads nothing else (request policy, settings, Redis).
 type VideoDecisionInput struct {
 	Candidates []videosched.Candidate
-	Policy     videosched.Policy
-	Explore    VideoExploreSettings
-	Probe      map[int]VideoProbeState
+	// SingleChannel counts configured channels before request/health filters,
+	// never the survivors after failed, tried or incompatible candidates drop out.
+	SingleChannel bool `json:",omitempty"`
+	Policy        videosched.Policy
+	Explore       VideoExploreSettings
+	Probe         map[int]VideoProbeState
 	// SlotOccupancy is the probe slots held per channel, apart from in-flight
 	// counts: a slot is held from acquisition while the task is only counted
 	// once inserted. Channels holding none are absent.
@@ -278,6 +281,20 @@ type VideoScheduleChoice struct {
 // channel with the fewest submit+generation samples is chosen (ties by score),
 // and otherwise unproven channels are left out of the argmax.
 func DecideVideoSchedule(input VideoDecisionInput) VideoScheduleChoice {
+	if input.SingleChannel && len(input.Candidates) == 1 {
+		candidates := slices.Clone(input.Candidates)
+		if candidates[0].Excluded == videoSchedRateLimited {
+			candidates[0].Excluded = ""
+		}
+		policy := input.Policy
+		policy.BypassHealth = true
+		board := videosched.EvaluateProbe(candidates, policy)
+		choice := VideoScheduleChoice{Board: board, Flow: "normal"}
+		if board[0].Reason == "" {
+			choice.Best = board[0].Candidate
+		}
+		return choice
+	}
 	if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 		return decideReliableVideoSchedule(input)
 	}
@@ -371,6 +388,7 @@ func VideoDecisionFingerprint(input VideoDecisionInput) (string, map[string]stri
 // channels of a request that video scheduling took over, ignoring the legacy
 // priority retry index. Every other request keeps ordinary selection.
 func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskdto.ChannelFilter) (*model.Channel, error) {
+	c.Set(videoHealthAdmissionKey, nil)
 	decision := VideoSchedDecisionFrom(c)
 	if !decision.Takeover {
 		return nil, model.ErrTierSelectorNotApplicable
@@ -442,7 +460,9 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 		// checked against the live cache before it is admitted. The probe slot
 		// is claimed only afterwards: claiming starts the probe cooldown.
 		selected, available := recheckVideoChannel(group, modelName, filters, choice.Best.ID)
-		if !available || input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 && selected.VideoHealthIdentity() != choice.Best.Reliability.ConfigIdentity {
+		singleChannel := input.SingleChannel && len(input.Candidates) == 1
+		if !available || singleChannel && selected.VideoHealthIdentity() != channels[0].VideoHealthIdentity() ||
+			!singleChannel && input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 && selected.VideoHealthIdentity() != choice.Best.Reliability.ConfigIdentity {
 			record.Admission = VideoSchedAdmissionChannelUnavailable
 			appendVideoScheduleRecord(c, record, choice.Board)
 			continue
@@ -460,7 +480,9 @@ func selectVideoChannel(c *gin.Context, group, modelName string, filters []taskd
 			appendVideoScheduleRecord(c, record, choice.Board)
 			continue
 		}
-		if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
+		if singleChannel {
+			c.Set(videoHealthAdmissionKey, videoHealthAdmission{ChannelID: selected.Id, Flow: videoSingleChannelFlow, Model: videoHealthModelName(selected, modelName), Identity: selected.VideoHealthIdentity()})
+		} else if input.Policy.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 			acquired, admissionErr := admitVideoReliability(c, choice, input, probeTTL)
 			if admissionErr != nil || !acquired {
 				record.Admission = "admission_conflict"
@@ -560,6 +582,10 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 		Now:           time.Now().UTC().Truncate(time.Second),
 		Seed:          seed,
 	}
+	if len(channels) == 1 {
+		configured, snapshotErr := model.SatisfiedChannelSnapshot(group, modelName, nil)
+		input.SingleChannel = snapshotErr == nil && len(configured) == 1 && configured[0].Id == channels[0].Id
+	}
 	if setting.SelectionPolicy == videosched.PolicyStabilityCostV2 {
 		input.Policy.SelectionPolicy, input.Policy.MinMarginRate, input.Policy.MinOverallRate = setting.SelectionPolicy, setting.MinMarginRate, setting.MinOverallRate
 		input.Policy.StabilityTolerance, input.Policy.Now = setting.StabilityTolerance, input.Now.Unix()
@@ -585,6 +611,11 @@ func AssembleVideoDecision(c *gin.Context, setting *operation_setting.VideoSched
 	}
 	for _, channel := range channels {
 		candidate, probe := assembleVideoCandidate(c, group, modelName, channel, tried[channel.Id], setting)
+		if input.SingleChannel && candidate.Excluded == videoSchedRateLimited {
+			// Clear before quote finalization and stock lookup, which skip
+			// excluded candidates; bypass must still run both hard checks.
+			candidate.Excluded = ""
+		}
 		input.Candidates = append(input.Candidates, candidate)
 		input.Probe[channel.Id] = probe
 	}

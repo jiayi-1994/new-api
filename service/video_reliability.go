@@ -24,6 +24,7 @@ const videoHealthAdmissionKey = "video_health_admission"
 const videoValidationLeaseKey = "video_validation_lease"
 const videoSubmissionOwnerKey = "video_submission_owner"
 const videoSubmissionLeaseTTL = 120 * time.Second
+const videoSingleChannelFlow = "single_channel"
 
 var ErrVideoHealthAdmission = errors.New("video health admission unavailable")
 var videoReliabilityCache sync.Map
@@ -42,6 +43,11 @@ type videoHealthAdmission struct {
 	Flow      string
 	Model     string
 	Identity  string
+}
+
+func videoSingleChannelRequest(c *gin.Context) bool {
+	admission, ok := common.GetContextKeyType[videoHealthAdmission](c, videoHealthAdmissionKey)
+	return ok && admission.Flow == videoSingleChannelFlow && VideoSchedDecisionFrom(c).Takeover
 }
 
 // BindVideoHealthChannel freezes the same configuration used to build the
@@ -163,6 +169,9 @@ func publishPersistedVideoReliability(ctx context.Context, channelID int, modelN
 }
 
 func RefreshReviewedVideoHealth(ctx context.Context, attempt *model.VideoHealthAttempt) {
+	if attempt.SlotKey != "" {
+		releaseVideoProbeSlot(attempt.SlotKey, attempt.SlotToken)
+	}
 	view, err := model.RefreshVideoHealthState(ctx, attempt.ChannelID, attempt.ModelName, videoReliabilityPolicy(operation_setting.GetVideoSchedulingSetting()), time.Now().Unix())
 	if err == nil {
 		err = publishVideoReliability(attempt.ChannelID, view)
@@ -184,8 +193,9 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	stopVideoHealthSubmissionOwner(c)
 	s := frozenVideoSetting(c)
 	strict := decision.Takeover && s.SelectionPolicy == videosched.PolicyStabilityCostV2
+	singleChannel := videoSingleChannelRequest(c)
 	reservation, _ := common.GetContextKeyType[*videoCapacityReservation](c, videoCapacityReservationKey)
-	requireJournal := strict || reservation != nil
+	requireJournal := strict || singleChannel || reservation != nil
 	channel, bound := common.GetContextKeyType[videoHealthAdmission](c, "video_health_channel")
 	if !bound || channel.ChannelID != info.GetChannelID() || channel.Identity == "" {
 		if requireJournal {
@@ -197,13 +207,16 @@ func BeginVideoHealthTransmission(c *gin.Context, info *relaycommon.RelayInfo) e
 	if decision.Shadow {
 		flow = "shadow"
 	}
-	if strict {
+	if strict || singleChannel {
 		admission, ok := common.GetContextKeyType[videoHealthAdmission](c, videoHealthAdmissionKey)
 		if !ok || admission.ChannelID != info.GetChannelID() || admission.Identity != channel.Identity || admission.Model != channel.Model {
 			return ErrVideoHealthAdmission
 		}
 		flow, version = admission.Flow, admission.Version
 	}
+	// Keep durable transmission/outcome accounting, but ignore health admission
+	// for the sole configured channel, including an existing blocked state.
+	strict = strict && !singleChannel
 	attempt := &model.VideoHealthAttempt{RequestID: c.GetString(common.RequestIdKey), AttemptSeq: RequestPolicy(c).Attempts, ChannelID: info.GetChannelID(), ModelName: channel.Model, ConfigIdentity: channel.Identity, ActualGroup: RequestPolicy(c).SelectedGroup, StartedAt: time.Now().Unix(), WindowSeconds: s.WindowSeconds, StateVersion: version, Flow: flow}
 	attempt.RequestStartedAt = RequestPolicy(c).StartedAt.Unix()
 	attempt.SubmitOwner, attempt.SubmitLeaseExpires = common.GetRandomString(24), time.Now().Add(videoSubmissionLeaseTTL).Unix()
@@ -579,7 +592,7 @@ func reconcileVideoReliability(ctx context.Context) error {
 		return err
 	}
 	var attempts []model.VideoHealthAttempt
-	if err := model.DB.WithContext(ctx).Where("id > ? AND final_outcome IN ?", videoReliabilityReconcileCursor.Load(), []string{"", "unknown"}).Order("id ASC").Limit(500).Find(&attempts).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Where("id > ? AND final_outcome IN ? AND COALESCE(reviewed_at, 0) = 0", videoReliabilityReconcileCursor.Load(), []string{"", "unknown"}).Order("id ASC").Limit(500).Find(&attempts).Error; err != nil {
 		return err
 	}
 	if len(attempts) == 0 {
@@ -623,6 +636,16 @@ func reconcileVideoReliability(ctx context.Context) error {
 			// submission owner permits reconciliation to declare it missing.
 			if err := model.ExpireVideoHealthSubmission(ctx, a.RequestID, a.AttemptSeq, now); err != nil {
 				return err
+			}
+		}
+		if byAttempt[a.ID] == nil && !liveOwner && max(a.StartedAt, a.FinishedAt) <= now-int64(model.VideoHealthUnknownRetention/time.Second) {
+			reviewed, err := model.CloseExpiredVideoHealthUnknown(ctx, a.ID, now)
+			if err != nil {
+				return err
+			}
+			if reviewed != nil {
+				RefreshReviewedVideoHealth(ctx, reviewed)
+				continue
 			}
 		}
 		if a.SlotKey != "" && (a.SlotExpires > now || liveOwner) {

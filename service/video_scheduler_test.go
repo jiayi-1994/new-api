@@ -416,6 +416,143 @@ func TestVideoInputSourceSpecVersion(t *testing.T) {
 	}
 }
 
+func TestSingleVideoChannelKeepsHardGates(t *testing.T) {
+	for _, policy := range []string{videosched.PolicyWeightedV1, videosched.PolicyStabilityCostV2} {
+		for _, tc := range []struct {
+			name   string
+			change func(*videosched.Candidate)
+			reason string
+		}{
+			{"blocked", func(*videosched.Candidate) {}, ""},
+			{"cold start", func(c *videosched.Candidate) { c.Reliability = nil }, ""},
+			{"rate limited", func(c *videosched.Candidate) { c.Excluded = videoSchedRateLimited }, ""},
+			{"missing purchase", func(c *videosched.Candidate) { c.Excluded = "not schedulable: no cost table" }, "no cost table"},
+			{"unpriced tier", func(c *videosched.Candidate) { c.Cost.Prices = nil }, "no price configured"},
+			{"unsupported duration", func(c *videosched.Candidate) { c.Cost.AllowedSeconds = []int{10} }, "seconds"},
+			{"unpriced reference", func(c *videosched.Candidate) { c.Spec.References = map[string]int{"image": 1} }, "reference"},
+			{"loss", func(c *videosched.Candidate) { c.Cost.Prices = map[string]float64{"*": 3} }, ""},
+			{"stock", func(c *videosched.Candidate) { c.Supply = new(float64) }, "out of stock"},
+			{"capacity", func(c *videosched.Candidate) { c.Capacity, c.InFlight = 1, 1 }, "at capacity"},
+			{"group capacity", func(c *videosched.Candidate) { c.GroupCapacity, c.GroupInFlight = 1, 1 }, "at capacity"},
+			{"already tried", func(c *videosched.Candidate) { c.Excluded = "tried" }, "tried"},
+			{"disabled", func(c *videosched.Candidate) { c.Excluded = "disabled" }, "disabled"},
+		} {
+			t.Run(policy+"/"+tc.name, func(t *testing.T) {
+				now, seconds := time.Now().UTC().Truncate(time.Second), 5.0
+				candidate := videosched.Candidate{ID: 1, Quality: .8, Sell: videosched.SellPrice{Kind: videosched.SellKnown, USD: 2}, Spec: videosched.Spec{Tier: "*", OutputSeconds: &seconds, SecondsKind: videosched.KindExact}, Cost: videosched.CostConfig{Mode: videosched.ModePerVideo, Prices: map[string]float64{"*": 1}}, Submit: videosched.HealthStat{Samples: 100}, Gen: videosched.HealthStat{Samples: 100}, Reliability: &videosched.ReliabilitySnapshot{Version: 1, State: videosched.HealthBlocked, StateVersion: 1, Model: "video", Integrity: "complete", BlockedAt: now.Unix()}}
+				tc.change(&candidate)
+				input := VideoDecisionInput{SingleChannel: true, Candidates: []videosched.Candidate{candidate}, Now: now, Policy: videosched.Policy{SelectionPolicy: policy, MinMarginRate: .1, MaxCostToSellRatio: 1, MinSubmitRate: .8, MinGenRate: .8, MinOverallRate: .6, MinSamples: 20, Now: now.Unix(), MaxCostUSD: 1000, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}}
+				choice := DecideVideoSchedule(input)
+				if tc.reason != "" || tc.name == "loss" {
+					assert.Nil(t, choice.Best)
+					assert.NotEmpty(t, choice.Board[0].Reason)
+					assert.Contains(t, choice.Board[0].Reason, tc.reason)
+					return
+				}
+				require.NotNil(t, choice.Best)
+				assert.Equal(t, "normal", choice.Flow)
+				assert.False(t, choice.Probe)
+				assert.False(t, choice.Explore)
+				assert.Equal(t, candidate.Sell, choice.Best.Sell)
+				assert.Equal(t, 1.0, choice.Board[0].Quote.TotalUSD)
+				assert.Equal(t, candidate.Excluded, input.Candidates[0].Excluded, "decision must not mutate replay input")
+			})
+		}
+	}
+}
+
+func TestSingleVideoChannelTransmission(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, backend := range []string{"memory", "redis"} {
+			t.Run(dialect+"/"+backend, func(t *testing.T) {
+				useVideoHealthBackend(t, backend)
+				db := useVideoReliabilityDatabase(t, dialect)
+				require.NoError(t, db.AutoMigrate(&model.Ability{}))
+				t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&model.Ability{})) })
+				var version string
+				query := "SELECT version()"
+				if dialect == "sqlite" {
+					query = "SELECT sqlite_version()"
+				}
+				require.NoError(t, db.Raw(query).Scan(&version).Error)
+				t.Logf("database: %s %s", dialect, version)
+				s := operation_setting.GetVideoSchedulingSetting()
+				s.Mode, s.SelectionPolicy, s.AuditEnabled = "on", videosched.PolicyStabilityCostV2, false
+				s.MinSamples, s.MinGenRate, s.MinOverallRate, s.MinMarginRate = 20, .8, .6, .1
+				s.QualificationTTLSeconds, s.ValidationPeriodSeconds = 86400, 604800
+				s.ProbeMaxInFlight, s.ExploreMaxInFlight = 0, 0
+				previousPrices := ratio_setting.ModelPrice2JSONString()
+				previousCache, previousDisable := common.MemoryCacheEnabled, common.AutomaticDisableChannelEnabled
+				common.MemoryCacheEnabled, common.AutomaticDisableChannelEnabled = true, true
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled, common.AutomaticDisableChannelEnabled = previousCache, previousDisable
+					require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPrices))
+				})
+				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"videos-fast":2}`))
+				plugin, err := jsplugin.NewRegistry().Register(videoSpecProbePlugin, jsplugin.Options{})
+				require.NoError(t, err)
+				config := `{"video_scheduling":{"quality":0.8,"capacity":1,"models":{"videos-fast":{"mode":"per_video","prices":{"*":1}}}}}`
+				createVideoSchedChannel(t, db, 9911, "default", "spec-probe", 1, config, "")
+				model.InitChannelCache()
+				channel, err := model.GetChannelById(9911, true)
+				require.NoError(t, err)
+				require.NoError(t, model.EnsureVideoHealthState(t.Context(), channel.Id, "videos-fast", channel.VideoHealthIdentity()))
+				require.NoError(t, db.Model(&model.VideoHealthState{}).Where("channel_id = ?", channel.Id).Updates(map[string]any{"state": videosched.HealthBlocked, "blocked_at": time.Now().Unix()}).Error)
+				publishPersistedVideoReliability(t.Context(), channel.Id, "videos-fast")
+				for i := range 3 {
+					c := newVideoSchedTestContext(t)
+					c.Set(common.RequestIdKey, fmt.Sprintf("single-channel-%d", i))
+					c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+					c.Set("task_request", map[string]any{"prompt": "fixture"})
+					common.SetContextKey(c, constant.ContextKeyVideoSchedDecision, VideoSchedDecision{Takeover: true})
+					common.SetContextKey(c, constant.ContextKeyVideoSchedSetting, s)
+					selected, err := selectVideoChannel(c, "default", "videos-fast", nil)
+					require.NoError(t, err, "blocked state and a preceding failure cannot seal the sole channel")
+					require.Equal(t, 9911, selected.Id)
+					assert.Equal(t, "normal", VideoScheduleRecords(c)[0].Flow)
+					RequestPolicy(c).BeginAttempt(selected, "default")
+					BindVideoHealthChannel(c, selected, "videos-fast")
+					require.NoError(t, BeginVideoHealthTransmission(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: selected.Id}, OriginModelName: "videos-fast"}))
+					t.Cleanup(func() { stopVideoHealthSubmissionOwner(c); releaseVideoCapacityReservation(c) })
+					failure := types.NewErrorWithStatusCode(errors.New("upstream fixture failure"), types.ErrorCode("channel:fixture"), 503)
+					assert.True(t, ShouldDisableChannel(failure))
+					assert.False(t, ShouldDisableChannelForRequest(c, failure))
+					if i == 1 {
+						ObserveVideoSubmit(c, selected, "videos-fast", nil)
+						task := &model.Task{TaskID: "single-async-failure", ChannelId: selected.Id, Status: model.TaskStatusSubmitted}
+						task.PrivateData.VideoHealth = VideoHealthReference(c)
+						task.VideoHealthAttemptID = &task.PrivateData.VideoHealth.AttemptID
+						task.PrivateData.SchedulingSummary = NewVideoSchedulingSummary(c, selected, "videos-fast")
+						require.NoError(t, db.Create(task).Error)
+						VideoTaskPersisted(c, task)
+						task.Status, task.FailReason = model.TaskStatusFailure, "upstream fixture failure"
+						require.NoError(t, db.Save(task).Error)
+						ObserveVideoTerminal(task, false)
+					} else {
+						ObserveVideoSubmit(c, selected, "videos-fast", &taskdto.TaskError{Error: errors.New("upstream fixture failure"), StatusCode: 503})
+					}
+					facts, err := model.ListVideoHealthAttempts(t.Context(), c.GetString(common.RequestIdKey))
+					require.NoError(t, err)
+					require.Len(t, facts, 1)
+					assert.Equal(t, "upstream", facts[0].FinalOutcome, "real failures remain in the durable journal")
+					_, err = selectVideoChannel(c, "default", "videos-fast", nil)
+					assert.ErrorIs(t, err, model.ErrTierSelectorNoCandidate, "bypass does not resend an already attempted channel")
+				}
+				// A request filter leaving one channel must not turn a configured
+				// multi-channel pool into an exempt single-channel pool.
+				createVideoSchedChannel(t, db, 9912, "default", "spec-probe", 1, config, "")
+				model.InitChannelCache()
+				c := newVideoSchedTestContext(t)
+				c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+				c.Set("task_request", map[string]any{"prompt": "fixture"})
+				input := AssembleVideoDecision(c, s, "default", "videos-fast", []*model.Channel{channel}, 0)
+				assert.False(t, input.SingleChannel)
+				assert.Nil(t, DecideVideoSchedule(input).Best)
+			})
+		}
+	}
+}
+
 func TestReliableVideoColdStartAndValidationOrder(t *testing.T) {
 	now := time.Unix(1800000000, 0).UTC()
 	p := videosched.Policy{SelectionPolicy: videosched.PolicyStabilityCostV2, MinMarginRate: .1, MinGenRate: .8, MinOverallRate: .6, StabilityTolerance: .01, MinSamples: 20, Now: now.Unix(), MaxCostUSD: 1000, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}

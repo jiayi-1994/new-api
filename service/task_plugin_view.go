@@ -42,7 +42,7 @@ func SanitizeUnifiedVideoUpstreamError(message string, secrets ...string) string
 	message = upstreamAPIKeyPattern.ReplaceAllString(message, "***")
 	message = strings.TrimSpace(common.MaskSensitiveInfo(message))
 	if message == "" {
-		return "Video generation failed"
+		return model.UnifiedVideoRequestFailedMessage
 	}
 	return message
 }
@@ -52,24 +52,45 @@ func unifiedVideoHostFailure(task *model.Task) bool {
 		strings.HasPrefix(task.FailReason, "poll failed:") || strings.HasPrefix(task.FailReason, "upstream task not found (HTTP ")
 }
 
-func unifiedVideoTaskFailureMessage(task *model.Task) string {
-	const generic = "Video generation failed"
-	if task.ChannelId <= 0 || strings.TrimSpace(task.FailReason) == "" || unifiedVideoHostFailure(task) {
-		return generic
+func unifiedVideoTaskError(task *model.Task) *videodto.OpenAIVideoError {
+	failure := &videodto.OpenAIVideoError{
+		Code: "video_generation_failed", Message: model.UnifiedVideoRequestFailedMessage,
+	}
+	if unifiedVideoHostFailure(task) {
+		return failure
+	}
+	// Classify once so the public code and fallback wording agree on every
+	// retrieval surface. Host diagnostics must never reach the classifier.
+	if GetTaskAdaptorFunc != nil {
+		if classifier, ok := GetTaskAdaptorFunc(task.Platform).(VideoFailureClassifier); ok {
+			if class, valid := classifier.ClassifyFailure(task.FailReason); valid {
+				switch class {
+				case VideoFailureUser:
+					failure.Code = "video_request_rejected"
+					failure.Message = model.UnifiedVideoRequestRejectedMessage
+				case VideoFailureCancelled:
+					failure.Code = "video_generation_cancelled"
+				}
+			}
+		}
+	}
+	if task.ChannelId <= 0 || strings.TrimSpace(task.FailReason) == "" {
+		return failure
 	}
 	channel, err := model.CacheGetChannel(task.ChannelId)
 	if err != nil || channel == nil || channel.Setting == nil {
-		return generic
+		return failure
 	}
 	// GetSetting repairs malformed JSON by writing the channel. Public reads
 	// must instead fail closed without mutating the channel or cached object.
 	var setting videodto.ChannelSettings
 	if common.UnmarshalJsonStr(*channel.Setting, &setting) != nil || !setting.ErrorPassthroughEnabled {
-		return generic
+		return failure
 	}
 	secrets := []string{task.PrivateData.Key, task.PrivateData.UpstreamTaskID}
 	secrets = append(secrets, channel.GetKeys()...)
-	return SanitizeUnifiedVideoUpstreamError(task.FailReason, secrets...)
+	failure.Message = SanitizeUnifiedVideoUpstreamError(task.FailReason, secrets...)
+	return failure
 }
 
 // RedactUnifiedVideoTaskDTO keeps execution details out of the public sale
@@ -89,7 +110,7 @@ func RedactUnifiedVideoTaskDTO(task *model.Task, item *dto.TaskDto) {
 	item.Properties = properties
 	item.FailReason = ""
 	if task.Status == model.TaskStatusFailure {
-		item.FailReason = unifiedVideoTaskFailureMessage(task)
+		item.FailReason = unifiedVideoTaskError(task).Message
 	}
 }
 
@@ -204,26 +225,7 @@ func BuildUnifiedVideoResponse(task *model.Task) *videodto.OpenAIVideo {
 	if task.Status != model.TaskStatusFailure {
 		return video
 	}
-	video.Error = &videodto.OpenAIVideoError{Code: "video_generation_failed", Message: unifiedVideoTaskFailureMessage(task)}
-	// Keep stable failure categories independent of the message opt-in.
-	// Older untracked tasks lack the host marker, but retain these poll reasons.
-	if unifiedVideoHostFailure(task) || GetTaskAdaptorFunc == nil {
-		return video
-	}
-	classifier, ok := GetTaskAdaptorFunc(task.Platform).(VideoFailureClassifier)
-	if !ok {
-		return video
-	}
-	class, valid := classifier.ClassifyFailure(task.FailReason)
-	if !valid {
-		return video
-	}
-	switch class {
-	case VideoFailureUser:
-		video.Error.Code = "video_request_rejected"
-	case VideoFailureCancelled:
-		video.Error.Code = "video_generation_cancelled"
-	}
+	video.Error = unifiedVideoTaskError(task)
 	return video
 }
 

@@ -168,6 +168,9 @@ type Weights struct {
 var DefaultWeights = Weights{Price: 0.5, Quality: 0.3, Service: 0.2}
 
 type Policy struct {
+	// BypassHealth is set only by the host for a configured single channel.
+	// Purchase, sell, stock and capacity checks still apply.
+	BypassHealth            bool    `json:",omitempty"`
 	SelectionPolicy         string  `json:",omitempty"`
 	MinMarginRate           float64 `json:",omitempty"`
 	MinOverallRate          float64 `json:",omitempty"`
@@ -420,7 +423,7 @@ func Evaluate(cands []Candidate, p Policy) []Score {
 	if p.SelectionPolicy == PolicyStabilityCostV2 {
 		return evaluateStabilityCost(cands, p, false)
 	}
-	return evaluate(cands, p, false)
+	return evaluate(cands, p, p.BypassHealth)
 }
 
 // EvaluateProbe scores the same snapshot for a recovery probe: it only skips

@@ -65,7 +65,11 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 // request. A request video scheduling took over leaves 429 to the scheduler's
 // cooldown and 5xx to its health gate: they disable the channel only as channel errors or
 // disable-keyword matches (credential and quota class), never by status code.
+// The sole configured channel is exempt from automatic disable for this request.
 func ShouldDisableChannelForRequest(c *gin.Context, err *types.NewAPIError) bool {
+	if videoSingleChannelRequest(c) {
+		return false
+	}
 	transient := err != nil && (err.StatusCode == http.StatusTooManyRequests || err.StatusCode/100 == 5)
 	return shouldDisableChannel(err, !transient || !VideoSchedDecisionFrom(c).Takeover)
 }

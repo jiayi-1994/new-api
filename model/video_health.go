@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	VideoHealthRetention   = 30 * 24 * time.Hour
-	VideoHealthRecoveryTTL = 7 * 24 * time.Hour
+	VideoHealthRetention        = 30 * 24 * time.Hour
+	VideoHealthRecoveryTTL      = 7 * 24 * time.Hour
+	VideoHealthUnknownRetention = time.Hour
 )
 
 var ErrVideoHealthStateChanged = errors.New("video health state changed before admission")
@@ -319,6 +320,7 @@ func activeVideoValidationAttempts(tx *gorm.DB, now int64) *gorm.DB {
 	activeTasks := tx.Model(&Task{}).Select("video_health_attempt_id").
 		Where("video_health_attempt_id IS NOT NULL AND status NOT IN ?", []TaskStatus{TaskStatusSuccess, TaskStatusFailure})
 	return tx.Model(&VideoHealthAttempt{}).
+		Where("COALESCE(reviewed_at, 0) = 0").
 		Where("slot_key <> ? AND final_outcome IN ?", "", []string{"", "unknown"}).
 		Where("slot_expires > ? OR submit_lease_expires > ? OR id IN (?)", now, now, activeTasks)
 }
@@ -357,15 +359,32 @@ func ReviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, n
 	if attemptID <= 0 || actor <= 0 || note == "" || len(note) > 1000 {
 		return nil, errors.New("review requires an operator and an evidence note of at most 1000 bytes")
 	}
+	return reviewVideoHealthUnknown(ctx, attemptID, actor, note, now, false)
+}
+
+// CloseExpiredVideoHealthUnknown retires only health admission uncertainty
+// after one hour without a live submit owner or linked task. It does not establish an upstream outcome
+// or change the original request, task, billing or retry history.
+func CloseExpiredVideoHealthUnknown(ctx context.Context, attemptID, now int64) (*VideoHealthAttempt, error) {
+	return reviewVideoHealthUnknown(ctx, attemptID, 0, "One-hour unknown-submission retention elapsed without a live submit owner or linked task; upstream outcome remains unknown", now, true)
+}
+
+func reviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, note string, now int64, expiredOnly bool) (*VideoHealthAttempt, error) {
 	var attempt VideoHealthAttempt
+	eligible := false
 	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockForUpdate(tx).First(&attempt, attemptID).Error; err != nil {
 			return err
 		}
 		if attempt.ReviewedAt > 0 {
+			eligible = true
 			return nil // idempotent: preserve the first operator and their evidence
 		}
-		if attempt.FinalOutcome != "unknown" || attempt.TaskPK != nil || attempt.SubmitLeaseExpires > now || attempt.SlotExpires > now || attempt.StartedAt >= now-120 {
+		unknownAt := max(attempt.StartedAt, attempt.FinishedAt)
+		if attempt.FinalOutcome != "unknown" || attempt.TaskPK != nil || attempt.SubmitLeaseExpires > now || attempt.StartedAt >= now-120 || expiredOnly && unknownAt > now-int64(VideoHealthUnknownRetention/time.Second) {
+			if expiredOnly {
+				return nil
+			}
 			return errors.New("only an abandoned unknown submission without a task can be reviewed")
 		}
 		var tasks int64
@@ -373,8 +392,12 @@ func ReviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, n
 			return err
 		}
 		if tasks > 0 {
+			if expiredOnly {
+				return nil
+			}
 			return errors.New("submission has a task; wait for automatic reconciliation")
 		}
+		eligible = true
 		attempt.ReviewedAt, attempt.ReviewedBy, attempt.ReviewNote = now, actor, note
 		if err := tx.Model(&attempt).Updates(map[string]any{"reviewed_at": now, "reviewed_by": actor, "review_note": note}).Error; err != nil {
 			return err
@@ -394,6 +417,9 @@ func ReviewVideoHealthUnknown(ctx context.Context, attemptID int64, actor int, n
 		state.CurrentJSON, state.RecoveryJSON = "", ""
 		return SaveVideoHealthState(tx, &state, version)
 	})
+	if !eligible {
+		return nil, err
+	}
 	return &attempt, err
 }
 

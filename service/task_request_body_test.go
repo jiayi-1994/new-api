@@ -18,11 +18,12 @@ import (
 func TestTaskRequestBodySnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	media := strings.Repeat("A", 20000)
-	longPrompt := strings.Repeat("中", 2000) // 6000 bytes: a long prompt must survive
+	longPrompt := strings.Repeat("中", 4000) // Exceeds the old 8192-byte per-value cutoff.
+	mediaURL := "https://example.com/video.mp4?signature=" + strings.Repeat("A", 9000)
 
 	var multipartBody bytes.Buffer
 	form := multipart.NewWriter(&multipartBody)
-	require.NoError(t, form.WriteField("prompt", "a cat"))
+	require.NoError(t, form.WriteField("prompt", longPrompt))
 	file, err := form.CreateFormFile("input_reference", "cat.png")
 	require.NoError(t, err)
 	_, err = file.Write(bytes.Repeat([]byte{0x89, 0x00}, 5000))
@@ -38,20 +39,20 @@ func TestTaskRequestBodySnapshot(t *testing.T) {
 		{
 			name:        "json keeps order, numbers and long prompts",
 			contentType: "application/json",
-			body:        []byte(`{"model":"sora-2","seed":12345678901234567890,"prompt":"` + longPrompt + `"}`),
-			want:        `{"model":"sora-2","seed":12345678901234567890,"prompt":"` + longPrompt + `"}`,
+			body:        []byte(`{"model":"sora-2","seed":12345678901234567890,"prompt":"` + longPrompt + `","videos":["` + mediaURL + `"]}`),
+			want:        `{"model":"sora-2","seed":12345678901234567890,"prompt":"` + longPrompt + `","videos":["` + mediaURL + `"]}`,
 		},
 		{
 			name:        "json shortens inline media to valid json",
 			contentType: "application/json",
 			body:        []byte(`{"image":"data:image/png;base64,` + media + `","prompt":"a \"cat\""}`),
-			want:        `{"image":"data:image/png;base64,` + media[:256-len("data:image/png;base64,")] + `...[truncated 20022 bytes]","prompt":"a \"cat\""}`,
+			want:        `{"image":"data:image/png;base64,` + media[:256-len("data:image/png;base64,")] + `...[truncated 19766 bytes]","prompt":"a \"cat\""}`,
 		},
 		{
 			name:        "multipart records file parts by name and size",
 			contentType: form.FormDataContentType(),
 			body:        multipartBody.Bytes(),
-			want:        "prompt=a cat\ninput_reference=[file cat.png, 10000 bytes]\n",
+			want:        "prompt=" + longPrompt + "\ninput_reference=[file cat.png, 10000 bytes]\n",
 		},
 	}
 	for _, tc := range cases {
@@ -83,7 +84,7 @@ func TestTaskRequestBodySnapshotCapsStoredSize(t *testing.T) {
 	record := TaskRequestBodySnapshot(c)
 
 	require.NotNil(t, record)
-	assert.LessOrEqual(t, len(record.Body), 65535)
+	assert.LessOrEqual(t, len(record.Body), 60000)
 	assert.True(t, strings.HasSuffix(record.Body, "...[truncated]"))
 	assert.True(t, utf8.ValidString(record.Body))
 }

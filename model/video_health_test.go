@@ -451,7 +451,7 @@ func TestVideoHealthDatabase(t *testing.T) {
 			})
 			t.Run("reviewed_unknown_requires_fresh_recovery_and_preserves_audit", func(t *testing.T) {
 				require.NoError(t, EnsureVideoHealthState(ctx, 902, "video"))
-				unknown := VideoHealthAttempt{RequestID: "review-unknown", AttemptSeq: 1, ChannelID: 902, ModelName: "video", StartedAt: start + 1, WindowSeconds: 1800, Flow: "shadow", SubmitLeaseExpires: start + 300}
+				unknown := VideoHealthAttempt{RequestID: "review-unknown", AttemptSeq: 1, ChannelID: 902, ModelName: "video", StartedAt: start + 1, WindowSeconds: 1800, Flow: "shadow", SubmitLeaseExpires: start + 300, SlotKey: "review-slot", SlotToken: "review-owner", SlotExpires: start + 86400}
 				require.NoError(t, BeginVideoHealthAttempt(ctx, &unknown, false))
 				require.NoError(t, ObserveVideoHealthAttempt(ctx, unknown.RequestID, 1, nil, "unknown", "unknown", "transport", start+2))
 				_, err := ReviewVideoHealthUnknown(ctx, unknown.ID, 1, "Checked provider records", start+200)
@@ -467,6 +467,9 @@ func TestVideoHealthDatabase(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "unknown", result.FinalOutcome)
 				assert.Equal(t, 1, result.ReviewedBy)
+				active, err := VideoValidationOwnerActive(ctx, unknown.ID, start+301)
+				require.NoError(t, err)
+				assert.False(t, active, "verified manual review releases the unexpired validation lease")
 				again, err := ReviewVideoHealthUnknown(ctx, unknown.ID, 2, "different note", start+302)
 				require.NoError(t, err)
 				assert.Equal(t, result.ReviewedAt, again.ReviewedAt)
@@ -491,6 +494,54 @@ func TestVideoHealthDatabase(t *testing.T) {
 				require.Len(t, facts, 1)
 				assert.Equal(t, "unknown", facts[0].FinalOutcome)
 				assert.Equal(t, "Checked provider records", facts[0].ReviewNote)
+			})
+			t.Run("expired_unknown_closes_without_inventing_an_outcome", func(t *testing.T) {
+				for i, scenario := range []string{"expired", "legacy_long_lease", "retention_live", "owner_live", "linked_task"} {
+					t.Run(scenario, func(t *testing.T) {
+						channelID := 950 + i
+						require.NoError(t, EnsureVideoHealthState(ctx, channelID, "video"))
+						a := VideoHealthAttempt{RequestID: "auto-review-" + scenario, AttemptSeq: 1, ChannelID: channelID, ModelName: "video", StartedAt: start, WindowSeconds: 1800, Flow: "shadow", SlotKey: scenario, SlotToken: "owner", SlotExpires: start + 500}
+						if scenario == "legacy_long_lease" {
+							a.SlotExpires = start + 86400
+						}
+						if scenario == "owner_live" {
+							a.SubmitLeaseExpires = start + 4000
+						}
+						require.NoError(t, BeginVideoHealthAttempt(ctx, &a, false))
+						require.NoError(t, ObserveVideoHealthAttempt(ctx, a.RequestID, 1, nil, "unknown", "unknown", "transport", start+1))
+						if scenario == "legacy_long_lease" {
+							require.NoError(t, db.Model(&a).Update("capacity_expires", start+86400).Error)
+						}
+						if scenario == "retention_live" {
+							require.NoError(t, db.Model(&a).Update("finished_at", start+2).Error)
+						}
+						if scenario == "linked_task" {
+							require.NoError(t, db.Create(&Task{TaskID: a.RequestID, Status: TaskStatusSubmitted, VideoHealthAttemptID: &a.ID}).Error)
+						}
+						result, err := CloseExpiredVideoHealthUnknown(ctx, a.ID, start+3601)
+						require.NoError(t, err)
+						if scenario != "expired" && scenario != "legacy_long_lease" {
+							assert.Nil(t, result)
+							return
+						}
+						require.NotNil(t, result)
+						assert.Equal(t, "unknown", result.FinalOutcome)
+						assert.Zero(t, result.ReviewedBy)
+						assert.Equal(t, int64(start+3601), result.ReviewedAt)
+						again, err := CloseExpiredVideoHealthUnknown(ctx, a.ID, start+3602)
+						require.NoError(t, err)
+						assert.Equal(t, result.ReviewedAt, again.ReviewedAt)
+						view, err := RefreshVideoHealthState(ctx, channelID, "video", p, start+3603)
+						require.NoError(t, err)
+						assert.Equal(t, videosched.HealthBlocked, view.State)
+						assert.Nil(t, view.Qualification)
+						_, err = StartVideoHealthRecovery(ctx, channelID, "video", view.StateVersion, start+3902, p.ValidationPeriodSeconds)
+						require.NoError(t, err, "expired uncertainty no longer blocks fresh recovery forever")
+						var request VideoHealthRequest
+						require.NoError(t, db.Where("request_id = ?", a.RequestID).First(&request).Error)
+						assert.Equal(t, "unknown", request.Outcome)
+					})
+				}
 			})
 			t.Run("qualification_rechecked_after_policy_change", func(t *testing.T) {
 				for i, scenario := range []string{"sample_admission", "sample_refresh", "generation_gate", "overall_gate"} {
