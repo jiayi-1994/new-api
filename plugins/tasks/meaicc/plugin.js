@@ -1,9 +1,11 @@
 // Task Plugin API v1 for https://api.meaicc.com/create/sd-2.html.
-// One accepted generation reserves one request; the New API host owns settlement/refunds.
+// The New API host owns settlement/refunds; model profiles select requests or seconds.
 const MODELS = [
   "mx-h3", "sd-2-c1", "sd-2-c3", "sd-2-c4", "sd-2-c5", "sd-2-c6",
   "sd-2-c7", "sd-2-c8", "sd-2-fast", "sd-2.5-c1", "w3-c1",
+  "sd-2.5-c2", "sd-2.5-c3", "sd-2.5-d2", "sd-2.5-d3",
 ];
+const SECOND_MODELS = ["sd-2.5-d2", "sd-2.5-d3"];
 const RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 const MEDIA_TYPES = ["first_frame", "last_frame", "reference_image", "reference_voice", "reference_video"];
 const REFERENCE_FIELDS = [
@@ -17,9 +19,9 @@ export const meta = {
   apiVersion: 1,
   key: "meaicc",
   name: "Meaicc Video",
-  version: "1.1.6",
+  version: "1.2.0",
   author: { name: "jiayi-1994" },
-  description: { en: "Video generation through Meaicc, billed per request", zh: "通过 Meaicc 生成视频，按次计费" },
+  description: { en: "Video generation through Meaicc", zh: "通过 Meaicc 生成视频" },
   icon: "text:M",
   baseUrl: "https://api.meaicc.com",
   models: MODELS,
@@ -32,6 +34,16 @@ export const meta = {
     },
   },
   usageExamples: [{ label: "1 video", facts: { requests: 1 } }],
+  usageProfiles: [{
+    models: SECOND_MODELS,
+    schema: {
+      seconds: {
+        type: "number", unit: "second",
+        description: { en: "Video generation unit price", zh: "视频生成单价" },
+      },
+    },
+    examples: [{ label: "10s", facts: { seconds: 10 } }, { label: "30s", facts: { seconds: 30 } }],
+  }],
 };
 
 function has(value, key) {
@@ -67,8 +79,8 @@ function duration(value) {
 }
 
 function resolution(value) {
-  if (typeof value !== "string" || !["720p", "768p", "1080p"].includes(value.trim().toLowerCase())) {
-    throw new Error("resolution must be 720p, 768p or 1080p");
+  if (typeof value !== "string" || !["480p", "720p", "768p", "1080p"].includes(value.trim().toLowerCase())) {
+    throw new Error("resolution must be 480p, 720p, 768p or 1080p");
   }
   return value.trim().toLowerCase();
 }
@@ -90,7 +102,7 @@ function scalarAlias(input, names, parse) {
 }
 
 function mediaList(value) {
-  if (!Array.isArray(value) || value.length > 20) throw new Error("media must be an array of at most 20 references");
+  if (!Array.isArray(value) || value.length > 50) throw new Error("media must be an array of at most 50 references");
   return value.map(function (item) {
     item = knownFields(item, ["type", "url"], "media item");
     if (!MEDIA_TYPES.includes(item.type)) throw new Error("unsupported media type: " + item.type);
@@ -109,7 +121,7 @@ function referenceURLs(value, field) {
     value = value.image_url;
   }
   if (typeof value === "string") value = [value];
-  if (!Array.isArray(value) || value.length > 20) throw new Error(field + " must be a URL or URL array of at most 20 items");
+  if (!Array.isArray(value) || value.length > 50) throw new Error(field + " must be a URL or URL array of at most 50 items");
   return value.map(function (url) {
     if (!httpURL(url)) throw new Error(field + " entries must be http(s) URLs without embedded credentials");
     return url.trim();
@@ -224,13 +236,15 @@ function modelRequest(ctx) {
   if (!MODELS.includes(model)) throw new Error("unsupported upstream video model: " + model);
   const body = videoRequest(ctx.requestBody);
   const params = body.parameters;
-  const min = model === "w3-c1" ? 5 : 4;
-  const max = model === "w3-c1" || model === "sd-2.5-c1" ? 30 : 15;
+  const expanded25 = ["sd-2.5-c2", "sd-2.5-c3"].concat(SECOND_MODELS).includes(model);
+  const min = model === "w3-c1" || expanded25 ? 5 : 4;
+  const max = model === "w3-c1" || model === "sd-2.5-c1" || expanded25 ? 30 : 15;
   if (params.duration < min || params.duration > max) throw new Error(model + " duration must be between " + min + " and " + max + " seconds");
   if (model === "sd-2-fast" && params.duration !== 10) throw new Error("sd-2-fast only supports 10 seconds");
   if (model === "sd-2-c8" && ![10, 15].includes(params.duration)) throw new Error("sd-2-c8 only supports 10 or 15 seconds");
   if (model === "sd-2.5-c1" && params.duration !== 30) throw new Error("sd-2.5-c1 only supports 30 seconds");
-  const resolutions = model === "mx-h3" ? ["768p"] : model === "w3-c1" ? ["720p", "1080p"] : ["720p"];
+  if (model === "sd-2.5-c3" && ![5, 8, 10, 12, 13, 15, 30].includes(params.duration)) throw new Error("sd-2.5-c3 duration must be 5, 8, 10, 12, 13, 15 or 30 seconds");
+  const resolutions = model === "sd-2.5-d2" ? ["480p"] : model === "mx-h3" ? ["768p"] : model === "w3-c1" ? ["720p", "1080p"] : ["720p"];
   if (!resolutions.includes(params.resolution)) throw new Error(model + " resolution must be " + resolutions.join(" or "));
   if (["sd-2-c4", "sd-2-c6"].includes(model) && has(params, "ratio") && !["1:1", "16:9", "9:16"].includes(params.ratio)) {
     throw new Error(model + " ratio must be 1:1, 16:9 or 9:16");
@@ -238,11 +252,13 @@ function modelRequest(ctx) {
   const counts = { first_frame: 0, last_frame: 0, reference_image: 0, reference_voice: 0, reference_video: 0 };
   for (const item of body.input.media || []) counts[item.type] += 1;
   const images = counts.first_frame + counts.last_frame + counts.reference_image;
-  const maxImages = model === "w3-c1" || model === "sd-2.5-c1" ? 10 : 9;
+  const extendedReferences = expanded25 && model !== "sd-2.5-c3";
+  const maxImages = extendedReferences ? 30 : model === "w3-c1" || model === "sd-2.5-c1" ? 10 : 9;
   const imageOnly = model === "sd-2-fast" || model === "sd-2.5-c1";
-  const maxOther = imageOnly ? 0 : model === "w3-c1" ? 5 : 3;
-  if (images > maxImages || counts.reference_video > maxOther || counts.reference_voice > maxOther) {
-    throw new Error(model + " allows at most " + maxImages + " images, " + maxOther + " videos and " + maxOther + " audio references");
+  const maxOther = extendedReferences ? 10 : imageOnly ? 0 : model === "w3-c1" ? 5 : 3;
+  const maxVideos = model === "sd-2.5-c3" ? 0 : maxOther;
+  if (images > maxImages || counts.reference_video > maxVideos || counts.reference_voice > maxOther) {
+    throw new Error(model + " allows at most " + maxImages + " images, " + maxVideos + " videos and " + maxOther + " audio references");
   }
   if (counts.first_frame > 1 || counts.last_frame > 1) throw new Error("provide at most one first_frame and one last_frame");
   return { model, input: body.input, parameters: params };
@@ -299,9 +315,9 @@ export function buildSubmitRequest(ctx) {
 }
 
 export function extractUsage(ctx) {
-  modelRequest(ctx);
-  // No client/upstream value can change the billable count. No duration multiplier.
-  return { requests: 1 };
+  const body = modelRequest(ctx);
+  // Use the validated submitted duration, never client-supplied usage or charges.
+  return SECOND_MODELS.includes(body.model) ? { seconds: body.parameters.duration } : { requests: 1 };
 }
 
 // Scheduling facts for the host's purchase-cost quote; never billing usage.
@@ -338,8 +354,9 @@ export function classifyFailure(reason) {
   return "upstream";
 }
 
-export function extractUsageOnComplete() {
-  return { requests: 1 };
+export function extractUsageOnComplete(ctx) {
+  // Polling has no requestBody. Omitted seconds retain the frozen submitted duration.
+  return SECOND_MODELS.includes(ctx.upstreamModel || ctx.model) ? {} : { requests: 1 };
 }
 
 export function parseSubmitResponse(_ctx, response) {

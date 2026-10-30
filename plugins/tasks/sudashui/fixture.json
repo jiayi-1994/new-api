@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "name": "decode public model alias and all reference types",
+      "name": "decode public model alias, false audio switch and all reference types",
       "hook": "protocols",
       "path": [
         "openai_video",
@@ -17,6 +17,7 @@
               "prompt": "a cat",
               "seconds": "30",
               "resolution": "720p",
+              "generate_audio": false,
               "images": [
                 "https://cdn.example/a.png"
               ],
@@ -39,6 +40,7 @@
           "prompt": "a cat",
           "duration": 30,
           "resolution": "720p",
+          "generate_audio": false,
           "aspectRatio": "16:9",
           "mode": "references",
           "imageUrls": [
@@ -55,7 +57,7 @@
       }
     },
     {
-      "name": "mapped model builds a string payload without top-level resolution or media",
+      "name": "mapped model forwards true audio switch without top-level resolution or media",
       "hook": "buildSubmitRequest",
       "args": [
         {
@@ -65,6 +67,7 @@
           "apiKey": "fixture-only-key",
           "requestBody": {
             "prompt": "a cat",
+            "generate_audio": true,
             "duration": 30,
             "resolution": "720p",
             "aspectRatio": "16:9",
@@ -91,6 +94,7 @@
         },
         "body": {
           "model": "sdas-mg-sd2.5-720p",
+          "generate_audio": true,
           "duration": 30,
           "metadata": {
             "payload": "{\"aspectRatio\":\"16:9\",\"mode\":\"references\",\"imageUrls\":[\"https://cdn.example/a.png\"],\"videoUrls\":[\"https://cdn.example/a.mp4\",\"https://cdn.example/a.mp4\"],\"audioUrls\":[\"https://cdn.example/a.mp3\"]}"
@@ -517,7 +521,7 @@
       }
     },
     {
-      "name": "renderer exposes only video output",
+      "name": "renderer exposes video output and volces origin fields",
       "hook": "protocols",
       "path": [
         "openai_video",
@@ -543,14 +547,18 @@
                     "id": "private-creation",
                     "url": "https://files.sudashuiapi.com/output.mp4"
                   }
-                ]
+                ],
+                "volcesVideoUrl": "https://ark.tos.volces.com/output.mp4?X-Tos-Signature=sig",
+                "volcesCgt": "cgt-fixture"
               }
             }
           }
         }
       ],
       "expected": {
-        "url": "https://files.sudashuiapi.com/output.mp4"
+        "url": "https://files.sudashuiapi.com/output.mp4",
+        "volcesVideoUrl": "https://ark.tos.volces.com/output.mp4?X-Tos-Signature=sig",
+        "volcesCgt": "cgt-fixture"
       }
     },
     {
@@ -617,7 +625,7 @@
       }
     },
     {
-      "name": "multipart nested payload keeps numeric preprocessing level",
+      "name": "multipart false audio switch and nested numeric preprocessing level",
       "hook": "protocols",
       "path": [
         "openai_video",
@@ -636,6 +644,9 @@
               "duration": [
                 "4"
               ],
+              "generate_audio": [
+                "false"
+              ],
               "metadata": [
                 "{\"payload\":\"{\\\"aspectRatio\\\":\\\"16:9\\\",\\\"mode\\\":\\\"frames\\\",\\\"firstFrameUrl\\\":\\\"https://cdn.example/first.png\\\",\\\"lastFrameUrl\\\":\\\"https://cdn.example/last.png\\\",\\\"bypassCopyrightReferenceLevel\\\":0.7}\"}"
               ]
@@ -649,6 +660,7 @@
         "action": "reference_to_video",
         "requestBody": {
           "duration": 4,
+          "generate_audio": false,
           "aspectRatio": "16:9",
           "mode": "frames",
           "firstFrameUrl": "https://cdn.example/first.png",

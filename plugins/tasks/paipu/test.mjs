@@ -40,7 +40,7 @@ const fixture = JSON.parse(await readFile(new URL("./fixture.json", import.meta.
 
 const catalog = JSON.parse(await readFile(new URL("./model-catalog.json", import.meta.url), "utf8"));
 const registered = catalog.models.filter(model => model.status === "registered");
-assert.equal(registered.length, 39);
+assert.equal(registered.length, 44);
 assert.deepEqual(plugin.meta.models.filter(name => !name.startsWith("paipu-video")).sort(), registered.map(model => model.model).sort());
 for (const model of registered) {
   const profile = plugin.meta.usageProfiles.find(profile => profile.models.includes(model.model));
@@ -51,6 +51,7 @@ for (const model of registered) {
   for (const example of profile.examples) {
     assert.deepEqual(Object.keys(example.facts).sort(), Object.keys(profile.schema).sort());
     if (model.fixed_duration) assert.equal(example.facts.seconds, model.fixed_duration);
+    if (model.model === "lec-mj-seedance-2-5-cd-720p") assert.ok([15, 30].includes(example.facts.seconds), "CD price examples must use a supported video duration");
   }
 }
 for (const model of catalog.models.filter(model => model.status !== "registered")) {

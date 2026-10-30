@@ -125,6 +125,57 @@ test("frames are two frame references and never merge with reference mode", () =
   }
 });
 
+test("generate_audio preserves true, false and omission through mapped requests without changing usage", () => {
+  for (const references of [{}, { images: [image], videos: [video, video], audios: [audio] }, { first_image_url: image, last_image_url: image }]) {
+    const request = { ...base, model: "seedance-2.5", ...references };
+    const original = context(request, "sdas-qd-seedance-2.5-720p");
+    const expectedSpec = plugin.describeSpec(original);
+    const expectedUsage = plugin.extractUsage(original);
+    const expectedBody = plugin.buildSubmitRequest(original).body;
+    for (const value of [true, false, undefined]) {
+      const input = value === undefined ? request : { ...request, generate_audio: value };
+      const before = structuredClone(input);
+      const ctx = context(input, "sdas-qd-seedance-2.5-720p");
+      assert.deepEqual(input, before);
+      assert.equal(Object.hasOwn(ctx.requestBody, "generate_audio"), value !== undefined);
+      assert.equal(ctx.requestBody.generate_audio, value);
+      assert.deepEqual(plugin.describeSpec(ctx), expectedSpec);
+      assert.deepEqual(plugin.extractUsage(ctx), expectedUsage);
+      const built = plugin.buildSubmitRequest(ctx);
+      assert.deepEqual(built.body, value === undefined ? expectedBody : { ...expectedBody, generate_audio: value });
+      assert.equal(Object.hasOwn(JSON.parse(built.body.metadata.payload), "generate_audio"), false);
+      assert.deepEqual(plugin.buildSubmitRequest(context({ model: input.model, ...ctx.requestBody }, ctx.upstreamModel)), built);
+      assert.deepEqual(input, before);
+    }
+  }
+});
+
+test("generate_audio rejects non-booleans and unexposed nesting in decoding and driver overrides", () => {
+  for (const value of ["true", "false", 0, 1, null, [], {}]) {
+    assert.throws(() => context({ ...base, generate_audio: value }), /generate_audio must be a boolean/);
+    const ctx = context();
+    ctx.requestBody.generate_audio = value;
+    for (const hook of [plugin.describeSpec, plugin.extractUsage, plugin.buildSubmitRequest]) {
+      assert.throws(() => hook(ctx), /generate_audio must be a boolean/);
+    }
+  }
+  for (const patch of [{ metadata: { payload: JSON.stringify({ generate_audio: false }) } }, { metadata: { generate_audio: false } }, { options: { generate_audio: false } }]) {
+    assert.throws(() => context({ ...base, ...patch }), /unsupported|metadata must contain/);
+  }
+});
+
+test("multipart generate_audio accepts only single true or false values", () => {
+  const fields = { model: [model], duration: ["8"] };
+  for (const value of [true, false]) {
+    const ctx = context(base, model, { kind: "multipart", fields: { ...fields, generate_audio: [String(value)] } });
+    assert.equal(ctx.requestBody.generate_audio, value);
+    assert.equal(plugin.buildSubmitRequest(ctx).body.generate_audio, value);
+  }
+  for (const values of [["TRUE"], [""], ["0"], ["1"], ["null"], ["\"false\""], ["false", "true"], []]) {
+    assert.throws(() => context(base, model, { kind: "multipart", fields: { ...fields, generate_audio: values } }), /generate_audio/);
+  }
+});
+
 test("mapping preserves the public identity and rejects changed tiers or incompatible ordinary billing units", () => {
   const ctx = context({ ...base, model: "seedance-2.5" }, model);
   assert.equal(ctx.model, "seedance-2.5");
@@ -206,7 +257,8 @@ test("artifact fallback uses the creations or official URL, never forwards crede
   for (const details of [{ creations: [{ url: video }] }, { volcesVideoUrl: video }]) {
     const data = { code: "success", data: { id: 12, task_id: "private-task", status: "SUCCESS", data: { state: "success", ...details }, credits: 999, username: "private-user" } };
     assert.deepEqual(plugin.buildContentRequest({ artifactKey: "video", data, apiKey: "secret", clientRequest: { method: "GET", headers: { Authorization: "secret" } } }), { url: video, method: "GET", credentialless: true });
-    assert.deepEqual(plugin.protocols.openai_video.render({}, { status: "SUCCESS", data }), { url: video });
+    const rendered = { url: video, ...(details.volcesVideoUrl ? { volcesVideoUrl: video } : {}) };
+    assert.deepEqual(plugin.protocols.openai_video.render({}, { status: "SUCCESS", data }), rendered);
     assert.deepEqual(plugin.listArtifacts({ status: "FAILURE", data }), []);
   }
 });

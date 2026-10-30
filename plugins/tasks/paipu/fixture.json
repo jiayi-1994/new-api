@@ -3446,7 +3446,11 @@
           }
         }
       ],
-      "expected": {"rejected": {"reason": "insufficient quota"}}
+      "expected": {
+        "rejected": {
+          "reason": "insufficient quota"
+        }
+      }
     },
     {
       "name": "missing create ID",
@@ -7864,6 +7868,407 @@
       "expected": {
         "requests": 1,
         "seconds": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "2.5 public alias haya-seedance-2-5-s-480p 480p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "haya-seedance-2-5-s-480p",
+          "upstreamModel": "lec-haya-seedance-2-5-s-480p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "480p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-haya-seedance-2-5-s-480p"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias haya-seedance-2-5-s-480p 480p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "haya-seedance-2-5-s-480p",
+          "upstreamModel": "lec-haya-seedance-2-5-s-480p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "480p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "480p"
+      }
+    },
+    {
+      "name": "2.5 public alias mf-seedance-2-5-official 720p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "mf-seedance-2-5-official",
+          "upstreamModel": "lec-mf-seedance-2-5-official",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-mf-seedance-2-5-official",
+          "resolution": "720p"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias mf-seedance-2-5-official 720p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "mf-seedance-2-5-official",
+          "upstreamModel": "lec-mf-seedance-2-5-official",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "2.5 public alias mf-seedance-2-5-official 1080p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "mf-seedance-2-5-official",
+          "upstreamModel": "lec-mf-seedance-2-5-official",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "1080p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-mf-seedance-2-5-official",
+          "resolution": "1080p"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias mf-seedance-2-5-official 1080p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "mf-seedance-2-5-official",
+          "upstreamModel": "lec-mf-seedance-2-5-official",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "1080p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "1080p"
+      }
+    },
+    {
+      "name": "2.5 public alias xb-seedance-2-5-301010 720p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "xb-seedance-2-5-301010",
+          "upstreamModel": "lec-xb-seedance-2-5-301010",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-xb-seedance-2-5-301010"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias xb-seedance-2-5-301010 720p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "xb-seedance-2-5-301010",
+          "upstreamModel": "lec-xb-seedance-2-5-301010",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "2.5 public alias seedance-2-5-301010-man 720p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "seedance-2-5-301010-man",
+          "upstreamModel": "lec-seedance-2-5-301010-man",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-seedance-2-5-301010-man"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias seedance-2-5-301010-man 720p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "seedance-2-5-301010-man",
+          "upstreamModel": "lec-seedance-2-5-301010-man",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "2.5 public alias mj-seedance-2-5-bd-720p 720p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "mj-seedance-2-5-bd-720p",
+          "upstreamModel": "lec-mj-seedance-2-5-bd-720p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 5,
+          "aspect_ratio": "16:9",
+          "model": "lec-mj-seedance-2-5-bd-720p"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias mj-seedance-2-5-bd-720p 720p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "mj-seedance-2-5-bd-720p",
+          "upstreamModel": "lec-mj-seedance-2-5-bd-720p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 5,
+        "resolution": "720p"
+      }
+    },
+    {
+      "name": "2.5 public alias mj-seedance-2-5-cd-720p 720p submits real upstream ID",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "mj-seedance-2-5-cd-720p",
+          "upstreamModel": "lec-mj-seedance-2-5-cd-720p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 15,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "url": "https://api.paipu.net/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "prompt": "A paper boat moves across a calm pond",
+          "duration": 15,
+          "aspect_ratio": "16:9",
+          "model": "lec-mj-seedance-2-5-cd-720p"
+        }
+      }
+    },
+    {
+      "name": "2.5 public alias mj-seedance-2-5-cd-720p 720p counts exactly one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "mj-seedance-2-5-cd-720p",
+          "upstreamModel": "lec-mj-seedance-2-5-cd-720p",
+          "requestBody": {
+            "prompt": "A paper boat moves across a calm pond",
+            "seconds": 15,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "n": 1
+          },
+          "baseUrl": "https://api.paipu.net",
+          "apiKey": "fixture-only-key"
+        }
+      ],
+      "expected": {
+        "requests": 1,
+        "seconds": 15,
         "resolution": "720p"
       }
     }

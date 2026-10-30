@@ -35,16 +35,17 @@ for (const entry of fixture.cases) {
   });
 }
 
-test("Every declared paid model follows decode, reserve, submit and completion with one request", () => {
+test("Every declared paid model follows its billing unit through decode, reserve, submit and completion", () => {
   for (const model of plugin.meta.models) {
     const seconds = model === "sd-2.5-c1" || model === "w3-c1" ? 30 : 10;
-    const resolution = model === "mx-h3" ? "768p" : model === "w3-c1" ? "1080p" : "720p";
+    const resolution = model === "sd-2.5-d2" ? "480p" : model === "mx-h3" ? "768p" : model === "w3-c1" ? "1080p" : "720p";
     const request = { model, input: { prompt: "一只猫在海边散步" }, parameters: { duration: seconds, resolution } };
     const intent = plugin.protocols.openai_video.decodeRequest({ model, body: { kind: "json", value: request } });
     const context = { model, upstreamModel: model, baseUrl: "https://api.meaicc.com", apiKey: "fixture-only-key", requestBody: intent.requestBody };
-    assert.deepEqual(plugin.extractUsage(context), { requests: 1 }, model);
+    const perSecond = ["sd-2.5-d2", "sd-2.5-d3"].includes(model);
+    assert.deepEqual(plugin.extractUsage(context), perSecond ? { seconds } : { requests: 1 }, model);
     assert.deepEqual(plugin.buildSubmitRequest(context).body, request, model);
-    assert.deepEqual(plugin.extractUsageOnComplete({}, { status: "SUCCESS" }, { seconds }), { requests: 1 }, model);
+    assert.deepEqual(plugin.extractUsageOnComplete({ model }, { status: "SUCCESS" }, { seconds: 99999 }), perSecond ? {} : { requests: 1 }, model);
   }
 });
 

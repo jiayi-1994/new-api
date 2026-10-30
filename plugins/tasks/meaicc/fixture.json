@@ -3497,6 +3497,1019 @@
           }
         }
       }
+    },
+    {
+      "name": "sd-2.5-c2 mapped 5s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-c2",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 5,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-c2 mapped 5s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c2 rejects unsupported duration 4",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 4,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "duration must be between 5 and 30"
+    },
+    {
+      "name": "sd-2.5-c2 mapped 30s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-c2",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-c2 mapped 30s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c2 completion retains frozen billing unit",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2"
+        },
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "seconds": 999999,
+          "usage": {
+            "requests": 999,
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c2 rejects wrong resolution",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "sd-2.5-c2 resolution must be 720p"
+    },
+    {
+      "name": "sd-2.5-c3 mapped 5s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-c3",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 5,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-c3 mapped 5s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c3 rejects unsupported duration 4",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 4,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "duration must be between 5 and 30"
+    },
+    {
+      "name": "sd-2.5-c3 mapped 30s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-c3",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-c3 mapped 30s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c3 completion retains frozen billing unit",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3"
+        },
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "seconds": 999999,
+          "usage": {
+            "requests": 999,
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "sd-2.5-c3 rejects wrong resolution",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-c3",
+          "upstreamModel": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-c3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "sd-2.5-c3 resolution must be 720p"
+    },
+    {
+      "name": "sd-2.5-d2 mapped 5s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-d2",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 5,
+            "resolution": "480p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-d2 mapped 5s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5
+      }
+    },
+    {
+      "name": "sd-2.5-d2 rejects unsupported duration 4",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 4,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "duration must be between 5 and 30"
+    },
+    {
+      "name": "sd-2.5-d2 mapped 30s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-d2",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "480p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-d2 mapped 30s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 30
+      }
+    },
+    {
+      "name": "sd-2.5-d2 completion retains frozen billing unit",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2"
+        },
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "seconds": 999999,
+          "usage": {
+            "requests": 999,
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "sd-2.5-d2 rejects wrong resolution",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d2",
+          "upstreamModel": "sd-2.5-d2",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d2",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "sd-2.5-d2 resolution must be 480p"
+    },
+    {
+      "name": "sd-2.5-d3 mapped 5s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-d3",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 5,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-d3 mapped 5s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 5,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 5
+      }
+    },
+    {
+      "name": "sd-2.5-d3 rejects unsupported duration 4",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 4,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "duration must be between 5 and 30"
+    },
+    {
+      "name": "sd-2.5-d3 mapped 30s buildSubmitRequest",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "url": "https://api.meaicc.com/v1/videos",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer fixture-only-key",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "model": "sd-2.5-d3",
+          "input": {
+            "prompt": "A paper boat on a calm pond"
+          },
+          "parameters": {
+            "duration": 30,
+            "resolution": "720p"
+          }
+        }
+      }
+    },
+    {
+      "name": "sd-2.5-d3 mapped 30s extractUsage",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "720p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expected": {
+        "seconds": 30
+      }
+    },
+    {
+      "name": "sd-2.5-d3 completion retains frozen billing unit",
+      "hook": "extractUsageOnComplete",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3"
+        },
+        {
+          "status": "SUCCESS"
+        },
+        {
+          "seconds": 999999,
+          "usage": {
+            "requests": 999,
+            "seconds": 0
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "sd-2.5-d3 rejects wrong resolution",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "public-sd-2.5-d3",
+          "upstreamModel": "sd-2.5-d3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "model": "public-sd-2.5-d3",
+            "prompt": "A paper boat on a calm pond",
+            "seconds": 30,
+            "resolution": "480p",
+            "usage": {
+              "seconds": 0,
+              "requests": 0
+            },
+            "generate_audio": false,
+            "n": 1
+          }
+        }
+      ],
+      "expectedError": "sd-2.5-d3 resolution must be 720p"
+    },
+    {
+      "name": "c3 rejects duration in discrete gap",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "A paper boat",
+            "seconds": 6,
+            "resolution": "720p"
+          }
+        }
+      ],
+      "expectedError": "duration must be 5, 8, 10, 12, 13, 15 or 30"
+    },
+    {
+      "name": "c3 rejects video references",
+      "hook": "buildSubmitRequest",
+      "args": [
+        {
+          "model": "sd-2.5-c3",
+          "baseUrl": "https://api.meaicc.com",
+          "apiKey": "fixture-only-key",
+          "requestBody": {
+            "prompt": "A paper boat",
+            "seconds": 5,
+            "resolution": "720p",
+            "videos": [
+              "https://cdn.example/video.mp4"
+            ]
+          }
+        }
+      ],
+      "expectedError": "0 videos"
+    },
+    {
+      "name": "c2 supports all fifty declared references and keeps one request",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "requestBody": {
+            "prompt": "A paper boat",
+            "seconds": 30,
+            "resolution": "720p",
+            "images": [
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png"
+            ],
+            "videos": [
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4"
+            ],
+            "audios": [
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav",
+              "https://cdn.example/audio.wav"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "c2 rejects excessive images",
+      "hook": "extractUsage",
+      "args": [
+        {
+          "model": "public-c2",
+          "upstreamModel": "sd-2.5-c2",
+          "requestBody": {
+            "prompt": "A paper boat",
+            "seconds": 30,
+            "resolution": "720p",
+            "images": [
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png",
+              "https://cdn.example/image.png"
+            ],
+            "videos": [
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4",
+              "https://cdn.example/video.mp4"
+            ],
+            "audios": []
+          }
+        }
+      ],
+      "expectedError": "at most 30 images"
     }
   ]
 }

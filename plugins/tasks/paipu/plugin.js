@@ -8,6 +8,12 @@ const MODELS = {
   "lec-gt-seedance-2-0-mini": ["480p", "720p"],
   "lec-gt-seedance-2-0-full": ["480p", "720p", "1080p"],
   "lec-gt-seedance-2-5-720p": ["480p", "720p", "1080p"],
+  // Per-request 2.5 models verified against the public catalog on 2026-10-27.
+  "lec-haya-seedance-2-5-s-480p": ["480p"],
+  "lec-mf-seedance-2-5-official": ["720p", "1080p"],
+  "lec-xb-seedance-2-5-301010": ["720p"],
+  "lec-seedance-2-5-301010-man": ["720p"],
+  "lec-mj-seedance-2-5-cd-720p": ["720p"],
   "lec-seedance-2-0-mini-c4-480p": ["480p"],
   "lec-seedance-2-0": ["720p"],
   "lec-seedance-2-0-933-stable": ["480p", "720p"],
@@ -86,7 +92,7 @@ const PROFILES = Object.keys(MODELS).concat(Object.keys(TEMPLATES)).map(function
   const resolutions = Object.prototype.hasOwnProperty.call(MODELS, name) ? MODELS[name] : TEMPLATES[name] ? [TEMPLATES[name]] : RESOLUTIONS;
   const schema = { requests: USAGE_FIELDS.requests, seconds: USAGE_FIELDS.seconds };
   if (resolutions.length) schema.resolution = { ...USAGE_FIELDS.resolution, enum: resolutions };
-  const seconds = FIXED_DURATIONS[name] || (has(MODELS, name) ? 10 : 5);
+  const seconds = FIXED_DURATIONS[name] || (name === "lec-mj-seedance-2-5-cd-720p" ? 15 : has(MODELS, name) ? 10 : 5);
   return {
     models: [name],
     schema,
@@ -100,7 +106,7 @@ export const meta = {
   apiVersion: 1,
   key: "paipu",
   name: "Paipu Video",
-  version: "2.2.4",
+  version: "2.2.6",
   author: { name: "jiayi-1994" },
   description: { en: "Paipu video generation; choose per-second, per-video or per-resolution pricing on each model's price page", zh: "通过 Paipu 生成视频，在各模型定价页自选按秒、按条或分辨率按条计费" },
   icon: "text:PP",

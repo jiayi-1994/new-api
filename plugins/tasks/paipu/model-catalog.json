@@ -519,6 +519,62 @@
       "fixed_duration": 30,
       "status": "registered",
       "note": "已接入"
+    },
+    {
+      "model": "lec-haya-seedance-2-5-s-480p",
+      "kind": "video",
+      "resolutions": [
+        "480p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "checked_at": "2026-10-27",
+      "note": "按次视频型号；公开别名通过渠道映射到本型号"
+    },
+    {
+      "model": "lec-mf-seedance-2-5-official",
+      "kind": "video",
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "checked_at": "2026-10-27",
+      "note": "按次视频型号；公开别名通过渠道映射到本型号"
+    },
+    {
+      "model": "lec-xb-seedance-2-5-301010",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "checked_at": "2026-10-27",
+      "note": "按次视频型号；公开别名通过渠道映射到本型号"
+    },
+    {
+      "model": "lec-seedance-2-5-301010-man",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "checked_at": "2026-10-27",
+      "note": "按次视频型号；公开别名通过渠道映射到本型号"
+    },
+    {
+      "model": "lec-mj-seedance-2-5-cd-720p",
+      "kind": "video",
+      "resolutions": [
+        "720p"
+      ],
+      "fixed_duration": null,
+      "status": "registered",
+      "checked_at": "2026-10-27",
+      "note": "按次视频型号；公开别名通过渠道映射到本型号"
     }
   ]
 }

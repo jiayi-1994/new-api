@@ -85,7 +85,7 @@ const MEDIA_GROUPS = [
 ];
 const MEDIA_FIELDS = MEDIA_GROUPS.flat();
 const PAYLOAD_FIELDS = ["aspectRatio", "mode", "imageUrls", "videoUrls", "audioUrls", "firstFrameUrl", "lastFrameUrl", "bypassCopyrightReferenceLevel"];
-const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "n", "ratio", "aspect_ratio", "metadata", "first_image_url", "last_image_url", "first_image", "last_image"].concat(PAYLOAD_FIELDS, MEDIA_FIELDS);
+const FIELDS = ["model", "prompt", "seconds", "duration", "resolution", "size", "n", "ratio", "aspect_ratio", "generate_audio", "metadata", "first_image_url", "last_image_url", "first_image", "last_image"].concat(PAYLOAD_FIELDS, MEDIA_FIELDS);
 const USAGE_SCHEMA = {
   requests: { type: "number", unit: "count", unitLabel: { en: "video", zh: "条" }, description: { en: "Video generation per-video price", zh: "视频按条单价" } },
   seconds: { type: "number", unit: "second", description: { en: "Video generation per-second price", zh: "视频按秒单价" } },
@@ -96,7 +96,7 @@ export const meta = {
   apiVersion: 1,
   key: "sudashui",
   name: "苏打水 Sudashui",
-  version: "1.0.1",
+  version: "1.0.4",
   author: { name: "jiayi-1994" },
   description: { en: "Video generation through Sudashui with purchase-cost scheduling", zh: "通过苏打水生成视频，支持采购成本调度" },
   icon: "text:苏打",
@@ -239,6 +239,10 @@ function videoRequest(input) {
   const mode = has(merged, "mode") ? merged.mode : "references";
   if (mode !== "references" && mode !== "frames") throw new Error("mode must be references or frames");
   const result = { duration: seconds, aspectRatio: ratio || "16:9", mode };
+  if (has(input, "generate_audio")) {
+    if (typeof input.generate_audio !== "boolean") throw new Error("generate_audio must be a boolean");
+    result.generate_audio = input.generate_audio;
+  }
   if (has(merged, "bypassCopyrightReferenceLevel")) {
     const level = merged.bypassCopyrightReferenceLevel;
     if (typeof level !== "number" || !Number.isFinite(level) || level < 0.1 || level > 1) throw new Error("bypassCopyrightReferenceLevel must be a number between 0.1 and 1");
@@ -300,6 +304,9 @@ export function buildSubmitRequest(ctx) {
   for (const key of PAYLOAD_FIELDS) if (has(request, key)) payload[key] = request[key];
   const body = { model: normalized.model, duration: request.duration, metadata: { payload: JSON.stringify(payload) } };
   if (has(request, "prompt")) body.prompt = request.prompt;
+  // Preserve the canvas switch without guessing a vendor-specific alias or default.
+  // Sudashui does not document audio control; passthrough is not proof it affects output.
+  if (has(request, "generate_audio")) body.generate_audio = request.generate_audio;
   return {
     url: ctx.baseUrl.replace(/\/+$/, "") + "/v1/video/generations",
     method: "POST", headers: { ...authHeaders(ctx), "Content-Type": "application/json" }, body,
@@ -442,7 +449,7 @@ export const protocols = {
           else {
             if (entries.length !== 1) throw new Error(name + " must be provided once");
             input[name] = entries[0];
-            if (name === "metadata" || name === "bypassCopyrightReferenceLevel") {
+            if (name === "metadata" || name === "bypassCopyrightReferenceLevel" || name === "generate_audio") {
               try { input[name] = JSON.parse(entries[0]); } catch (_error) { throw new Error(name + " must be valid JSON"); }
             }
           }
@@ -460,7 +467,17 @@ export const protocols = {
     render: function (_ctx, task) {
       // Public task identity, status and error envelope belong to the host.
       const url = task.status === "SUCCESS" ? videoURL(task.data) : "";
-      return url ? { url } : {};
+      if (!url) return {};
+      const output = { url };
+      // Volces origin links are passed through verbatim so downstream callers
+      // can fetch the file without the Sudashui proxy; volcesCgt is reserved
+      // for the same vendor field once the upstream emits it.
+      const details = taskData(task.data).data;
+      if (isObject(details)) {
+        if (httpURL(details.volcesVideoUrl)) output.volcesVideoUrl = details.volcesVideoUrl;
+        if (typeof details.volcesCgt === "string" && details.volcesCgt) output.volcesCgt = details.volcesCgt;
+      }
+      return output;
     },
   },
 };

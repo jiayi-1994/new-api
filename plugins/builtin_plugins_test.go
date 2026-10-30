@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -22,13 +23,492 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"aggc", "alibaba", "apipod", "bytefor", "cangyuan", "doubao", "elevenlabs-pool", "google", "hailuo", "ijm2api", "jimeng", "kling", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sora", "sudashui", "sunoapi", "token6688", "vertex-ai", "vidu", "vobilemax", "zongheng"}
+var expectedKeys = []string{"aggc", "ak2api", "alibaba", "apipod", "bluetoken", "bytefor", "cangyuan", "chatcut2api", "doubao", "elevenlabs-pool", "google", "hailuo", "ijm2api", "jimeng", "kling", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "pixverse2api", "recapo2api", "seedance-hjmie", "sora", "sudashui", "sunoapi", "token6688", "vertex-ai", "vidu", "vobilemax", "yaohuo", "zongheng"}
 
 // responsesKeys are the vendor plugins that also serve OpenAI Responses.
 var responsesKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
 
 // videoOnlyKeys are third-party relays that only speak the OpenAI video protocol.
-var videoOnlyKeys = []string{"aggc", "apipod", "bytefor", "cangyuan", "elevenlabs-pool", "ijm2api", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "seedance-hjmie", "sudashui", "token6688", "vobilemax", "zongheng"}
+var videoOnlyKeys = []string{"aggc", "ak2api", "apipod", "bluetoken", "bytefor", "cangyuan", "chatcut2api", "elevenlabs-pool", "ijm2api", "meaicc", "megabyai", "onmi", "paipu", "pidoi", "pixverse2api", "recapo2api", "seedance-hjmie", "sudashui", "token6688", "vobilemax", "yaohuo", "zongheng"}
+
+func TestYaohuoVideoPlugin(t *testing.T) {
+	source, err := Source("yaohuo")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "yaohuo"})
+	require.NoError(t, err)
+	call := func(hook string, args ...any) map[string]any {
+		t.Helper()
+		value, callErr := plugin.Engine.Call(t.Context(), hook, args...)
+		require.NoError(t, callErr, hook)
+		return value.(map[string]any)
+	}
+	decode := func(input map[string]any, upstream string) map[string]any {
+		t.Helper()
+		// Use the same JSON number representation as real HTTP hook arguments.
+		encoded, marshalErr := common.Marshal(input)
+		require.NoError(t, marshalErr)
+		var body any
+		require.NoError(t, common.Unmarshal(encoded, &body))
+		value, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+			"model": input["model"], "upstreamModel": upstream, "body": map[string]any{"kind": "json", "value": body},
+		})
+		require.NoError(t, decodeErr)
+		intent := value.(map[string]any)
+		assert.Equal(t, input["model"], intent["model"])
+		return map[string]any{"model": input["model"], "upstreamModel": upstream, "requestBody": intent["requestBody"], "baseUrl": "https://fenglang.cloud/open/v1/", "apiKey": "fixture-only-key"}
+	}
+	t.Run("model tiers and duration boundaries", func(t *testing.T) {
+		for _, tc := range []struct {
+			model string
+			tiers []string
+			max   int
+		}{
+			{"seedance-2.5", []string{"480p", "720p", "1080p"}, 30},
+			{"seedance-2.0", []string{"480p", "720p", "1080p"}, 15},
+			{"seedance-2.0-fast", []string{"480p", "720p"}, 15},
+			{"seedance-2.0-mini", []string{"480p", "720p"}, 15},
+		} {
+			t.Run(tc.model, func(t *testing.T) {
+				_, claimed := registry.Generation().LookupEndpoint("POST", "/v1/videos", tc.model)
+				require.True(t, claimed)
+				for _, tier := range tc.tiers {
+					for _, seconds := range []int{4, tc.max} {
+						ctx := decode(map[string]any{"model": "public-video", "prompt": "cat", "seconds": seconds, "resolution": tier, "n": 1}, tc.model)
+						request := call("buildSubmitRequest", ctx)
+						assert.Equal(t, "https://fenglang.cloud/open/v1/videos", request["url"])
+						assert.Equal(t, map[string]any{"Authorization": "Bearer fixture-only-key", "Content-Type": "application/json"}, request["headers"])
+						assert.NotContains(t, request, "model", "descriptor must not rewrite the public alias")
+						wire := request["body"].(map[string]any)
+						assert.Equal(t, tc.model, wire["model"])
+						assert.EqualValues(t, seconds, wire["seconds"])
+						assert.Equal(t, tier, wire["resolution"])
+						assert.NotContains(t, wire, "generate_audio")
+						usage := call("extractUsage", ctx)
+						assert.EqualValues(t, seconds, usage["seconds"])
+						assert.Equal(t, tier, usage["resolution"])
+						_, usageErr := plugin.Meta.ValidateUsageFacts(usage, tc.model, "public-video")
+						require.NoError(t, usageErr)
+						got, ignored, specErr := spec.Parse(call("describeSpec", ctx))
+						require.NoError(t, specErr)
+						assert.Empty(t, ignored)
+						assert.EqualValues(t, seconds, *got.OutputSeconds)
+						assert.Equal(t, tier, got.Tier)
+					}
+				}
+				for _, body := range []map[string]any{
+					{"prompt": "cat", "seconds": tc.max + 1},
+					{"prompt": "cat", "resolution": "2160p"},
+				} {
+					for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+						_, hookErr := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": tc.model, "requestBody": body})
+						require.Error(t, hookErr)
+					}
+				}
+			})
+		}
+	})
+	t.Run("standard media aliases audio and repeat normalization", func(t *testing.T) {
+		for _, audio := range []bool{false, true} {
+			input := map[string]any{
+				"model": "seedance-2.5", "prompt": "图片1 走入画面", "duration": "6", "size": "1280x720", "ratio": "16:9", "n": 1,
+				"images": []string{"https://cdn.example/i.png"}, "videos": []string{"https://cdn.example/v.mp4", "https://cdn.example/v.mp4"},
+				"audios": []string{"https://cdn.example/a.wav"}, "generate_audio": audio,
+				"metadata": map[string]any{"generate_audio": audio, "seconds": 6},
+			}
+			before, marshalErr := common.Marshal(input)
+			require.NoError(t, marshalErr)
+			ctx := decode(input, "seedance-2.5")
+			assert.Equal(t, ctx, decode(input, "seedance-2.5"))
+			after, marshalErr := common.Marshal(input)
+			require.NoError(t, marshalErr)
+			assert.JSONEq(t, string(before), string(after))
+			request := call("buildSubmitRequest", ctx)
+			wire := request["body"].(map[string]any)
+			assert.Equal(t, audio, wire["generate_audio"])
+			assert.Equal(t, "reference", wire["mode"])
+			assert.Equal(t, []any{"https://cdn.example/v.mp4", "https://cdn.example/v.mp4"}, wire["reference_video_urls"])
+			assert.Equal(t, []any{"https://cdn.example/i.png"}, wire["reference_image_urls"])
+			assert.Equal(t, []any{"https://cdn.example/a.wav"}, wire["reference_audio_urls"])
+			got := call("describeSpec", ctx)
+			encoded, marshalErr := common.Marshal(got)
+			require.NoError(t, marshalErr)
+			assert.JSONEq(t, `{"spec_version":3,"output_seconds":6,"seconds_kind":"exact","resolution":"720p","references":{"image":1,"video":2,"audio":1,"frame":0},"reference_video_urls":["https://cdn.example/v.mp4","https://cdn.example/v.mp4"]}`, string(encoded))
+		}
+	})
+	t.Run("frames are distinct scheduling inputs", func(t *testing.T) {
+		ctx := decode(map[string]any{"model": "seedance-2.0", "prompt": "cat", "first_image_url": "https://cdn.example/first.png", "last_image_url": "https://cdn.example/last.png", "mode": "firstlast"}, "seedance-2.0")
+		wire := call("buildSubmitRequest", ctx)["body"].(map[string]any)
+		assert.Equal(t, "https://cdn.example/first.png", wire["input_reference"])
+		assert.Equal(t, "https://cdn.example/last.png", wire["last_frame"])
+		assert.NotContains(t, wire, "reference_image_urls")
+		refs := call("describeSpec", ctx)["references"].(map[string]any)
+		assert.EqualValues(t, 2, refs["frame"])
+		assert.EqualValues(t, 0, refs["image"])
+	})
+	t.Run("mapped model owns final limits", func(t *testing.T) {
+		input := map[string]any{"model": "seedance-2.0-mini", "prompt": "cat", "seconds": 30, "resolution": "1080p"}
+		initial := decode(input, "")
+		_, buildErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", initial)
+		require.Error(t, buildErr, "unmapped Mini must still enforce its own limits")
+		ctx := decode(input, "seedance-2.5")
+		wire := call("buildSubmitRequest", ctx)["body"].(map[string]any)
+		assert.Equal(t, "seedance-2.5", wire["model"])
+		assert.EqualValues(t, 30, wire["seconds"])
+		assert.Equal(t, "1080p", wire["resolution"])
+	})
+	t.Run("invalid requests fail before usage and submission", func(t *testing.T) {
+		for _, raw := range []string{
+			`{"seconds":0}`, `{"seconds":-1}`, `{"seconds":3}`, `{"seconds":31}`, `{"seconds":4.5}`, `{"seconds":18446744073709551615}`, `{"seconds":true}`, `{"seconds":null}`,
+			`{"n":0}`, `{"n":2}`, `{"n":128}`, `{"n":"1"}`, `{"n":null}`, `{"n":false}`,
+			`{"generate_audio":"false"}`, `{"generate_audio":0}`, `{"generate_audio":null}`, `{"generate_audio":false,"metadata":{"generate_audio":true}}`,
+			`{"seconds":5,"duration":6}`, `{"resolution":"480p","size":"1280x720"}`, `{"ratio":"9:16","size":"1280x720"}`, `{"ratio":"2:1"}`,
+			`{"images":[9]}`, `{"videos":"https://cdn.example/v.mp4"}`, `{"images":["http://cdn.example/i.png"]}`, `{"images":["https://localhost/i.png"]}`, `{"images":["https://192.168.1.1/i.png"]}`, `{"images":["https://user:secret@cdn.example/i.png"]}`, `{"images":["data:image/png;base64,AA"]}`,
+			`{"images":["https://cdn.example/a.png"],"reference_image_urls":["https://cdn.example/b.png"]}`,
+			`{"input_reference":"https://cdn.example/f.png","audios":["https://cdn.example/a.mp3"],"mode":"firstlast"}`,
+			`{"last_frame":"https://cdn.example/l.png"}`, `{"mode":"reference"}`, `{"aspect_ratio":"adaptive"}`, `{"metadata":{"n":2}}`, `{"metadata":{"seconds":9999}}`, `{"params":{"seconds":9999}}`,
+		} {
+			t.Run(raw, func(t *testing.T) {
+				input := map[string]any{"model": "seedance-2.5", "prompt": "cat"}
+				var extra map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(raw, &extra))
+				maps.Copy(input, extra)
+				_, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "seedance-2.5", "body": map[string]any{"kind": "json", "value": input}})
+				require.Error(t, decodeErr)
+				for _, hook := range []string{"extractUsage", "describeSpec", "buildSubmitRequest"} {
+					_, hookErr := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "seedance-2.5", "requestBody": input})
+					require.Error(t, hookErr, hook)
+				}
+			})
+		}
+		for _, model := range []string{"seedance-2.0", "seedance-2.0-fast", "seedance-2.0-mini"} {
+			for field, count := range map[string]int{"images": 10, "videos": 4, "audios": 4} {
+				refs := make([]string, count)
+				for i := range refs {
+					refs[i] = "https://cdn.example/reference"
+				}
+				_, hookErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "public-video", "upstreamModel": model, "requestBody": map[string]any{"prompt": "cat", field: refs}})
+				require.Error(t, hookErr)
+			}
+		}
+		for _, model := range []string{"seedance-2.0-fast", "seedance-2.0-mini"} {
+			_, hookErr := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{"model": "public-video", "upstreamModel": model, "requestBody": map[string]any{"prompt": "cat", "resolution": "1080p"}})
+			require.Error(t, hookErr)
+		}
+	})
+	t.Run("multipart URLs and explicit false", func(t *testing.T) {
+		body := map[string]any{"kind": "multipart", "fields": map[string][]string{"model": {"seedance-2.5"}, "prompt": {"cat"}, "seconds": {"4"}, "n": {"1"}, "generate_audio": {"false"}, "images[]": {"https://cdn.example/i.png"}}}
+		ctx := map[string]any{"model": "seedance-2.5", "body": body}
+		value, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, ctx)
+		require.NoError(t, decodeErr)
+		request := value.(map[string]any)["requestBody"].(map[string]any)
+		assert.Equal(t, false, request["generate_audio"])
+		assert.EqualValues(t, 4, request["seconds"])
+		assert.Equal(t, []any{"https://cdn.example/i.png"}, request["reference_image_urls"])
+		body["files"] = []any{map[string]any{"ref": "request_file:input_reference"}}
+		_, decodeErr = plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, ctx)
+		require.ErrorContains(t, decodeErr, "local file uploads are unsupported")
+	})
+	t.Run("polling honors done and preserves unknown states", func(t *testing.T) {
+		for _, tc := range []struct{ task, status string }{
+			{`{"id":"upstream-id","done":false,"status":"queued"}`, "QUEUED"},
+			{`{"id":"upstream-id","done":false,"status":"in_progress"}`, "IN_PROGRESS"},
+			{`{"id":"upstream-id","done":false,"status":"completed","videoState":"retrieving"}`, "IN_PROGRESS"},
+			{`{"id":"upstream-id","done":true,"status":"completed","videoState":"unavailable"}`, "SUCCESS"},
+			{`{"id":"upstream-id","done":true,"status":"completed","videoState":"retrieving"}`, "SUCCESS"},
+			{`{"id":"upstream-id","done":true,"status":"completed","videoUrl":"https://cdn.example/v.mp4"}`, "SUCCESS"},
+			{`{"id":"upstream-id","done":true,"status":"failed","refunded":true,"error":"内容违规"}`, "FAILURE"},
+			{`{"id":"upstream-id","done":false,"status":"failed"}`, "UNKNOWN"},
+			{`{"id":"upstream-id","done":true,"status":"queued"}`, "UNKNOWN"},
+			{`{"id":"upstream-id","status":"completed"}`, "UNKNOWN"},
+			{`{"id":"upstream-id","done":"true","status":"completed"}`, "UNKNOWN"},
+			{`{"id":"upstream-id","done":false,"status":"new_status"}`, "UNKNOWN"},
+			{`{"id":"different-id","done":true,"status":"completed"}`, "UNKNOWN"},
+		} {
+			var task any
+			require.NoError(t, common.UnmarshalJsonStr(tc.task, &task))
+			body := map[string]any{"success": true, "task": task}
+			result := call("parseTaskResult", map[string]any{"taskId": "upstream-id"}, body)
+			assert.Equal(t, tc.status, result["status"], tc.task)
+			if tc.status == "FAILURE" {
+				assert.Equal(t, "内容违规", result["reason"])
+			}
+			if tc.status == "SUCCESS" || tc.status == "FAILURE" {
+				submit := call("parseSubmitResponse", map[string]any{}, map[string]any{"statusCode": 202, "body": body})
+				assert.Equal(t, result, submit["immediate"])
+			}
+		}
+	})
+	t.Run("submission ambiguity and explicit business rejection", func(t *testing.T) {
+		for _, body := range []any{nil, map[string]any{"success": true}, map[string]any{"success": false, "task": map[string]any{"id": "accepted-id"}, "message": "conflicting status"}} {
+			_, parseErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", map[string]any{}, map[string]any{"body": body})
+			require.Error(t, parseErr, "an ambiguous paid submission must not be retried as a rejection")
+		}
+		result := call("parseSubmitResponse", map[string]any{}, map[string]any{"body": map[string]any{"success": false, "code": "INSUFFICIENT_BALANCE", "message": "insufficient balance"}})
+		assert.Equal(t, map[string]any{"reason": "INSUFFICIENT_BALANCE: insufficient balance"}, result["rejected"])
+		assert.Empty(t, call("extractUsageOnComplete", map[string]any{}, map[string]any{"status": "SUCCESS"}, map[string]any{"seconds": 9999, "cost": 9999, "refunded": true}))
+	})
+	t.Run("durable content access keeps credentials at configured origin", func(t *testing.T) {
+		data := map[string]any{"success": true, "task": map[string]any{"id": "private-id", "done": true, "status": "completed", "videoUrl": "https://cdn.example/expired.mp4", "downloadUrl": "https://attacker.example/collect", "contentUrl": "https://attacker.example/collect"}}
+		for _, method := range []string{"GET", "HEAD"} {
+			ctx := map[string]any{"baseUrl": "https://fenglang.cloud", "apiKey": "fixture-only-key", "upstreamTaskId": "private/id?x", "artifactKey": "video", "data": data, "clientRequest": map[string]any{"method": method, "headers": map[string]any{"Authorization": "client-secret", "Range": "bytes=0-10"}}}
+			request := call("buildContentRequest", ctx)
+			assert.Equal(t, "https://fenglang.cloud/open/v1/tasks/private%2Fid%3Fx/content", request["url"])
+			assert.Equal(t, method, request["method"])
+			assert.Equal(t, map[string]any{"Authorization": "Bearer fixture-only-key"}, request["headers"])
+		}
+		query := call("buildQueryRequest", map[string]any{"baseUrl": "https://fenglang.cloud/open/v1/", "taskId": "a/b", "authHeader": "Bearer fixture-only-key"})
+		assert.Equal(t, "https://fenglang.cloud/open/v1/tasks/a%2Fb", query["url"])
+		artifacts, artifactErr := plugin.Engine.Call(t.Context(), "listArtifacts", map[string]any{"status": "SUCCESS", "data": data})
+		require.NoError(t, artifactErr)
+		assert.Len(t, artifacts, 1)
+		_, contentErr := plugin.Engine.Call(t.Context(), "buildContentRequest", map[string]any{"artifactKey": "other", "data": data})
+		require.ErrorContains(t, contentErr, "artifact_not_found")
+		presented, renderErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "render"}, map[string]any{}, map[string]any{"data": data})
+		require.NoError(t, renderErr)
+		assert.Empty(t, presented)
+	})
+}
+
+func TestPixVerse2APIVideoPlugin(t *testing.T) {
+	source, err := Source("pixverse2api")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "pixverse2api"})
+	require.NoError(t, err)
+	call := func(hook string, args ...any) map[string]any {
+		t.Helper()
+		value, callErr := plugin.Engine.Call(t.Context(), hook, args...)
+		require.NoError(t, callErr, hook)
+		return value.(map[string]any)
+	}
+	decode := func(input map[string]any, upstream string) map[string]any {
+		t.Helper()
+		value, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+			"model": input["model"], "upstreamModel": upstream, "body": map[string]any{"kind": "json", "value": input},
+		})
+		require.NoError(t, decodeErr)
+		intent := value.(map[string]any)
+		assert.Equal(t, input["model"], intent["model"])
+		return map[string]any{"model": input["model"], "upstreamModel": upstream, "requestBody": intent["requestBody"], "baseUrl": "https://pixverse.example/", "apiKey": "fixture-only-key", "publicTaskId": "task_stable"}
+	}
+	t.Run("mapped models tiers duration and audio", func(t *testing.T) {
+		for _, tc := range []struct {
+			model, canonical string
+			tiers            []string
+			max              int
+		}{
+			{"seedance-2.0-standard", "seedance-2.0-standard", []string{"480p", "720p", "1080p", "2160p"}, 15},
+			{"seedance-2.0", "seedance-2.0-standard", []string{"480p", "720p", "1080p", "2160p"}, 15},
+			{"seedance2", "seedance-2.0-standard", []string{"720p"}, 15},
+			{"seedance-2.0-fast", "seedance-2.0-fast", []string{"480p", "720p"}, 15},
+			{"seedance2fast", "seedance-2.0-fast", []string{"480p", "720p"}, 15},
+			{"seedance-2.0-mini", "seedance-2.0-mini", []string{"480p", "720p"}, 15},
+			{"seedance2mini", "seedance-2.0-mini", []string{"480p", "720p"}, 15},
+			{"seedance-2.5", "seedance-2.5", []string{"480p", "720p", "1080p"}, 30},
+			{"seedance-2-5", "seedance-2.5", []string{"720p"}, 30},
+			{"seedance2.5", "seedance-2.5", []string{"720p"}, 30},
+		} {
+			t.Run(tc.model, func(t *testing.T) {
+				_, claimed := registry.Generation().LookupEndpoint("POST", "/v1/videos", tc.model)
+				require.True(t, claimed)
+				for _, tier := range tc.tiers {
+					for _, seconds := range []int{4, tc.max} {
+						input := map[string]any{"model": "public-video", "prompt": "cat", "seconds": seconds, "resolution": tier, "n": 1}
+						ctx := decode(input, tc.model)
+						request := call("buildSubmitRequest", ctx)
+						assert.Equal(t, "https://pixverse.example/v1/videos", request["url"])
+						assert.Equal(t, map[string]any{"Authorization": "Bearer fixture-only-key", "Content-Type": "application/json", "Idempotency-Key": "task_stable"}, request["headers"])
+						wire := request["body"].(map[string]any)
+						assert.Equal(t, tc.canonical, wire["model"])
+						assert.Equal(t, false, wire["sync"])
+						assert.NotContains(t, wire, "auto_reference")
+						assert.NotContains(t, wire, "n")
+						assert.NotContains(t, wire, "generate_audio")
+						usage := call("extractUsage", ctx)
+						assert.EqualValues(t, seconds, usage["seconds"])
+						assert.Equal(t, tier, usage["resolution"])
+						_, usageErr := plugin.Meta.ValidateUsageFacts(usage, tc.model, "public-video")
+						require.NoError(t, usageErr)
+						require.NoError(t, plugin.Meta.ValidateResolvedUsageRequest(ctx["requestBody"], tc.model, "public-video"))
+						got, ignored, specErr := spec.Parse(call("describeSpec", ctx))
+						require.NoError(t, specErr)
+						assert.Empty(t, ignored)
+						assert.EqualValues(t, seconds, *got.OutputSeconds)
+						assert.Equal(t, tier, got.Tier)
+						assert.EqualValues(t, seconds, wire["seconds"])
+						assert.Equal(t, tier, wire["resolution"])
+					}
+				}
+				ctx := decode(map[string]any{"model": tc.model, "prompt": "cat"}, tc.model)
+				wire := call("buildSubmitRequest", ctx)["body"].(map[string]any)
+				assert.EqualValues(t, 5, wire["seconds"])
+				assert.Equal(t, "720p", wire["resolution"])
+				if tc.canonical != "seedance-2.5" {
+					for _, audio := range []bool{false, true} {
+						ctx = decode(map[string]any{"model": tc.model, "prompt": "cat", "generate_audio": audio, "metadata": map[string]any{"generate_audio": audio}}, tc.model)
+						assert.Equal(t, audio, call("buildSubmitRequest", ctx)["body"].(map[string]any)["generate_audio"])
+					}
+				}
+			})
+		}
+	})
+	t.Run("ordered media frames aliases and immutable quoting", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, model, body string
+			counts            map[string]int
+		}{
+			{"mixed", "seedance-2.0", `{"images":["https://cdn.example/a","https://cdn.example/a"],"videos":["https://cdn.example/v","https://cdn.example/v"],"audios":["https://cdn.example/aud"],"metadata":{"reference_images":["https://cdn.example/a","https://cdn.example/a"]},"generate_audio":false}`, map[string]int{"image": 2, "video": 2, "audio": 1, "frame": 0}},
+			{"frames", "seedance-2.5", `{"first_image_url":"https://cdn.example/first","last_image_url":"https://cdn.example/last","ratio":"9:16"}`, map[string]int{"image": 0, "video": 0, "audio": 0, "frame": 2}},
+			{"single frame", "seedance-2.0-mini", `{"image":"https://cdn.example/first"}`, map[string]int{"image": 0, "video": 0, "audio": 0, "frame": 1}},
+			{"service auto reference", "seedance-2.0-mini", `{"audios":["https://cdn.example/aud"]}`, map[string]int{"image": 0, "video": 0, "audio": 1, "frame": 0}},
+			{"edit", "seedance-2.5", `{"videos":["https://cdn.example/v"],"seconds":30,"task_type":"edit","ratio":"auto"}`, map[string]int{"image": 0, "video": 1, "audio": 0, "frame": 0}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.body, &input))
+				input["model"], input["prompt"] = "public-video", "cat"
+				original, marshalErr := common.Marshal(input)
+				require.NoError(t, marshalErr)
+				ctx := decode(input, tc.model)
+				assert.Equal(t, ctx, decode(input, tc.model))
+				wire := call("buildSubmitRequest", ctx)["body"].(map[string]any)
+				got, _, specErr := spec.Parse(call("describeSpec", ctx))
+				require.NoError(t, specErr)
+				assert.Equal(t, tc.counts, got.References)
+				assert.Len(t, got.ReferenceVideoURLs, tc.counts["video"])
+				for i, kind := range []string{"image", "video", "audio"} {
+					if tc.counts[kind] != 0 {
+						assert.Len(t, wire[[]string{"reference_images", "reference_videos", "reference_audios"}[i]], tc.counts[kind])
+					}
+				}
+				quote := videosched.Quote(videosched.CostConfig{Mode: videosched.ModePerSecond, Prices: map[string]float64{got.Tier: 0.5}, References: map[string]map[string]videosched.ReferenceCost{
+					"image": {"*": {Mode: videosched.RefIncluded}}, "video": {"*": {Mode: videosched.RefIncluded}}, "audio": {"*": {Mode: videosched.RefIncluded}}, "frame": {"*": {Mode: videosched.RefIncluded}},
+				}}, got)
+				assert.Empty(t, quote.Reason)
+				assert.Equal(t, *got.OutputSeconds*0.5, quote.TotalUSD)
+				after, marshalErr := common.Marshal(input)
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, string(original), string(after))
+			})
+		}
+		ctx := decode(map[string]any{"model": "public-video", "prompt": "cat", "size": "3840x2160", "quality": "4k", "seed": 0, "relax_mode": false}, "seedance-2.0-standard")
+		wire := call("buildSubmitRequest", ctx)["body"].(map[string]any)
+		assert.Equal(t, "2160p", wire["resolution"])
+		assert.Equal(t, "16:9", wire["aspect_ratio"])
+		assert.EqualValues(t, 0, wire["seed"])
+		assert.Equal(t, false, wire["relax_mode"])
+		assert.NotContains(t, wire, "size")
+	})
+	t.Run("invalid requests also reject driver overrides", func(t *testing.T) {
+		for _, tc := range []struct{ model, body string }{
+			{"seedance-2.0-mini", `{"seconds":16}`}, {"seedance-2.5", `{"seconds":31}`},
+			{"seedance-2.5", `{"seconds":"auto","videos":["https://cdn.example/v"]}`},
+			{"seedance-2.0", `{"seconds":0}`}, {"seedance-2.0", `{"seconds":4.5}`}, {"seedance-2.0", `{"seconds":true}`},
+			{"seedance-2.0", `{"metadata":{"duration":18446744073686646784}}`},
+			{"seedance-2.0-mini", `{"resolution":"1080p"}`}, {"seedance-2.5", `{"resolution":"4k"}`},
+			{"seedance-2.0", `{"generate_audio":"false"}`}, {"seedance-2.0", `{"generate_audio":0}`}, {"seedance-2.0", `{"generate_audio":null}`},
+			{"seedance-2.5", `{"generate_audio":false}`}, {"seedance-2.5", `{"generate_audio":true}`},
+			{"seedance-2.0", `{"generate_audio":false,"metadata":{"generate_audio":true}}`},
+			{"seedance-2.0", `{"n":0}`}, {"seedance-2.0", `{"n":2}`}, {"seedance-2.0", `{"n":"1"}`},
+			{"seedance-2.0", `{"seconds":4,"duration":5}`}, {"seedance-2.0", `{"size":"1280x720","resolution":"480p"}`},
+			{"seedance-2.0", `{"size":"1280x720","ratio":"9:16"}`}, {"seedance-2.0", `{"size":"1920x1200"}`},
+			{"seedance-2.0", `{"images":"https://cdn.example/i"}`}, {"seedance-2.0", `{"images":[null]}`},
+			{"seedance-2.0", `{"videos":["http://cdn.example/v"]}`}, {"seedance-2.0", `{"images":["https://user:pass@cdn.example/i"]}`},
+			{"seedance-2.0", `{"images":["https://cdn.example:8443/i"]}`}, {"seedance-2.0", `{"images":["file_0123456789abcdef0123456789abcdef"]}`},
+			{"seedance-2.0", `{"images":["https://cdn.example/a"],"reference_images":["https://cdn.example/b"]}`},
+			{"seedance-2.0", `{"last_image_url":"https://cdn.example/i"}`},
+			{"seedance-2.0", `{"first_image_url":"https://cdn.example/i","videos":["https://cdn.example/v"]}`},
+			{"seedance-2.5", `{"first_frame":"https://cdn.example/i","ratio":"auto"}`},
+			{"seedance-2.0", `{"ratio":"auto"}`}, {"seedance-2.0", `{"task_type":"reference"}`},
+			{"seedance-2.5", `{"task_type":"extend"}`}, {"seedance-2.5", `{"first_frame":"https://cdn.example/i","task_type":"reference"}`},
+			{"seedance-2.0", `{"seed":-1}`}, {"seedance-2.0", `{"seed":2147483648}`}, {"seedance-2.0", `{"relax_mode":"false"}`},
+			{"seedance-2.0", `{"metadata":{"seconds":0}}`}, {"seedance-2.0", `{"metadata":{"unknown":1}}`},
+			{"seedance-2.0", `{"sync":true}`}, {"seedance-2.0", `{"auto_reference":false}`},
+			{"unknown-model", `{}`},
+		} {
+			t.Run(tc.model+tc.body, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.body, &input))
+				input["model"], input["prompt"] = "public-video", "cat"
+				_, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "public-video", "upstreamModel": tc.model, "body": map[string]any{"kind": "json", "value": input}})
+				require.Error(t, decodeErr)
+				for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+					_, hookErr := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": input, "baseUrl": "https://pixverse.example", "apiKey": "fixture-only-key"})
+					require.Error(t, hookErr, hook)
+				}
+			})
+		}
+		for _, tc := range []struct {
+			model  string
+			limits []int
+		}{{"seedance-2.0-mini", []int{9, 3, 3}}, {"seedance-2.5", []int{30, 10, 10}}} {
+			for i, field := range []string{"images", "videos", "audios"} {
+				input := map[string]any{"model": tc.model, "prompt": "cat", field: slices.Repeat([]string{"https://cdn.example/media"}, tc.limits[i])}
+				decode(input, tc.model)
+				input[field] = slices.Repeat([]string{"https://cdn.example/media"}, tc.limits[i]+1)
+				_, hookErr := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{"model": tc.model, "requestBody": input})
+				require.Error(t, hookErr)
+			}
+		}
+	})
+	t.Run("multipart canvas", func(t *testing.T) {
+		body := map[string]any{"kind": "multipart", "fields": map[string][]string{"model": {"seedance-2.0-mini"}, "prompt": {"cat"}, "seconds": {"6"}, "n": {"1"}, "generate_audio": {"false"}, "seed": {"0"}, "images[]": {"https://cdn.example/i"}, "videos": {`["https://cdn.example/v"]`}}}
+		value, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "seedance-2.0-mini", "body": body})
+		require.NoError(t, decodeErr)
+		wire := call("buildSubmitRequest", map[string]any{"model": "seedance-2.0-mini", "requestBody": value.(map[string]any)["requestBody"], "baseUrl": "https://pixverse.example", "apiKey": "fixture-only-key"})["body"].(map[string]any)
+		assert.Equal(t, false, wire["generate_audio"])
+		assert.EqualValues(t, 6, wire["seconds"])
+		assert.EqualValues(t, 0, wire["seed"])
+		assert.Equal(t, []any{"https://cdn.example/i"}, wire["reference_images"])
+		body["files"] = []any{map[string]any{"ref": "request_file:input_reference", "field": "input_reference"}}
+		_, decodeErr = plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "seedance-2.0-mini", "body": body})
+		require.ErrorContains(t, decodeErr, "HTTPS media URLs")
+	})
+	t.Run("lifecycle and private upstream diagnostics", func(t *testing.T) {
+		for status, expected := range map[string]string{"queued": "QUEUED", "in_progress": "IN_PROGRESS", "completed": "SUCCESS", "failed": "FAILURE", "future": "UNKNOWN", "": "UNKNOWN"} {
+			body := map[string]any{"id": "px_task", "status": status, "video_url": "https://cdn.example/result.mp4", "error": map[string]any{"message": "submission outcome unknown"}, "pixverse": map[string]any{"state": "submission_unknown", "cost_credits": 999, "upstream_id": "private"}}
+			if status == "completed" {
+				body["error"] = nil
+			}
+			result := call("parseTaskResult", map[string]any{"taskId": "px_task"}, body)
+			assert.Equal(t, expected, result["status"])
+			accepted := call("parseSubmitResponse", map[string]any{}, map[string]any{"statusCode": 202, "body": body})
+			assert.Equal(t, "px_task", accepted["taskId"])
+			if expected == "SUCCESS" || expected == "FAILURE" {
+				assert.Equal(t, result, accepted["immediate"])
+			} else {
+				assert.NotContains(t, accepted, "immediate")
+			}
+			assert.Empty(t, call("extractUsageOnComplete", map[string]any{}, result, body))
+			rendered, renderErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "render"}, map[string]any{}, map[string]any{"data": body})
+			require.NoError(t, renderErr)
+			assert.Empty(t, rendered)
+		}
+		assert.Equal(t, "UNKNOWN", call("parseTaskResult", map[string]any{"taskId": "other"}, map[string]any{"id": "px_task", "status": "completed"})["status"])
+		_, parseErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", map[string]any{}, map[string]any{"body": map[string]any{"error": "ambiguous"}})
+		require.ErrorContains(t, parseErr, "missing a task id")
+		query := call("buildQueryRequest", map[string]any{"baseUrl": "https://pixverse.example/", "authHeader": "Bearer fixture-only-key", "taskId": "px/a?b"})
+		assert.Equal(t, "https://pixverse.example/v1/videos/px%2Fa%3Fb", query["url"])
+		content := call("buildContentRequest", map[string]any{"baseUrl": "https://pixverse.example/", "apiKey": "fixture-only-key", "upstreamTaskId": "px/a", "artifactKey": "video", "clientRequest": map[string]any{"method": "HEAD", "headers": map[string]any{"Authorization": "client-secret"}}, "data": map[string]any{"status": "completed", "url": "https://cdn.example/result.mp4?sig=fixture%2Bvalue"}})
+		assert.Equal(t, map[string]any{"url": "https://cdn.example/result.mp4?sig=fixture%2Bvalue", "method": "HEAD", "credentialless": true}, content)
+		for _, url := range []any{nil, "", "https://user:pass@cdn.example/file", "https://cdn.example/file\n", "javascript:alert(1)"} {
+			data := map[string]any{"id": "px_task", "status": "completed", "video_url": url}
+			assert.Equal(t, "UNKNOWN", call("parseTaskResult", map[string]any{"taskId": "px_task"}, data)["status"])
+			_, contentErr := plugin.Engine.Call(t.Context(), "buildContentRequest", map[string]any{"artifactKey": "video", "data": data})
+			require.ErrorContains(t, contentErr, "artifact_not_found")
+		}
+		for _, state := range []string{"IN_PROGRESS", "FAILURE", "SUCCESS"} {
+			artifacts, listErr := plugin.Engine.Call(t.Context(), "listArtifacts", map[string]any{"status": state, "data": map[string]any{"status": "completed", "video_url": "https://cdn.example/result.mp4"}})
+			require.NoError(t, listErr)
+			if state == "SUCCESS" {
+				assert.Len(t, artifacts, 1)
+			} else {
+				assert.Empty(t, artifacts)
+			}
+		}
+	})
+}
 
 func TestElevenLabsPoolPlugin(t *testing.T) {
 	source, err := Source("elevenlabs-pool")
@@ -340,6 +820,771 @@ func TestElevenLabsPoolPlugin(t *testing.T) {
 			assert.Equal(t, expected, value)
 		}
 	})
+}
+
+// Optional integration with an isolated instance of the real Python pool in
+// mock mode. The health gate prevents accidentally creating paid generations.
+func TestElevenLabsPoolMockService(t *testing.T) {
+	baseURL := os.Getenv("ELEVENLABS_POOL_MOCK_URL")
+	if baseURL == "" {
+		t.Skip("set ELEVENLABS_POOL_MOCK_URL and ELEVENLABS_POOL_MOCK_KEY_FILE for the local mock service")
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get(baseURL + "/health")
+	require.NoError(t, err)
+	var health map[string]any
+	require.NoError(t, common.DecodeJson(response.Body, &health))
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, "mock", health["mode"])
+	require.Equal(t, false, health["real_generation_enabled"])
+	key, err := os.ReadFile(os.Getenv("ELEVENLABS_POOL_MOCK_KEY_FILE"))
+	require.NoError(t, err)
+	source, err := Source("elevenlabs-pool")
+	require.NoError(t, err)
+	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "elevenlabs-pool"})
+	require.NoError(t, err)
+	for _, name := range []string{"seedance-1.0-pro", "seedance-1.5-pro", "seedance-2.0", "seedance-2.0-fast", "seedance-2.0-mini", "seedance-2.5", "seedance-2.5-edit", "seedance-2.5-extend"} {
+		t.Run(name, func(t *testing.T) {
+			input := map[string]any{"model": name, "prompt": "local mock contract verification", "generate_audio": false}
+			if strings.HasSuffix(name, "-edit") || strings.HasSuffix(name, "-extend") {
+				input["videos"] = []string{"https://cdn.example/input.mp4"}
+			} else if name == "seedance-1.0-pro" {
+				input["first_image_url"], input["last_image_url"] = "https://cdn.example/first.png", "https://cdn.example/last.png"
+			} else if name == "seedance-2.5" {
+				input["images"], input["videos"], input["audios"] = []string{"https://cdn.example/image.png"}, []string{"https://cdn.example/input.mp4"}, []string{"https://cdn.example/audio.mp3"}
+			}
+			decoded, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": name, "body": map[string]any{"kind": "json", "value": input}})
+			require.NoError(t, callErr)
+			ctx := map[string]any{"model": name, "baseUrl": baseURL, "apiKey": strings.TrimSpace(string(key)), "publicTaskId": "task_" + common.GetUUID(), "requestBody": decoded.(map[string]any)["requestBody"]}
+			hook := "buildSubmitRequest"
+			deadline := time.Now().Add(20 * time.Second)
+			var stages []string
+			for {
+				require.True(t, time.Now().Before(deadline), "mock task did not complete")
+				value, buildErr := plugin.Engine.Call(t.Context(), hook, ctx)
+				require.NoError(t, buildErr)
+				encoded, marshalErr := common.Marshal(value)
+				require.NoError(t, marshalErr)
+				var descriptor struct {
+					URL, Method string
+					Headers     map[string]string
+					Body        map[string]any
+				}
+				require.NoError(t, common.Unmarshal(encoded, &descriptor))
+				var payload []byte
+				if descriptor.Body != nil {
+					payload, err = common.Marshal(descriptor.Body)
+					require.NoError(t, err)
+				}
+				req, requestErr := http.NewRequestWithContext(t.Context(), descriptor.Method, descriptor.URL, bytes.NewReader(payload))
+				require.NoError(t, requestErr)
+				for name, value := range descriptor.Headers {
+					req.Header.Set(name, value)
+				}
+				resp, requestErr := client.Do(req)
+				require.NoError(t, requestErr)
+				var body map[string]any
+				require.NoError(t, common.DecodeJson(resp.Body, &body))
+				require.NoError(t, resp.Body.Close())
+				require.Contains(t, []int{http.StatusOK, http.StatusAccepted}, resp.StatusCode, "%v", body)
+				stages = append(stages, req.URL.Path)
+				if hook == "buildSubmitRequest" {
+					parsed, parseErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", ctx, map[string]any{"statusCode": resp.StatusCode, "body": body})
+					require.NoError(t, parseErr)
+					ctx["taskId"] = parsed.(map[string]any)["taskId"]
+					if state, ok := parsed.(map[string]any)["state"]; ok {
+						ctx["state"] = state
+					}
+					hook = "buildQueryRequest"
+				} else {
+					parsed, parseErr := plugin.Engine.Call(t.Context(), "parseTaskResult", ctx, body)
+					require.NoError(t, parseErr)
+					result := parsed.(map[string]any)
+					require.Contains(t, []string{"QUEUED", "IN_PROGRESS", "SUCCESS"}, result["status"], "%v", body)
+					if state, ok := result["state"]; ok {
+						ctx["state"] = state
+					}
+					if result["status"] == "SUCCESS" {
+						assert.Equal(t, "https://example.invalid/mock-video.mp4", body["content_url"])
+						assert.True(t, strings.HasSuffix(stages[len(stages)-1], "/result"))
+						t.Logf("%s: accepted -> status -> result URL (mock only)", name)
+						break
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
+	}
+}
+
+func TestChatCut2APIVideoPlugin(t *testing.T) {
+	source, err := Source("chatcut2api")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "chatcut2api"})
+	require.NoError(t, err)
+
+	t.Run("models references frames and scheduling agree", func(t *testing.T) {
+		for _, tc := range []struct {
+			model, alias string
+			tiers        []string
+			maxSeconds   int
+		}{
+			{"seedance2mini", "seedance-2.0-mini", []string{"480p", "720p"}, 15},
+			{"seedance2fast", "seedance-2.0-fast", []string{"480p", "720p"}, 15},
+			{"seedance2", "seedance-2.0", []string{"480p", "720p", "1080p"}, 15},
+			{"seedance-2-5", "seedance-2.5", []string{"480p", "720p", "1080p"}, 30},
+		} {
+			for _, model := range []string{tc.model, tc.alias} {
+				binding, found := registry.Generation().LookupEndpoint("POST", "/v1/videos", model)
+				require.True(t, found)
+				assert.Same(t, plugin, binding.Plugin)
+				for _, tier := range tc.tiers {
+					for _, mode := range []string{"text", "933", "first", "first-last", "native"} {
+						t.Run(model+"/"+tier+"/"+mode, func(t *testing.T) {
+							input := map[string]any{"model": "public-video", "prompt": "cat", "seconds": tc.maxSeconds, "resolution": tier, "n": 1, "metadata": map[string]any{}, "generate_audio": false}
+							counts := map[string]int{"image": 0, "video": 0, "audio": 0, "frame": 0}
+							wantParams := map[string]any{"functionMode": "omni_reference"}
+							if mode == "933" {
+								for _, media := range []struct {
+									field, wire, kind string
+									count             int
+								}{{"images", "referenceImages", "image", 9}, {"videos", "referenceVideos", "video", 3}, {"audios", "referenceAudios", "audio", 3}} {
+									urls := make([]any, media.count)
+									for i := range urls {
+										urls[i] = "https://cdn.example/" + media.kind
+									}
+									input[media.field], wantParams[media.wire], counts[media.kind] = urls, urls, media.count
+								}
+							} else if mode != "text" {
+								wantParams["functionMode"], wantParams["image"], counts["frame"] = "first_last_frames", "https://cdn.example/first.png", 1
+								input["first_image_url"] = wantParams["image"]
+								if mode != "first" {
+									wantParams["imageTail"], counts["frame"] = "https://cdn.example/last.png", 2
+									input["last_image_url"] = wantParams["imageTail"]
+								}
+								if mode == "native" {
+									delete(input, "first_image_url")
+									delete(input, "last_image_url")
+									input["params"] = wantParams
+								}
+							}
+							original, marshalErr := common.Marshal(input)
+							require.NoError(t, marshalErr)
+							var httpInput map[string]any
+							require.NoError(t, common.Unmarshal(original, &httpInput))
+							decodeCtx := map[string]any{"model": "public-video", "body": map[string]any{"kind": "json", "value": httpInput}}
+							decoded, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, decodeCtx)
+							require.NoError(t, callErr)
+							repeated, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, decodeCtx)
+							require.NoError(t, callErr)
+							assert.Equal(t, decoded, repeated)
+							unchanged, marshalErr := common.Marshal(httpInput)
+							require.NoError(t, marshalErr)
+							assert.JSONEq(t, string(original), string(unchanged))
+							intent := decoded.(map[string]any)
+							assert.Equal(t, "public-video", intent["model"])
+							ctx := map[string]any{"model": "public-video", "upstreamModel": model, "baseUrl": "https://chatcut.example/", "apiKey": "fixture-only-key", "requestBody": intent["requestBody"]}
+							built, callErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+							require.NoError(t, callErr)
+							assert.NotContains(t, built, "model")
+							wire := built.(map[string]any)["body"].(map[string]any)
+							assert.Equal(t, tc.model, wire["model"])
+							assert.EqualValues(t, tc.maxSeconds, wire["seconds"])
+							assert.Equal(t, tier, wire["resolution"])
+							assert.Equal(t, false, wire["generate_audio"])
+							assert.Equal(t, false, wire["sync"])
+							assert.Equal(t, wantParams, wire["params"])
+							wantRatio := "16:9"
+							if counts["frame"] > 0 {
+								wantRatio = "adaptive"
+							}
+							assert.Equal(t, wantRatio, wire["aspect_ratio"])
+							value, callErr := plugin.Engine.Call(t.Context(), "describeSpec", ctx)
+							require.NoError(t, callErr)
+							got, _, parseErr := spec.Parse(value.(map[string]any))
+							require.NoError(t, parseErr)
+							assert.EqualValues(t, tc.maxSeconds, *got.OutputSeconds)
+							assert.Equal(t, tier, got.Tier)
+							assert.Equal(t, counts, got.References)
+							assert.Len(t, got.ReferenceVideoURLs, counts["video"])
+							for _, url := range got.ReferenceVideoURLs {
+								assert.Equal(t, "https://cdn.example/video", url)
+							}
+							usage, callErr := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+							require.NoError(t, callErr)
+							assert.EqualValues(t, tc.maxSeconds, usage.(map[string]any)["seconds"])
+							assert.Equal(t, tier, usage.(map[string]any)["resolution"])
+							// Synthetic procurement rates verify frame/input separation, not vendor prices.
+							frameUnitPrice := 0.1
+							quote := videosched.Quote(videosched.CostConfig{Mode: videosched.ModePerSecond, Prices: map[string]float64{tier: 0.5}, References: map[string]map[string]videosched.ReferenceCost{
+								"image": {"*": {Mode: videosched.RefIncluded}}, "video": {"*": {Mode: videosched.RefIncluded}}, "audio": {"*": {Mode: videosched.RefIncluded}}, "frame": {"*": {Mode: videosched.RefPerInput, Value: &frameUnitPrice}},
+							}}, got)
+							assert.Empty(t, quote.Reason)
+							assert.InDelta(t, float64(tc.maxSeconds)*0.5+float64(counts["frame"])*0.1, quote.TotalUSD, 1e-9)
+						})
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("reject conflicts invalid media and billing bypasses in every driver hook", func(t *testing.T) {
+		for _, tc := range []struct{ name, model, input, message string }{
+			{"zero duration", "seedance2", `{"seconds":0}`, "integer between"},
+			{"overflow", "seedance2", `{"metadata":{"duration":18446744073686646784}}`, "integer between"},
+			{"fraction", "seedance2", `{"seconds":4.5}`, "integer between"},
+			{"null duration", "seedance2", `{"seconds":null}`, "integer between"},
+			{"old family cap", "seedance2mini", `{"params":{"duration":16}}`, "between 4 and 15"},
+			{"new family cap", "seedance-2-5", `{"seconds":31}`, "integer between"},
+			{"mini resolution", "seedance2mini", `{"resolution":"1080p"}`, "supports only"},
+			{"fast resolution", "seedance2fast", `{"params":{"resolution":"1080p"}}`, "supports only"},
+			{"4k", "seedance2", `{"resolution":"4k"}`, "resolution must"},
+			{"mapping", "kling", `{}`, "unsupported ChatCut2API model"},
+			{"seconds conflict", "seedance2", `{"seconds":4,"params":{"duration":5}}`, "conflicting"},
+			{"size tier conflict", "seedance2", `{"size":"1280x720","resolution":"480p"}`, "conflicts"},
+			{"size ratio conflict", "seedance2", `{"size":"1280x720","ratio":"9:16"}`, "conflicts"},
+			{"batch", "seedance2", `{"params":{"n":2}}`, "n must be 1"},
+			{"batch string", "seedance2", `{"n":"1"}`, "n must be 1"},
+			{"audio string", "seedance2", `{"generate_audio":"false"}`, "boolean"},
+			{"audio number", "seedance2", `{"generate_audio":0}`, "boolean"},
+			{"audio null", "seedance2", `{"generate_audio":null}`, "boolean"},
+			{"audio conflict", "seedance2", `{"generate_audio":false,"metadata":{"generate_audio":true}}`, "conflicting"},
+			{"audio needs visual reference", "seedance2", `{"audios":["https://cdn.example/a.wav"]}`, "require an image or video"},
+			{"media scalar", "seedance2", `{"images":"https://cdn.example/a.png"}`, "array"},
+			{"media entry", "seedance2", `{"videos":[{}]}`, "HTTP(S)"},
+			{"media scheme", "seedance2", `{"audios":["file:///tmp/a.wav"]}`, "HTTP(S)"},
+			{"media credentials", "seedance2", `{"images":["https://user:pass@cdn.example/a.png"]}`, "without credentials"},
+			{"media conflict", "seedance2", `{"images":["https://cdn.example/a"],"params":{"referenceImages":["https://cdn.example/b"]}}`, "conflicting"},
+			{"tail only", "seedance2", `{"last_image_url":"https://cdn.example/a"}`, "requires a first"},
+			{"frame conflict", "seedance2", `{"first_image_url":"https://cdn.example/a","params":{"image":"https://cdn.example/b"}}`, "conflicting"},
+			{"mixed frames", "seedance2", `{"first_image_url":"https://cdn.example/a","videos":["https://cdn.example/b"]}`, "cannot be combined"},
+			{"frame ratio", "seedance2", `{"first_image_url":"https://cdn.example/a","ratio":"16:9"}`, "require ratio adaptive"},
+			{"mode without frames", "seedance2", `{"params":{"functionMode":"first_last_frames"}}`, "functionMode conflicts"},
+			{"mode hides frames", "seedance2", `{"first_frame":"https://cdn.example/a","params":{"functionMode":"omni_reference"}}`, "functionMode conflicts"},
+			{"unknown override", "seedance2", `{"params":{"provider":"kling"}}`, "unsupported params parameter"},
+			{"unmeasured input seconds", "seedance2", `{"params":{"referenceVideoDurations":[0]}}`, "unsupported params parameter"},
+			{"metadata type", "seedance2", `{"metadata":null}`, "metadata must be an object"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.input, &input))
+				input["model"], input["prompt"] = "public-video", "cat"
+				_, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "public-video", "upstreamModel": tc.model, "body": map[string]any{"kind": "json", "value": input}})
+				require.ErrorContains(t, callErr, tc.message)
+				for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+					_, callErr = plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": input})
+					require.ErrorContains(t, callErr, tc.message, hook)
+				}
+			})
+		}
+		for _, tc := range []struct {
+			field string
+			count int
+		}{{"images", 10}, {"videos", 4}, {"audios", 4}} {
+			urls := make([]string, tc.count)
+			for i := range urls {
+				urls[i] = "https://cdn.example/media"
+			}
+			for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+				_, callErr := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "seedance2", "requestBody": map[string]any{"prompt": "cat", tc.field: urls}})
+				require.ErrorContains(t, callErr, "at most", tc.field+"/"+hook)
+			}
+		}
+	})
+
+	t.Run("multipart and optional audio preserve JSON semantics", func(t *testing.T) {
+		for _, audio := range []string{"", "true", "false"} {
+			fields := map[string][]string{"model": {"seedance2mini"}, "prompt": {"cat"}, "seconds": {"4"}, "size": {"854x480"}, "n": {"1"}, "images[]": {"https://cdn.example/a.png", "https://cdn.example/a.png"}}
+			if audio != "" {
+				fields["generate_audio"], fields["metadata"] = []string{audio}, []string{`{"generate_audio":` + audio + `}`}
+			}
+			value, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "seedance2mini", "body": map[string]any{"kind": "multipart", "fields": fields}})
+			require.NoError(t, callErr)
+			built, callErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "seedance2mini", "baseUrl": "https://chatcut.example", "authHeader": "Bearer fixture-only-key", "requestBody": value.(map[string]any)["requestBody"]})
+			require.NoError(t, callErr)
+			wire := built.(map[string]any)["body"].(map[string]any)
+			assert.EqualValues(t, 4, wire["seconds"])
+			assert.Equal(t, "480p", wire["resolution"])
+			assert.Equal(t, "16:9", wire["aspect_ratio"])
+			if audio == "" {
+				assert.NotContains(t, wire, "generate_audio")
+			} else {
+				assert.Equal(t, audio == "true", wire["generate_audio"])
+			}
+			assert.Len(t, wire["params"].(map[string]any)["referenceImages"], 2)
+		}
+		for _, input := range []map[string]any{
+			{"prompt": "cat"},
+			{"prompt": "cat", "audios": []string{"https://cdn.example/a.wav"}},
+		} {
+			built, callErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "seedance-2.5", "baseUrl": "https://chatcut.example", "apiKey": "fixture-only-key", "requestBody": input})
+			require.NoError(t, callErr)
+			wire := built.(map[string]any)["body"].(map[string]any)
+			assert.EqualValues(t, 5, wire["seconds"])
+			assert.Equal(t, "720p", wire["resolution"])
+			assert.NotContains(t, wire, "generate_audio")
+			if _, hasAudio := input["audios"]; hasAudio {
+				assert.Equal(t, []any{"https://cdn.example/a.wav"}, wire["params"].(map[string]any)["referenceAudios"])
+			}
+		}
+	})
+
+	t.Run("task lifecycle and private response fields", func(t *testing.T) {
+		for _, tc := range []struct{ body, status string }{
+			{`{"id":"cc_test","status":"queued","progress":0}`, "QUEUED"},
+			{`{"id":"cc_test","status":"in_progress","progress":30}`, "IN_PROGRESS"},
+			{`{"id":"cc_test","status":"completed","url":"https://cdn.example/video.mp4"}`, "SUCCESS"},
+			{`{"id":"cc_test","status":"failed","error":{"message":"quota exhausted"}}`, "FAILURE"},
+			{`{"id":"cc_test","status":"completed"}`, "UNKNOWN"},
+			{`{"id":"cc_test","status":"completed","url":"file:///private.mp4"}`, "UNKNOWN"},
+			{`{"id":"other","status":"completed","url":"https://cdn.example/video.mp4"}`, "UNKNOWN"},
+			{`{"id":"cc_test","status":"invented"}`, "UNKNOWN"},
+			{`{"id":"cc_test","status":"in_progress","error":{"message":"bad"}}`, "UNKNOWN"},
+		} {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.body, &body))
+			parsed, callErr := plugin.Engine.Call(t.Context(), "parseTaskResult", map[string]any{"taskId": "cc_test"}, body)
+			require.NoError(t, callErr)
+			assert.Equal(t, tc.status, parsed.(map[string]any)["status"])
+			if body["id"] == "cc_test" {
+				submit, callErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", map[string]any{}, map[string]any{"statusCode": 200, "body": body})
+				require.NoError(t, callErr)
+				if tc.status == "SUCCESS" || tc.status == "FAILURE" {
+					assert.Equal(t, parsed, submit.(map[string]any)["immediate"])
+				} else {
+					assert.NotContains(t, submit, "immediate")
+				}
+			}
+		}
+		_, callErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", map[string]any{}, map[string]any{"statusCode": 200, "body": map[string]any{"error": "unknown outcome"}})
+		require.ErrorContains(t, callErr, "missing a task id")
+		data := map[string]any{"id": "cc_test", "status": "completed", "url": "https://cdn.example/video.mp4", "elapsed_seconds": 90, "seconds": "5", "chatcut": map[string]any{"account_id": 1, "estimated_cost": 123, "raw": map[string]any{"projectId": "private"}}}
+		task := map[string]any{"status": "SUCCESS", "data": data}
+		rendered, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "render"}, map[string]any{}, task)
+		require.NoError(t, callErr)
+		assert.Equal(t, map[string]any{"url": "https://cdn.example/video.mp4"}, rendered)
+		usage, callErr := plugin.Engine.Call(t.Context(), "extractUsageOnComplete", map[string]any{}, map[string]any{"status": "SUCCESS"}, data)
+		require.NoError(t, callErr)
+		assert.Empty(t, usage)
+		artifacts, callErr := plugin.Engine.Call(t.Context(), "listArtifacts", task)
+		require.NoError(t, callErr)
+		assert.Len(t, artifacts, 1)
+		content, callErr := plugin.Engine.Call(t.Context(), "buildContentRequest", map[string]any{"data": data, "artifactKey": "video", "clientRequest": map[string]any{"method": "HEAD"}})
+		require.NoError(t, callErr)
+		assert.Equal(t, map[string]any{"url": "https://cdn.example/video.mp4", "method": "HEAD", "credentialless": true}, content)
+	})
+}
+
+func TestRecapo2APIVideoPlugin(t *testing.T) {
+	source, err := Source("recapo2api")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "recapo2api"})
+	require.NoError(t, err)
+	call := func(hook string, ctx map[string]any) (map[string]any, error) {
+		value, callErr := plugin.Engine.Call(t.Context(), hook, ctx)
+		if callErr != nil {
+			return nil, callErr
+		}
+		return value.(map[string]any), nil
+	}
+	// Decodes the canvas body after an HTTP JSON round trip, as the host does.
+	decode := func(t *testing.T, raw, upstream string) (map[string]any, error) {
+		var input map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(raw, &input))
+		ctx := map[string]any{"model": input["model"], "upstreamModel": upstream, "body": map[string]any{"kind": "json", "value": input}}
+		value, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, ctx)
+		if callErr != nil {
+			return nil, callErr
+		}
+		repeated, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, ctx)
+		require.NoError(t, callErr)
+		assert.Equal(t, value, repeated)
+		unchanged, marshalErr := common.Marshal(input)
+		require.NoError(t, marshalErr)
+		assert.JSONEq(t, raw, string(unchanged))
+		return value.(map[string]any), nil
+	}
+
+	t.Run("standard requests reach the gateway wire format", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, model, input, wire string
+			refs                     map[string]int
+		}{
+			{"text defaults", "seedance2mini", `{"prompt":"cat","n":1,"metadata":{}}`,
+				`{"model":"seedance2mini","prompt":"cat","seconds":4,"resolution":"720p","aspect_ratio":"16:9","sync":false}`, nil},
+			{"official mixed references", "seedance2fastofficial", `{"prompt":"cat","seconds":15,"size":"854x480","generate_audio":false,"images":["https://cdn.example/i.png","https://cdn.example/i.png"],"videos":["https://cdn.example/v.mp4"],"audios":["https://cdn.example/a.mp3"]}`,
+				`{"model":"seedance2fastofficial","prompt":"cat","seconds":15,"resolution":"480p","aspect_ratio":"16:9","generate_audio":false,"reference_images":["https://cdn.example/i.png","https://cdn.example/i.png"],"reference_videos":["https://cdn.example/v.mp4"],"reference_audios":["https://cdn.example/a.mp3"],"sync":false}`,
+				map[string]int{"image": 2, "video": 1, "audio": 1}},
+			{"2.5 frames", "seedance2.5", `{"prompt":"cat","seconds":30,"resolution":"1080p","ratio":"adaptive","generate_audio":true,"first_image_url":"https://cdn.example/f.png","last_image_url":"https://cdn.example/l.png"}`,
+				`{"model":"seedance2.5","prompt":"cat","seconds":30,"resolution":"1080p","aspect_ratio":"adaptive","generate_audio":true,"first_frame":"https://cdn.example/f.png","last_frame":"https://cdn.example/l.png","sync":false}`,
+				map[string]int{"frame": 2}},
+			{"native aliases", "seedance2", `{"prompt":"cat","duration":"6","aspect_ratio":"9:16","metadata":{"seconds":6},"reference_images":["https://cdn.example/i.png"],"reference_audios":["https://cdn.example/a.mp3"]}`,
+				`{"model":"seedance2","prompt":"cat","seconds":6,"resolution":"720p","aspect_ratio":"9:16","reference_images":["https://cdn.example/i.png"],"reference_audios":["https://cdn.example/a.mp3"],"sync":false}`,
+				map[string]int{"image": 1, "audio": 1}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				intent, decodeErr := decode(t, strings.Replace(tc.input, "{", `{"model":"public-video",`, 1), tc.model)
+				require.NoError(t, decodeErr)
+				assert.Equal(t, "public-video", intent["model"])
+				ctx := map[string]any{"model": "public-video", "upstreamModel": tc.model, "baseUrl": "http://recapo.example:8794/", "apiKey": "fixture-only-key", "publicTaskId": "task_public", "requestBody": intent["requestBody"]}
+				built, callErr := call("buildSubmitRequest", ctx)
+				require.NoError(t, callErr)
+				assert.Equal(t, "http://recapo.example:8794/v1/videos", built["url"])
+				assert.Equal(t, map[string]any{"Authorization": "Bearer fixture-only-key", "Content-Type": "application/json", "Idempotency-Key": "task_public"}, built["headers"])
+				wire, marshalErr := common.Marshal(built["body"])
+				require.NoError(t, marshalErr)
+				assert.JSONEq(t, tc.wire, string(wire))
+				var body map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.wire, &body))
+				usage, callErr := call("extractUsage", ctx)
+				require.NoError(t, callErr)
+				assert.EqualValues(t, body["seconds"], usage["seconds"])
+				assert.Equal(t, body["resolution"], usage["resolution"])
+				value, callErr := call("describeSpec", ctx)
+				require.NoError(t, callErr)
+				got, _, parseErr := spec.Parse(value)
+				require.NoError(t, parseErr)
+				want := map[string]int{"image": 0, "video": 0, "audio": 0, "frame": 0}
+				maps.Copy(want, tc.refs)
+				assert.Equal(t, want, got.References)
+				assert.Equal(t, body["resolution"], got.Tier)
+				assert.Len(t, got.ReferenceVideoURLs, want["video"])
+			})
+		}
+	})
+
+	t.Run("Recapo prompt limit includes generated reference prefixes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, prompt string
+			fields       map[string]any
+		}{
+			{"Chinese", strings.Repeat("中", 5000), nil},
+			{"Unicode", strings.Repeat("😀", 5000), nil},
+			{"implicit image", strings.Repeat("中", 4991), map[string]any{"images": []string{"https://cdn.example/i"}}},
+			{"explicit image", "@图1 " + strings.Repeat("中", 4996), map[string]any{"images": []string{"https://cdn.example/i"}}},
+			{"frames", strings.Repeat("中", 4987), map[string]any{"image": "https://cdn.example/f", "image_tail": "https://cdn.example/l"}},
+			{"mixed references", strings.Repeat("中", 4981), map[string]any{"images": []string{"https://cdn.example/i"}, "videos": []string{"https://cdn.example/v"}, "audios": []string{"https://cdn.example/a"}}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, over := range []bool{false, true} {
+					prompt := tc.prompt
+					if over {
+						prompt += "中"
+					}
+					input := map[string]any{"model": "public-video", "prompt": "  " + prompt + "  "}
+					maps.Copy(input, tc.fields)
+					raw, marshalErr := common.Marshal(input)
+					require.NoError(t, marshalErr)
+					// Initial candidate filtering runs before model mapping.
+					_, decodeErr := decode(t, string(raw), "")
+					if over {
+						require.ErrorContains(t, decodeErr, "5000")
+					} else {
+						require.NoError(t, decodeErr)
+					}
+					ctx := map[string]any{"model": "public-video", "upstreamModel": "seedance2fastofficial", "baseUrl": "https://recapo.example", "apiKey": "fixture-only-key", "requestBody": input}
+					for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+						result, callErr := call(hook, ctx)
+						if over {
+							require.ErrorContains(t, callErr, "5000", hook)
+						} else {
+							require.NoError(t, callErr, hook)
+							if hook == "buildSubmitRequest" {
+								require.Equal(t, prompt, result["body"].(map[string]any)["prompt"])
+							}
+						}
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("unsupported capabilities are rejected before scheduling", func(t *testing.T) {
+		for _, tc := range []struct{ name, model, input, message string }{
+			{"mini video reference", "seedance2mini", `{"images":["https://cdn.example/i"],"videos":["https://cdn.example/v"]}`, "use seedance2fastofficial"},
+			{"unverified special video", "seedance2.5", `{"videos":["https://cdn.example/v"]}`, "does not accept reference videos"},
+			{"mini 1080p", "seedance2mini", `{"resolution":"1080p"}`, "supports only 720p"},
+			{"official 1080p", "seedance2fastofficial", `{"size":"1920x1080"}`, "supports only 480p, 720p"},
+			{"special 480p", "seedance2", `{"resolution":"480p"}`, "supports only"},
+			{"2.0 cap", "seedance2", `{"seconds":16}`, "between 4 and 15"},
+			{"2.5 cap", "seedance2.5", `{"seconds":31}`, "integer between"},
+			{"fraction", "seedance2", `{"seconds":4.5}`, "integer between"},
+			{"overflow", "seedance2", `{"metadata":{"duration":18446744073686646784}}`, "integer between"},
+			{"reference total", "seedance2", `{"images":["https://cdn.example/1","https://cdn.example/2","https://cdn.example/3","https://cdn.example/4","https://cdn.example/5","https://cdn.example/6","https://cdn.example/7","https://cdn.example/8","https://cdn.example/9","https://cdn.example/10"]}`, "at most 9 reference"},
+			{"audio only", "seedance2", `{"audios":["https://cdn.example/a.mp3"]}`, "require an image or video"},
+			{"mixed frames", "seedance2", `{"first_frame":"https://cdn.example/f","images":["https://cdn.example/i"]}`, "cannot be combined"},
+			{"tail only", "seedance2", `{"image_tail":"https://cdn.example/l"}`, "requires a first"},
+			{"batch", "seedance2", `{"n":2}`, "n must be 1"},
+			{"audio string", "seedance2", `{"generate_audio":"false"}`, "boolean"},
+			{"audio null", "seedance2", `{"generate_audio":null}`, "boolean"},
+			{"audio conflict", "seedance2", `{"generate_audio":false,"metadata":{"generate_audio":true}}`, "conflicting"},
+			{"media credentials", "seedance2", `{"images":["https://user:pass@cdn.example/i"]}`, "without credentials"},
+			{"size conflict", "seedance2", `{"size":"1280x720","ratio":"9:16"}`, "conflicts"},
+			{"gateway forbids params", "seedance2", `{"params":{"resolution":"720p"}}`, "unsupported video parameter"},
+			{"unknown metadata", "seedance2", `{"metadata":{"provider":"x"}}`, "unsupported metadata parameter"},
+			{"unmapped model", "seedance-2-5", `{"seconds":4}`, "unsupported Recapo2API model"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, decodeErr := decode(t, strings.Replace(tc.input, "{", `{"model":"public-video","prompt":"cat",`, 1), tc.model)
+				require.ErrorContains(t, decodeErr, tc.message)
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.input, &input))
+				input["prompt"] = "cat"
+				for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+					_, callErr := call(hook, map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": input})
+					require.ErrorContains(t, callErr, tc.message, hook)
+				}
+			})
+		}
+	})
+
+	t.Run("task lifecycle keeps the gateway content endpoint private", func(t *testing.T) {
+		for _, tc := range []struct{ body, status string }{
+			{`{"id":"video-1","status":"queued","progress":0}`, "QUEUED"},
+			{`{"id":"video-1","status":"in_progress","recapo":{"state":"submission_unknown"}}`, "IN_PROGRESS"},
+			{`{"id":"video-1","status":"completed","url":"http://recapo.example:8794/v1/videos/video-1/content"}`, "SUCCESS"},
+			{`{"id":"video-1","status":"failed","error":{"code":"upstream_failed","message":"LTS_FAILED"}}`, "FAILURE"},
+			{`{"id":"other","status":"completed"}`, "UNKNOWN"},
+			{`{"id":"video-1","status":"submission_unknown"}`, "UNKNOWN"},
+			{`{"id":"video-1","status":"in_progress","error":{"message":"bad"}}`, "UNKNOWN"},
+		} {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.body, &body))
+			parsed, callErr := plugin.Engine.Call(t.Context(), "parseTaskResult", map[string]any{"taskId": "video-1"}, body)
+			require.NoError(t, callErr)
+			assert.Equal(t, tc.status, parsed.(map[string]any)["status"], tc.body)
+		}
+		data := map[string]any{"id": "video-1", "status": "completed", "url": "http://recapo.example:8794/v1/videos/video-1/content", "recapo": map[string]any{"execution_id": "private", "points_cost": 164}}
+		task := map[string]any{"status": "SUCCESS", "data": data}
+		rendered, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "render"}, map[string]any{}, task)
+		require.NoError(t, callErr)
+		assert.Empty(t, rendered)
+		usage, callErr := plugin.Engine.Call(t.Context(), "extractUsageOnComplete", map[string]any{}, map[string]any{"status": "SUCCESS"}, data)
+		require.NoError(t, callErr)
+		assert.Empty(t, usage)
+		artifacts, callErr := plugin.Engine.Call(t.Context(), "listArtifacts", task)
+		require.NoError(t, callErr)
+		assert.Len(t, artifacts, 1)
+		query, callErr := call("buildQueryRequest", map[string]any{"taskId": "video-1", "baseUrl": "http://recapo.example:8794", "authHeader": "Bearer fixture-only-key"})
+		require.NoError(t, callErr)
+		assert.Equal(t, "http://recapo.example:8794/v1/videos/video-1", query["url"])
+		content, callErr := call("buildContentRequest", map[string]any{"data": data, "artifactKey": "video", "upstreamTaskId": "video-1", "baseUrl": "http://recapo.example:8794", "apiKey": "fixture-only-key", "clientRequest": map[string]any{"method": "GET"}})
+		require.NoError(t, callErr)
+		assert.Equal(t, map[string]any{"url": "http://recapo.example:8794/v1/videos/video-1/content", "method": "GET", "headers": map[string]any{"Authorization": "Bearer fixture-only-key"}}, content)
+		_, callErr = call("buildContentRequest", map[string]any{"data": map[string]any{"id": "video-1", "status": "in_progress"}, "artifactKey": "video", "upstreamTaskId": "video-1", "baseUrl": "http://recapo.example:8794", "apiKey": "fixture-only-key", "clientRequest": map[string]any{"method": "GET"}})
+		require.ErrorContains(t, callErr, "artifact_not_found")
+	})
+}
+
+func TestAK2APIVideoPlugin(t *testing.T) {
+	source, err := Source("ak2api")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "ak2api"})
+	require.NoError(t, err)
+	for _, model := range plugin.Meta.Models {
+		binding, ok := registry.Generation().LookupEndpoint("POST", "/v1/videos", model)
+		require.True(t, ok, model)
+		assert.Same(t, plugin, binding.Plugin)
+	}
+	for _, tc := range []struct {
+		model      string
+		aliases    []string
+		tiers      []string
+		maxSeconds int
+		images     int
+		videos     int
+	}{
+		{"doubao-seedance-2-0-mini-260615", []string{"ak2api-seedance-2.0-mini", "seedance-2.0-mini"}, []string{"480p", "720p"}, 15, 9, 3},
+		{"doubao-seedance-2-0-fast-260128", []string{"ak2api-seedance-2.0-fast", "seedance-2.0-fast", "sd-2-0-fast"}, []string{"480p", "720p"}, 15, 9, 3},
+		{"doubao-seedance-2-0-260128", []string{"ak2api-seedance-2.0", "seedance-2.0", "sd-2-0"}, []string{"480p", "720p", "1080p", "4k"}, 15, 9, 3},
+		{"doubao-seedance-2-5", []string{"ak2api-seedance-2.5", "seedance-2.5"}, []string{"480p", "720p", "1080p"}, 30, 30, 10},
+		{"wan-3.0", []string{"ak2api-wan-3.0", "wan3.0", "alibaba/wan-3.0", "alibaba/wan-3.0/image-to-video"}, []string{"480p", "720p", "1080p"}, 30, 9, 3},
+		{"minimax-h3", []string{"ak2api-minimax-h3", "minimax/h3", "minimax/h3/reference-to-video"}, []string{"768p", "2k"}, 15, 9, 3},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			for _, model := range append([]string{tc.model}, tc.aliases...) {
+				value, callErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+					"model": "public-video", "upstreamModel": model, "baseUrl": "https://ak.example/", "apiKey": "fixture-only-key", "requestBody": map[string]any{"prompt": "cat"},
+				})
+				require.NoError(t, callErr)
+				wire := value.(map[string]any)["body"].(map[string]any)
+				assert.Equal(t, tc.model, wire["model"])
+				assert.Equal(t, tc.tiers[0], wire["resolution"])
+				assert.Equal(t, "adaptive", wire["aspect_ratio"])
+				assert.NotContains(t, wire, "generate_audio")
+			}
+			for _, tier := range tc.tiers {
+				for _, seconds := range []int{4, tc.maxSeconds} {
+					t.Run(fmt.Sprintf("%s/%ds", tier, seconds), func(t *testing.T) {
+						input := map[string]any{"model": "public-video", "prompt": "cat", "seconds": fmt.Sprint(seconds), "duration": seconds, "resolution": tier, "n": 1, "generate_audio": false}
+						for field, count := range map[string]int{"images": tc.images, "videos": tc.videos, "audios": tc.videos} {
+							urls := make([]string, count)
+							for i := range urls {
+								urls[i] = fmt.Sprintf("https://cdn.example/%s/%d", field, i)
+							}
+							input[field] = urls
+						}
+						before, marshalErr := common.Marshal(input)
+						require.NoError(t, marshalErr)
+						// Reparse as actual HTTP JSON numbers, not only Go integer fixtures.
+						require.NoError(t, common.Unmarshal(before, &input))
+						decodeCtx := map[string]any{"model": "public-video", "body": map[string]any{"kind": "json", "value": input}}
+						decoded, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, decodeCtx)
+						require.NoError(t, decodeErr)
+						repeated, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, decodeCtx)
+						require.NoError(t, decodeErr)
+						assert.Equal(t, decoded, repeated)
+						after, marshalErr := common.Marshal(input)
+						require.NoError(t, marshalErr)
+						assert.JSONEq(t, string(before), string(after))
+						intent := decoded.(map[string]any)
+						assert.Equal(t, "public-video", intent["model"])
+						assert.Equal(t, "reference_to_video", intent["action"])
+						ctx := map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": intent["requestBody"], "baseUrl": "https://ak.example/", "apiKey": "fixture-only-key"}
+						built, buildErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+						require.NoError(t, buildErr)
+						request := built.(map[string]any)
+						wire := request["body"].(map[string]any)
+						assert.Equal(t, "https://ak.example/v1/videos", request["url"])
+						assert.NotContains(t, request, "model")
+						assert.Equal(t, tc.model, wire["model"])
+						assert.Equal(t, tier, wire["resolution"])
+						assert.EqualValues(t, seconds, wire["duration"])
+						assert.Equal(t, false, wire["generate_audio"])
+						assert.Len(t, wire["image_urls"], tc.images)
+						assert.Len(t, wire["video_urls"], tc.videos)
+						assert.Len(t, wire["audio_urls"], tc.videos)
+						usage, usageErr := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+						require.NoError(t, usageErr)
+						facts := usage.(map[string]any)
+						assert.EqualValues(t, seconds, facts["seconds"])
+						assert.Equal(t, tier, facts["resolution"])
+						assert.Equal(t, true, facts["video_input"])
+						assert.Equal(t, false, facts["generate_audio"])
+						_, usageErr = plugin.Meta.ValidateUsageFacts(facts, tc.model)
+						require.NoError(t, usageErr)
+						value, specErr := plugin.Engine.Call(t.Context(), "describeSpec", ctx)
+						require.NoError(t, specErr)
+						got, ignored, specErr := spec.Parse(value.(map[string]any))
+						require.NoError(t, specErr)
+						assert.Empty(t, ignored)
+						assert.EqualValues(t, seconds, *got.OutputSeconds)
+						assert.Equal(t, tier, got.Tier)
+						assert.Equal(t, map[string]int{"image": tc.images, "video": tc.videos, "audio": tc.videos, "frame": 0}, got.References)
+						assert.Len(t, got.ReferenceVideoURLs, tc.videos)
+					})
+				}
+			}
+			invalid := []map[string]any{{"duration": tc.maxSeconds + 1}, {"resolution": "999p"}}
+			for field, count := range map[string]int{"images": tc.images, "videos": tc.videos, "audios": tc.videos} {
+				urls := make([]string, count+1)
+				for i := range urls {
+					urls[i] = fmt.Sprintf("https://cdn.example/%d", i)
+				}
+				invalid = append(invalid, map[string]any{field: urls})
+			}
+			for _, fields := range invalid {
+				fields["prompt"] = "cat"
+				ctx := map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": fields, "baseUrl": "https://ak.example", "apiKey": "fixture-only-key"}
+				for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+					_, callErr := plugin.Engine.Call(t.Context(), hook, ctx)
+					require.Error(t, callErr, "%s: %v", hook, fields)
+				}
+			}
+		})
+	}
+	t.Run("invalid canvas inputs and override paths", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, model, fields, message string
+		}{
+			{"zero", "seedance-2.5", `{"seconds":0}`, "integer between"},
+			{"fraction", "seedance-2.5", `{"duration":4.5}`, "integer between"},
+			{"overflow", "seedance-2.5", `{"duration":18446744073686646784}`, "integer between"},
+			{"duration conflict", "seedance-2.5", `{"seconds":4,"metadata":{"duration":5}}`, "conflicting"},
+			{"multiple output", "seedance-2.5", `{"n":2}`, "n must be 1"},
+			{"string output", "seedance-2.5", `{"n":"1"}`, "n must be 1"},
+			{"null audio", "seedance-2.5", `{"generate_audio":null}`, "boolean"},
+			{"numeric audio", "seedance-2.5", `{"generate_audio":0}`, "boolean"},
+			{"string audio", "seedance-2.5", `{"generate_audio":"false"}`, "boolean"},
+			{"audio conflict", "seedance-2.5", `{"generate_audio":false,"metadata":{"generate_audio":true}}`, "conflicting"},
+			{"bad metadata", "seedance-2.5", `{"metadata":null}`, "metadata must be an object"},
+			{"metadata bypass", "seedance-2.5", `{"metadata":{"n":2}}`, "unsupported metadata"},
+			{"reference conflict", "seedance-2.5", `{"images":["https://cdn.example/1"],"image_urls":["https://cdn.example/2"]}`, "conflicting"},
+			{"content conflict", "seedance-2.5", `{"images":["https://cdn.example/1"],"metadata":{"content":[{"type":"image_url","image_url":{"url":"https://cdn.example/2"}}]}}`, "conflicting"},
+			{"bad URL", "seedance-2.5", `{"videos":["file:///v.mp4"]}`, "HTTP(S)"},
+			{"credential URL", "seedance-2.5", `{"videos":["https://user:pass@cdn.example/v"]}`, "HTTP(S)"},
+			{"bad media type", "seedance-2.5", `{"audios":[{}]}`, "HTTP(S)"},
+			{"scalar images", "seedance-2.5", `{"images":"https://cdn.example/i"}`, "array"},
+			{"first frame", "seedance-2.5", `{"first_image_url":"https://cdn.example/i"}`, "unsupported video parameter"},
+			{"last frame", "seedance-2.5", `{"last_image_url":"https://cdn.example/i"}`, "unsupported video parameter"},
+			{"content frame", "seedance-2.5", `{"metadata":{"content":[{"type":"image_url","role":"first_frame","image_url":{"url":"https://cdn.example/i"}}]}}`, "unsupported content role"},
+			{"size conflict", "seedance-2.5", `{"size":"1280x720","resolution":"480p"}`, "size conflicts"},
+			{"ratio conflict", "seedance-2.5", `{"size":"1280x720","ratio":"9:16"}`, "size conflicts"},
+			{"unsupported ratio", "seedance-2.5", `{"ratio":"9:21"}`, "unsupported aspect"},
+			{"unknown option", "seedance-2.5", `{"upstream_model":"bypass"}`, "unsupported video"},
+			{"H3 audio", "ak2api-minimax-h3", `{"generate_audio":true}`, "does not support"},
+			{"H3 all in one", "ak2api-minimax-h3", `{"all_in_one_reference":true}`, "does not support"},
+			{"H3 wrong tier", "ak2api-minimax-h3", `{"resolution":"720p"}`, "supports only"},
+			{"Mini wrong tier", "seedance-2.0-mini", `{"resolution":"1080p"}`, "supports only"},
+			{"Wan search", "wan-3.0", `{"web_search":true}`, "does not support"},
+			{"Wan extend", "wan-3.0", `{"video_extend":true}`, "does not support"},
+			{"unknown mapped model", "missing", `{}`, "unsupported AK2API model"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var input map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(tc.fields, &input))
+				input["prompt"], input["model"] = "cat", "public-video"
+				_, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+					"model": "public-video", "upstreamModel": tc.model, "body": map[string]any{"kind": "json", "value": input},
+				})
+				require.ErrorContains(t, decodeErr, tc.message)
+				for _, hook := range []string{"buildSubmitRequest", "extractUsage", "describeSpec"} {
+					_, callErr := plugin.Engine.Call(t.Context(), hook, map[string]any{"model": "public-video", "upstreamModel": tc.model, "requestBody": input, "baseUrl": "https://ak.example", "apiKey": "fixture-only-key"})
+					require.ErrorContains(t, callErr, tc.message)
+				}
+			})
+		}
+	})
+	report, err := jsplugin.ReplayFixture(t.Context(), source, []byte(`{"cases":[
+		{"name":"canvas mirrors and deduplication","hook":"buildSubmitRequest","args":[{"model":"public","upstreamModel":"seedance-2.5","baseUrl":"https://ak.example/","apiKey":"fixture-only-key","requestBody":{"prompt":"cat","seconds":"30","resolution":"720P","ratio":"16:9","generate_audio":false,"n":1,"images":["https://cdn.example/i"],"videos":["https://cdn.example/v","https://cdn.example/v"],"audios":["https://cdn.example/a"],"metadata":{"duration":30,"resolution":"720p","generate_audio":false,"content":[{"type":"image_url","role":"reference_image","image_url":{"url":"https://cdn.example/i"}},{"type":"video_url","video_url":{"url":"https://cdn.example/v"}},{"type":"video_url","video_url":{"url":"https://cdn.example/v"}},{"type":"audio_url","audio_url":{"url":"https://cdn.example/a"}}]}}}],"expected":{"url":"https://ak.example/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json"},"body":{"model":"doubao-seedance-2-5","prompt":"cat","duration":30,"resolution":"720p","aspect_ratio":"16:9","generate_audio":false,"image_urls":["https://cdn.example/i"],"video_urls":["https://cdn.example/v"],"audio_urls":["https://cdn.example/a"]}}},
+		{"name":"deduplicated references are quoted once","hook":"describeSpec","args":[{"model":"seedance-2.5","requestBody":{"prompt":"cat","videos":["https://cdn.example/v","https://cdn.example/v"]}}],"expected":{"spec_version":3,"output_seconds":4,"seconds_kind":"exact","resolution":"480p","references":{"image":0,"video":1,"audio":0,"frame":0},"reference_video_urls":["https://cdn.example/v"]}},
+		{"name":"audio on and provider options","hook":"buildSubmitRequest","args":[{"model":"seedance-2.0","baseUrl":"https://ak.example","authHeader":"Bearer fixture-only-key","requestBody":{"prompt":"cat","size":"3840x2160","generate_audio":true,"web_search":false,"all_in_one_reference":false,"negative_prompt":"blur"}}],"expected":{"url":"https://ak.example/v1/videos","method":"POST","headers":{"Authorization":"Bearer fixture-only-key","Content-Type":"application/json"},"body":{"model":"doubao-seedance-2-0-260128","prompt":"cat","duration":4,"resolution":"4k","aspect_ratio":"16:9","generate_audio":true,"web_search":false,"all_in_one_reference":false,"negative_prompt":"blur"}}},
+		{"name":"H3 default usage","hook":"extractUsage","args":[{"model":"ak2api-minimax-h3","requestBody":{"prompt":"cat"}}],"expected":{"seconds":4,"resolution":"768p","video_input":false,"generate_audio":false}},
+		{"name":"Seedance default audio usage","hook":"extractUsage","args":[{"model":"seedance-2.0","requestBody":{"prompt":"cat"}}],"expected":{"seconds":4,"resolution":"480p","video_input":false,"generate_audio":true}},
+		{"name":"multipart canvas","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"model":"seedance-2.5","body":{"kind":"multipart","fields":{"model":["seedance-2.5"],"prompt":["cat"],"seconds":["30"],"generate_audio":["false"],"n":["1"],"videos[]":["https://cdn.example/v","https://cdn.example/v"],"metadata":["{\"resolution\":\"720p\",\"generate_audio\":false}"]},"files":[]}}],"expected":{"kind":"submit","model":"seedance-2.5","action":"reference_to_video","requestBody":{"prompt":"cat","duration":30,"aspect_ratio":"adaptive","resolution":"720p","generate_audio":false,"video_urls":["https://cdn.example/v"]}}},
+		{"name":"uploaded files rejected","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"body":{"kind":"multipart","fields":{},"files":[{"ref":"request_file:input_reference"}]}}],"expectedError":"local file uploads are unsupported"},
+		{"name":"multipart scalar duplication","hook":"protocols","path":["openai_video","decodeRequest"],"args":[{"body":{"kind":"multipart","fields":{"seconds":["4","30"]}}}],"expectedError":"must be provided once"},
+		{"name":"query URL encoding","hook":"buildQueryRequest","args":[{"taskId":"ak/a?b","baseUrl":"https://ak.example/","apiKey":"fixture-only-key"}],"expected":{"url":"https://ak.example/v1/videos/ak%2Fa%3Fb","method":"GET","headers":{"Authorization":"Bearer fixture-only-key"}}},
+		{"name":"queued submit","hook":"parseSubmitResponse","args":[{},{"body":{"id":"ak_test","status":"queued","progress":0,"data":[]}}],"expected":{"taskId":"ak_test","taskData":{"id":"ak_test","status":"queued","progress":0,"data":[]}}},
+		{"name":"ambiguous submission is not a rejection","hook":"parseSubmitResponse","args":[{},{"body":{"detail":"retry later"}}],"expectedError":"missing a task id"},
+		{"name":"accepted immediate failure","hook":"parseSubmitResponse","args":[{},{"body":{"id":"ak_test","status":"failed","error":{"code":"CONTENT_MODERATION_FAILED","message":"内容违规"}}}],"expected":{"taskId":"ak_test","taskData":{"id":"ak_test","status":"failed","error":{"code":"CONTENT_MODERATION_FAILED","message":"内容违规"}},"immediate":{"status":"FAILURE","reason":"CONTENT_MODERATION_FAILED: 内容违规"}}},
+		{"name":"immediate success","hook":"parseSubmitResponse","args":[{},{"body":{"id":"ak_test","status":"succeeded","data":[{"url":"https://cdn.example/v.mp4"}]}}],"expected":{"taskId":"ak_test","taskData":{"id":"ak_test","status":"succeeded","data":[{"url":"https://cdn.example/v.mp4"}]},"immediate":{"status":"SUCCESS","progress":"100%"}}},
+		{"name":"queued progress zero","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"queued","progress":0}],"expected":{"status":"QUEUED","progress":"0%"}},
+		{"name":"preparing","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"preparing","progress":5}],"expected":{"status":"IN_PROGRESS","progress":"5%"}},
+		{"name":"submitted","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"submitted","progress":30}],"expected":{"status":"SUBMITTED","progress":"30%"}},
+		{"name":"running","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"running","progress":40}],"expected":{"status":"IN_PROGRESS","progress":"40%"}},
+		{"name":"invalid progress ignored","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"running","progress":101}],"expected":{"status":"IN_PROGRESS"}},
+		{"name":"expired","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"expired"}],"expected":{"status":"FAILURE","reason":"UPSTREAM_TIMEOUT: video generation failed"}},
+		{"name":"unknown status","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"waiting"}],"expected":{"status":"UNKNOWN","reason":"unrecognized task status or missing video URL"}},
+		{"name":"wrong task","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"other","status":"running"}],"expected":{"status":"UNKNOWN","reason":"invalid or mismatched AK2API task id"}},
+		{"name":"missing artifact is not success","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"succeeded","data":[]}],"expected":{"status":"UNKNOWN","reason":"unrecognized task status or missing video URL"}},
+		{"name":"contradictory status","hook":"parseTaskResult","args":[{"taskId":"ak_test"},{"id":"ak_test","status":"running","error":{"message":"bad"}}],"expected":{"status":"UNKNOWN","reason":"conflicting AK2API task response"}},
+		{"name":"moderation attribution","hook":"classifyFailure","args":["CONTENT_MODERATION_FAILED: localized"],"expected":"user"},
+		{"name":"media attribution","hook":"classifyFailure","args":["MEDIA_DOWNLOAD_FAILED: localized"],"expected":"user"},
+		{"name":"provider invalid request remains upstream","hook":"classifyFailure","args":["PROVIDER_INVALID_REQUEST: localized"],"expected":"upstream"},
+		{"name":"timeout code wins over message","hook":"classifyFailure","args":["UPSTREAM_TIMEOUT: 内容违规"],"expected":"upstream"},
+		{"name":"cost and elapsed time are not usage","hook":"extractUsageOnComplete","args":[{},{"status":"SUCCESS"},{"created":100,"updated":500,"actual_cost":999999,"duration":0}],"expected":{}},
+		{"name":"credentialless content","hook":"buildContentRequest","args":[{"artifactKey":"video","apiKey":"fixture-only-key","clientRequest":{"method":"HEAD","headers":{"Authorization":"client-secret"}},"data":{"status":"succeeded","data":[{"url":"https://cdn.example/v.mp4?sig=fixture%2Bvalue"}]}}],"expected":{"url":"https://cdn.example/v.mp4?sig=fixture%2Bvalue","method":"HEAD","credentialless":true}},
+		{"name":"credential URL rejected","hook":"buildContentRequest","args":[{"artifactKey":"video","data":{"status":"succeeded","data":[{"url":"https://user:pass@cdn.example/v"}]}}],"expectedError":"artifact_not_found"},
+		{"name":"no unfinished artifacts","hook":"listArtifacts","args":[{"status":"IN_PROGRESS","data":{"status":"succeeded","data":[{"url":"https://cdn.example/v"}]}}],"expected":[]},
+		{"name":"video artifact","hook":"listArtifacts","args":[{"status":"SUCCESS","data":{"status":"succeeded","data":[{"url":"https://cdn.example/v"}]}}],"expected":[{"key":"video","type":"video","mimeType":"video/mp4"}]},
+		{"name":"renderer excludes provider fields","hook":"protocols","path":["openai_video","render"],"args":[{},{"status":"SUCCESS","data":{"id":"ak_private","account_id":42,"status":"succeeded","data":[{"url":"https://cdn.example/v"}]}}],"expected":{"url":"https://cdn.example/v"}}
+	]}`))
+	require.NoError(t, err)
+	assert.Equal(t, report.Total, report.Passed)
 }
 
 func TestIJM2APIVideoPlugin(t *testing.T) {
@@ -714,104 +1959,126 @@ func TestIJM2APIVideoPlugin(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Real local HTTP transport with a simulated IJM2API response, without paid work.
-func TestIJM2APIHTTPRoundTrip(t *testing.T) {
-	var requests []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.Method+" "+r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/videos":
-			assert.Equal(t, "POST", r.Method)
-			assert.Equal(t, "Bearer fixture-only-key", r.Header.Get("Authorization"))
-			var body map[string]any
-			if !assert.NoError(t, common.DecodeJson(r.Body, &body)) {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			assert.Equal(t, "sd-2-5-480p", body["model"])
-			assert.Equal(t, "480p", body["resolution"])
-			assert.EqualValues(t, 30, body["duration"])
-			assert.Equal(t, false, body["generate_audio"])
-			assert.Equal(t, "https://cdn.example/first.png", body["first_frame_url"])
-			assert.Equal(t, "https://cdn.example/last.png", body["last_frame_url"])
-			assert.NotContains(t, body, "first_image_url")
-			assert.NotContains(t, body, "last_image_url")
-			w.WriteHeader(http.StatusAccepted)
-			_, _ = io.WriteString(w, `{"id":"ijm_http","status":"queued","data":[]}`)
-		case "/v1/videos/ijm_http":
-			assert.Equal(t, "GET", r.Method)
-			assert.Equal(t, "Bearer fixture-only-key", r.Header.Get("Authorization"))
-			_, _ = fmt.Fprintf(w, `{"id":"ijm_http","status":"succeeded","data":[{"url":"http://%s/media.mp4"}],"account_id":42}`, r.Host)
-		case "/media.mp4":
-			assert.Empty(t, r.Header.Get("Authorization"))
-			w.Header().Set("Content-Type", "video/mp4")
-			_, _ = io.WriteString(w, "synthetic-video-bytes")
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	source, err := Source("ijm2api")
-	require.NoError(t, err)
-	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "ijm2api"})
-	require.NoError(t, err)
-	decoded, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
-		"model": "public-video", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "public-video", "prompt": "test", "seconds": 30, "resolution": "480p", "generate_audio": false,
-			"first_image_url": "https://cdn.example/first.png", "last_image_url": "https://cdn.example/last.png"}},
-	})
-	require.NoError(t, err)
-	ctx := map[string]any{"model": "public-video", "upstreamModel": "seedance-2.5", "baseUrl": server.URL, "apiKey": "fixture-only-key", "requestBody": decoded.(map[string]any)["requestBody"]}
-	var data map[string]any
-	for _, stage := range []string{"submit", "query", "content"} {
-		hook := map[string]string{"submit": "buildSubmitRequest", "query": "buildQueryRequest", "content": "buildContentRequest"}[stage]
-		value, callErr := plugin.Engine.Call(t.Context(), hook, ctx)
-		require.NoError(t, callErr)
-		encoded, marshalErr := common.Marshal(value)
-		require.NoError(t, marshalErr)
-		var descriptor struct {
-			URL            string            `json:"url"`
-			Method         string            `json:"method"`
-			Headers        map[string]string `json:"headers"`
-			Body           map[string]any    `json:"body"`
-			Credentialless bool              `json:"credentialless"`
-		}
-		require.NoError(t, common.Unmarshal(encoded, &descriptor))
-		var body []byte
-		if descriptor.Body != nil {
-			body, err = common.Marshal(descriptor.Body)
+// Real local HTTP transport with simulated relay responses, without paid work.
+func TestVideoRelayHTTPRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		key, wireModel string
+		input, media   map[string]any
+	}{
+		{"ijm2api", "sd-2-5-480p", map[string]any{"first_image_url": "https://cdn.example/first.png", "last_image_url": "https://cdn.example/last.png"}, map[string]any{"first_frame_url": "https://cdn.example/first.png", "last_frame_url": "https://cdn.example/last.png"}},
+		{"ak2api", "doubao-seedance-2-5", map[string]any{"images": []string{"https://cdn.example/image.png"}, "videos": []string{"https://cdn.example/video.mp4"}, "audios": []string{"https://cdn.example/audio.mp3"}}, map[string]any{"image_urls": []any{"https://cdn.example/image.png"}, "video_urls": []any{"https://cdn.example/video.mp4"}, "audio_urls": []any{"https://cdn.example/audio.mp3"}}},
+		{"chatcut2api", "seedance-2-5", map[string]any{"images": []string{"https://cdn.example/image.png"}, "videos": []string{"https://cdn.example/video.mp4"}, "audios": []string{"https://cdn.example/audio.mp3"}}, map[string]any{"params": map[string]any{"functionMode": "omni_reference", "referenceImages": []any{"https://cdn.example/image.png"}, "referenceVideos": []any{"https://cdn.example/video.mp4"}, "referenceAudios": []any{"https://cdn.example/audio.mp3"}}}},
+		{"chatcut2api", "seedance-2-5", map[string]any{"first_image_url": "https://cdn.example/first.png", "last_image_url": "https://cdn.example/last.png"}, map[string]any{"params": map[string]any{"functionMode": "first_last_frames", "image": "https://cdn.example/first.png", "imageTail": "https://cdn.example/last.png"}}},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			var requests []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests = append(requests, r.Method+" "+r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/v1/videos":
+					assert.Equal(t, "POST", r.Method)
+					assert.Equal(t, "Bearer fixture-only-key", r.Header.Get("Authorization"))
+					var body map[string]any
+					if !assert.NoError(t, common.DecodeJson(r.Body, &body)) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					assert.Equal(t, tc.wireModel, body["model"])
+					assert.Equal(t, "480p", body["resolution"])
+					durationField := "duration"
+					if tc.key == "chatcut2api" {
+						durationField = "seconds"
+					}
+					assert.EqualValues(t, 30, body[durationField])
+					assert.Equal(t, false, body["generate_audio"])
+					for field, expected := range tc.media {
+						assert.Equal(t, expected, body[field], field)
+					}
+					assert.NotContains(t, body, "first_image_url")
+					assert.NotContains(t, body, "last_image_url")
+					w.WriteHeader(http.StatusAccepted)
+					_, _ = io.WriteString(w, `{"id":"ijm_http","status":"queued","data":[]}`)
+				case "/v1/videos/ijm_http":
+					assert.Equal(t, "GET", r.Method)
+					assert.Equal(t, "Bearer fixture-only-key", r.Header.Get("Authorization"))
+					if tc.key == "chatcut2api" {
+						_, _ = fmt.Fprintf(w, `{"id":"ijm_http","status":"completed","url":"http://%s/media.mp4","chatcut":{"account_id":42}}`, r.Host)
+					} else {
+						_, _ = fmt.Fprintf(w, `{"id":"ijm_http","status":"succeeded","data":[{"url":"http://%s/media.mp4"}],"account_id":42}`, r.Host)
+					}
+				case "/media.mp4":
+					assert.Empty(t, r.Header.Get("Authorization"))
+					w.Header().Set("Content-Type", "video/mp4")
+					_, _ = io.WriteString(w, "synthetic-video-bytes")
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			source, err := Source(tc.key)
 			require.NoError(t, err)
-		}
-		req, requestErr := http.NewRequestWithContext(t.Context(), descriptor.Method, descriptor.URL, bytes.NewReader(body))
-		require.NoError(t, requestErr)
-		for name, value := range descriptor.Headers {
-			req.Header.Set(name, value)
-		}
-		response, requestErr := server.Client().Do(req)
-		require.NoError(t, requestErr)
-		payload, readErr := io.ReadAll(response.Body)
-		require.NoError(t, response.Body.Close())
-		require.NoError(t, readErr)
-		if stage == "content" {
-			assert.True(t, descriptor.Credentialless)
-			assert.Equal(t, http.StatusOK, response.StatusCode)
-			assert.Equal(t, "synthetic-video-bytes", string(payload))
-			continue
-		}
-		require.NoError(t, common.Unmarshal(payload, &data))
-		if stage == "submit" {
-			assert.Equal(t, http.StatusAccepted, response.StatusCode)
-			parsed, parseErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", ctx, map[string]any{"statusCode": response.StatusCode, "body": data})
-			require.NoError(t, parseErr)
-			ctx["taskId"] = parsed.(map[string]any)["taskId"]
-		} else {
-			result, parseErr := plugin.Engine.Call(t.Context(), "parseTaskResult", ctx, data)
-			require.NoError(t, parseErr)
-			assert.Equal(t, "SUCCESS", result.(map[string]any)["status"])
-			ctx["data"], ctx["artifactKey"], ctx["clientRequest"] = data, "video", map[string]any{"method": "GET"}
-		}
+			plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: tc.key})
+			require.NoError(t, err)
+			input := map[string]any{"model": "public-video", "prompt": "test", "seconds": 30, "resolution": "480p", "generate_audio": false}
+			maps.Copy(input, tc.input)
+			decoded, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+				"model": "public-video", "body": map[string]any{"kind": "json", "value": input},
+			})
+			require.NoError(t, err)
+			ctx := map[string]any{"model": "public-video", "upstreamModel": "seedance-2.5", "baseUrl": server.URL, "apiKey": "fixture-only-key", "requestBody": decoded.(map[string]any)["requestBody"]}
+			var data map[string]any
+			for _, stage := range []string{"submit", "query", "content"} {
+				hook := map[string]string{"submit": "buildSubmitRequest", "query": "buildQueryRequest", "content": "buildContentRequest"}[stage]
+				value, callErr := plugin.Engine.Call(t.Context(), hook, ctx)
+				require.NoError(t, callErr)
+				encoded, marshalErr := common.Marshal(value)
+				require.NoError(t, marshalErr)
+				var descriptor struct {
+					URL            string            `json:"url"`
+					Method         string            `json:"method"`
+					Headers        map[string]string `json:"headers"`
+					Body           map[string]any    `json:"body"`
+					Credentialless bool              `json:"credentialless"`
+				}
+				require.NoError(t, common.Unmarshal(encoded, &descriptor))
+				var body []byte
+				if descriptor.Body != nil {
+					body, err = common.Marshal(descriptor.Body)
+					require.NoError(t, err)
+				}
+				req, requestErr := http.NewRequestWithContext(t.Context(), descriptor.Method, descriptor.URL, bytes.NewReader(body))
+				require.NoError(t, requestErr)
+				for name, value := range descriptor.Headers {
+					req.Header.Set(name, value)
+				}
+				response, requestErr := server.Client().Do(req)
+				require.NoError(t, requestErr)
+				payload, readErr := io.ReadAll(response.Body)
+				require.NoError(t, response.Body.Close())
+				require.NoError(t, readErr)
+				if stage == "content" {
+					assert.True(t, descriptor.Credentialless)
+					assert.Equal(t, http.StatusOK, response.StatusCode)
+					assert.Equal(t, "synthetic-video-bytes", string(payload))
+					continue
+				}
+				require.NoError(t, common.Unmarshal(payload, &data))
+				if stage == "submit" {
+					assert.Equal(t, http.StatusAccepted, response.StatusCode)
+					parsed, parseErr := plugin.Engine.Call(t.Context(), "parseSubmitResponse", ctx, map[string]any{"statusCode": response.StatusCode, "body": data})
+					require.NoError(t, parseErr)
+					ctx["taskId"] = parsed.(map[string]any)["taskId"]
+				} else {
+					result, parseErr := plugin.Engine.Call(t.Context(), "parseTaskResult", ctx, data)
+					require.NoError(t, parseErr)
+					assert.Equal(t, "SUCCESS", result.(map[string]any)["status"])
+					ctx["data"], ctx["artifactKey"], ctx["clientRequest"] = data, "video", map[string]any{"method": "GET"}
+				}
+			}
+			assert.Equal(t, []string{"POST /v1/videos", "GET /v1/videos/ijm_http", "GET /media.mp4"}, requests)
+		})
 	}
-	assert.Equal(t, []string{"POST /v1/videos", "GET /v1/videos/ijm_http", "GET /media.mp4"}, requests)
 }
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
@@ -1017,6 +2284,8 @@ func TestBuiltInVideoRelaysDescribeParsableSpecs(t *testing.T) {
 	}{
 		{"aggc", "sd2.5-op", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "1080p", "images": images, "videos": video}, 30,
 			videosched.Spec{Tier: "1080p", References: map[string]int{"video": 1, "image": 2, "audio": 0, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
+		{"ak2api", "seedance-2.5", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "480p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.wav"}}, 30,
+			videosched.Spec{Tier: "480p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"bytefor", "bytefor-2.5", map[string]any{"prompt": "cat", "seconds": 30, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.mp3"}}, 30,
 			videosched.Spec{Tier: "720p", References: map[string]int{"video": 1, "image": 2, "audio": 1, "frame": 0}, ReferenceVideoURLs: []string{"https://cdn.example/1.mp4"}}},
 		{"cangyuan", "sd10-seedance-2.0", map[string]any{"prompt": "cat", "seconds": 10, "resolution": "720p", "images": images, "videos": video, "audios": []any{"https://cdn.example/1.wav"}}, 10,

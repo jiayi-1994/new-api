@@ -1,7 +1,7 @@
 // Task Plugin API v1 adapter for the Po Xiao public /v1/videos API.
 // The upstream accepts JSON and public media URLs; legacy model names remain supported.
 const REQUEST_BILLING_MODELS = ["sd-2-c5", "sd-2-c4","seedance2.0特价1","seedance2.0特价2"];
-const MODELS = ["seedance-2.0", "seedance-2.5", "videos-mini", "videos-fast", "videos-standard", ...REQUEST_BILLING_MODELS];
+const MODELS = ["seedance-2.0", "seedance-2.0-fast","seedance-2.0-mini","seedance-2.5", "videos-mini", "videos-fast", "videos-standard", ...REQUEST_BILLING_MODELS];
 const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
 const USAGE_SCHEMA = {
   seconds: {
