@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Table2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table'
@@ -26,6 +26,7 @@ import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -109,6 +110,7 @@ export function VideoScheduleMatrixDialog(
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [open, setOpen] = useState(false)
   const [group, setGroup] = useState('default')
+  const [selectedModel, setSelectedModel] = useState('')
   const [userGroup, setUserGroup] = useState('')
   const [referenceInput, setReferenceInput] = useState('0')
   const [useSnapshot, setUseSnapshot] = useState(false)
@@ -124,6 +126,20 @@ export function VideoScheduleMatrixDialog(
     enabled: open,
   })
   const options = useSystemOptions(open)
+  const rawSales = options.data?.data?.find(
+    (option) => option.key === 'billing_setting.video_sales'
+  )?.value
+  const sales = useMemo(() => parseVideoSales(rawSales ?? '{}'), [rawSales])
+  const modelItems = useMemo(
+    () => [
+      { value: '', label: t('All models') },
+      ...Object.keys(sales ?? {})
+        .filter((model) => !sales?.[model].disabled)
+        .sort((a, b) => a.localeCompare(b))
+        .map((model) => ({ value: model, label: model })),
+    ],
+    [sales, t]
+  )
   const groupItems = (groups.data?.data ?? [])
     .filter((name) => name !== 'auto')
     .map((name) => ({ value: name, label: name }))
@@ -165,15 +181,13 @@ export function VideoScheduleMatrixDialog(
       )
       return
     }
-    const raw = options.data?.data?.find(
-      (option) => option.key === 'billing_setting.video_sales'
-    )?.value
-    const sales = parseVideoSales(raw ?? '{}')
     if (!sales) {
       setInputError(t('The unified video price table is invalid'))
       return
     }
-    const cells = buildVideoScheduleMatrixCells(sales, referenceSeconds)
+    const cells = buildVideoScheduleMatrixCells(sales, referenceSeconds).filter(
+      (cell) => !selectedModel || cell.model === selectedModel
+    )
     if (cells.length === 0) {
       setInputError(t('No enabled unified video models are configured'))
       return
@@ -223,7 +237,10 @@ export function VideoScheduleMatrixDialog(
     if (runId.current === id) setRunning(false)
   }
 
-  const counts = rows.reduce<Partial<Record<RowVerdict, number>>>(
+  const modelRows = selectedModel
+    ? rows.filter((row) => row.cell.model === selectedModel)
+    : rows
+  const counts = modelRows.reduce<Partial<Record<RowVerdict, number>>>(
     (total, row) => {
       const verdict = rowVerdict(row)
       total[verdict] = (total[verdict] ?? 0) + 1
@@ -231,15 +248,15 @@ export function VideoScheduleMatrixDialog(
     },
     {}
   )
-  const done = rows.length - (counts.pending ?? 0)
+  const done = modelRows.length - (counts.pending ?? 0)
   const visibleRows = problemsOnly
-    ? rows.filter(
+    ? modelRows.filter(
         (row) => !['ok', 'pending', 'not_served'].includes(rowVerdict(row))
       )
-    : rows
+    : modelRows
   // Off, shadow and unlisted models keep ordinary routing in live traffic,
   // so their simulated order describes what the scheduler would do.
-  const notTakenOver = rows.filter(
+  const notTakenOver = modelRows.filter(
     (row) => row.result && !row.result.decision.takeover
   ).length
 
@@ -423,7 +440,7 @@ export function VideoScheduleMatrixDialog(
       }
     >
       <div className='flex flex-col gap-4'>
-        <div className='grid gap-3 sm:grid-cols-3'>
+        <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
           <div className='flex flex-col gap-1.5'>
             <Label>{t('Group')}</Label>
             <Select
@@ -442,6 +459,19 @@ export function VideoScheduleMatrixDialog(
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className='flex min-w-0 flex-col gap-1.5'>
+            <Label htmlFor='video-matrix-model'>{t('Model')}</Label>
+            <Combobox
+              id='video-matrix-model'
+              options={modelItems}
+              value={selectedModel}
+              onValueChange={(value) => setSelectedModel(value ?? '')}
+              searchPlaceholder={t('Search models')}
+              emptyText={t('No models found')}
+              disabled={running || options.isPending}
+              className='w-full'
+            />
           </div>
           <div className='flex flex-col gap-1.5'>
             <Label htmlFor='video-matrix-user-group'>
@@ -495,13 +525,13 @@ export function VideoScheduleMatrixDialog(
           </p>
         )}
 
-        {rows.length > 0 && (
+        {modelRows.length > 0 && (
           <p className='text-sm' aria-live='polite'>
             {t(
               '{{done}}/{{total}} simulated · {{ok}} OK · {{config}} configuration issues · {{loss}} losses · {{none}} without a channel · {{unserved}} not served · {{error}} failed',
               {
                 done,
-                total: rows.length,
+                total: modelRows.length,
                 ok: counts.ok ?? 0,
                 config: counts.config ?? 0,
                 loss: counts.loss ?? 0,
@@ -537,7 +567,9 @@ export function VideoScheduleMatrixDialog(
               }
               return undefined
             }}
-            emptyContent={t('No problems found')}
+            emptyContent={
+              modelRows.length === 0 ? t('No data') : t('No problems found')
+            }
           />
         )}
       </div>
