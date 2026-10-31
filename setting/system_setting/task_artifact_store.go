@@ -30,15 +30,19 @@ const (
 	// can go through a private (e.g. OSS -internal) endpoint while customers
 	// still receive publicly reachable links. Defaults to S3Endpoint.
 	TaskArtifactStoreS3PublicEndpointEnv = "TASK_ARTIFACT_STORE_S3_PUBLIC_ENDPOINT"
-	TaskArtifactStoreS3BucketEnv         = "TASK_ARTIFACT_STORE_S3_BUCKET"
-	TaskArtifactStoreS3RegionEnv         = "TASK_ARTIFACT_STORE_S3_REGION"
-	TaskArtifactStoreS3AccessKeyEnv      = "TASK_ARTIFACT_STORE_S3_ACCESS_KEY"
-	TaskArtifactStoreS3SecretKeyEnv      = "TASK_ARTIFACT_STORE_S3_SECRET_KEY"
-	TaskArtifactStoreS3PrefixEnv         = "TASK_ARTIFACT_STORE_S3_PREFIX"
-	TaskArtifactStoreS3PresignTTLEnv     = "TASK_ARTIFACT_STORE_S3_PRESIGN_TTL"
-	TaskArtifactStoreS3PathStyleEnv      = "TASK_ARTIFACT_STORE_S3_PATH_STYLE"
-	TaskArtifactStoreRetentionEnv        = "TASK_ARTIFACT_STORE_RETENTION_DAYS"
-	TaskArtifactStoreSyncIntervalEnv     = "TASK_ARTIFACT_STORE_SYNC_INTERVAL"
+	// Optional mirror target for downloads from S3Bucket; configure all three together.
+	TaskArtifactStoreS3DownloadEndpointEnv = "TASK_ARTIFACT_STORE_S3_DOWNLOAD_ENDPOINT"
+	TaskArtifactStoreS3DownloadBucketEnv   = "TASK_ARTIFACT_STORE_S3_DOWNLOAD_BUCKET"
+	TaskArtifactStoreS3DownloadRegionEnv   = "TASK_ARTIFACT_STORE_S3_DOWNLOAD_REGION"
+	TaskArtifactStoreS3BucketEnv           = "TASK_ARTIFACT_STORE_S3_BUCKET"
+	TaskArtifactStoreS3RegionEnv           = "TASK_ARTIFACT_STORE_S3_REGION"
+	TaskArtifactStoreS3AccessKeyEnv        = "TASK_ARTIFACT_STORE_S3_ACCESS_KEY"
+	TaskArtifactStoreS3SecretKeyEnv        = "TASK_ARTIFACT_STORE_S3_SECRET_KEY"
+	TaskArtifactStoreS3PrefixEnv           = "TASK_ARTIFACT_STORE_S3_PREFIX"
+	TaskArtifactStoreS3PresignTTLEnv       = "TASK_ARTIFACT_STORE_S3_PRESIGN_TTL"
+	TaskArtifactStoreS3PathStyleEnv        = "TASK_ARTIFACT_STORE_S3_PATH_STYLE"
+	TaskArtifactStoreRetentionEnv          = "TASK_ARTIFACT_STORE_RETENTION_DAYS"
+	TaskArtifactStoreSyncIntervalEnv       = "TASK_ARTIFACT_STORE_SYNC_INTERVAL"
 )
 
 var (
@@ -54,6 +58,9 @@ type TaskArtifactStoreConfig struct {
 	Mode                string
 	S3Endpoint          string
 	S3PublicEndpoint    string
+	S3DownloadEndpoint  string
+	S3DownloadBucket    string
+	S3DownloadRegion    string
 	S3Bucket            string
 	S3Region            string
 	S3AccessKey         string
@@ -73,6 +80,9 @@ func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 		Mode:                common.GetEnvOrDefaultString(TaskArtifactStoreModeEnv, TaskArtifactStoreModeUpstream),
 		S3Endpoint:          common.GetEnvOrDefaultString(TaskArtifactStoreS3EndpointEnv, ""),
 		S3PublicEndpoint:    common.GetEnvOrDefaultString(TaskArtifactStoreS3PublicEndpointEnv, ""),
+		S3DownloadEndpoint:  common.GetEnvOrDefaultString(TaskArtifactStoreS3DownloadEndpointEnv, ""),
+		S3DownloadBucket:    common.GetEnvOrDefaultString(TaskArtifactStoreS3DownloadBucketEnv, ""),
+		S3DownloadRegion:    common.GetEnvOrDefaultString(TaskArtifactStoreS3DownloadRegionEnv, ""),
 		S3Bucket:            common.GetEnvOrDefaultString(TaskArtifactStoreS3BucketEnv, ""),
 		S3Region:            common.GetEnvOrDefaultString(TaskArtifactStoreS3RegionEnv, ""),
 		S3AccessKey:         common.GetEnvOrDefaultString(TaskArtifactStoreS3AccessKeyEnv, ""),
@@ -117,22 +127,38 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 	if err := validateTaskArtifactStoreEndpoint("public endpoint", config.S3PublicEndpoint); err != nil {
 		return err
 	}
+	if config.S3DownloadEndpoint != "" || config.S3DownloadBucket != "" || config.S3DownloadRegion != "" {
+		if config.S3DownloadEndpoint == "" || config.S3DownloadBucket == "" || config.S3DownloadRegion == "" {
+			return errors.New("S3 download endpoint, bucket, and region must be configured together")
+		}
+	}
+	if err := validateTaskArtifactStoreEndpoint("download endpoint", config.S3DownloadEndpoint); err != nil {
+		return err
+	}
 
 	if requireS3Fields && config.S3Bucket == "" {
 		return errors.New("S3 bucket is required")
 	}
-	if config.S3Bucket != "" {
-		if !taskArtifactStoreBucketPattern.MatchString(config.S3Bucket) ||
-			strings.Contains(config.S3Bucket, "..") || net.ParseIP(config.S3Bucket) != nil {
-			return errors.New("S3 bucket syntax is invalid")
+	for _, bucket := range []struct{ name, value string }{
+		{"bucket", config.S3Bucket},
+		{"download bucket", config.S3DownloadBucket},
+	} {
+		if bucket.value != "" && (!taskArtifactStoreBucketPattern.MatchString(bucket.value) ||
+			strings.Contains(bucket.value, "..") || net.ParseIP(bucket.value) != nil) {
+			return fmt.Errorf("S3 %s syntax is invalid", bucket.name)
 		}
 	}
 
 	if requireS3Fields && config.S3Region == "" {
 		return errors.New("S3 region is required")
 	}
-	if config.S3Region != "" && !taskArtifactStoreRegionPattern.MatchString(config.S3Region) {
-		return errors.New("S3 region syntax is invalid")
+	for _, region := range []struct{ name, value string }{
+		{"region", config.S3Region},
+		{"download region", config.S3DownloadRegion},
+	} {
+		if region.value != "" && !taskArtifactStoreRegionPattern.MatchString(region.value) {
+			return fmt.Errorf("S3 %s syntax is invalid", region.name)
+		}
 	}
 	if err := validateTaskArtifactStoreCredential("access key", config.S3AccessKey, 256, requireS3Fields); err != nil {
 		return err

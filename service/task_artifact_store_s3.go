@@ -25,18 +25,20 @@ import (
 // GET URLs. Objects are expected to be expired by a bucket lifecycle rule
 // matching RetentionDays; the store only stops resolving them after that.
 type s3ArtifactStore struct {
-	client     *s3.Client
-	presigner  *s3.PresignClient
-	bucket     string
-	prefix     string
-	presignTTL time.Duration
-	retention  time.Duration
+	client            *s3.Client
+	presigner         *s3.PresignClient
+	downloadPresigner *s3.PresignClient
+	downloadBucket    string
+	bucket            string
+	prefix            string
+	presignTTL        time.Duration
+	retention         time.Duration
 }
 
 func newS3ArtifactStore(config system_setting.TaskArtifactStoreConfig) *s3ArtifactStore {
-	newClient := func(endpoint string) *s3.Client {
+	newClient := func(endpoint, region string) *s3.Client {
 		return s3.New(s3.Options{
-			Region:       config.S3Region,
+			Region:       region,
 			BaseEndpoint: aws.String(endpoint),
 			UsePathStyle: config.S3PathStyle,
 			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(config.S3AccessKey, config.S3SecretKey, "")),
@@ -53,14 +55,19 @@ func newS3ArtifactStore(config system_setting.TaskArtifactStoreConfig) *s3Artifa
 	if publicEndpoint == "" {
 		publicEndpoint = config.S3Endpoint
 	}
-	return &s3ArtifactStore{
-		client:     newClient(config.S3Endpoint),
-		presigner:  s3.NewPresignClient(newClient(publicEndpoint)),
-		bucket:     config.S3Bucket,
-		prefix:     strings.Trim(config.S3Prefix, "/"),
-		presignTTL: time.Duration(config.S3PresignTTLSeconds) * time.Second,
-		retention:  time.Duration(config.RetentionDays) * 24 * time.Hour,
+	store := &s3ArtifactStore{
+		client:         newClient(config.S3Endpoint, config.S3Region),
+		presigner:      s3.NewPresignClient(newClient(publicEndpoint, config.S3Region)),
+		downloadBucket: config.S3DownloadBucket,
+		bucket:         config.S3Bucket,
+		prefix:         strings.Trim(config.S3Prefix, "/"),
+		presignTTL:     time.Duration(config.S3PresignTTLSeconds) * time.Second,
+		retention:      time.Duration(config.RetentionDays) * 24 * time.Hour,
 	}
+	if config.S3DownloadEndpoint != "" {
+		store.downloadPresigner = s3.NewPresignClient(newClient(config.S3DownloadEndpoint, config.S3DownloadRegion))
+	}
+	return store
 }
 
 func (s *s3ArtifactStore) Enabled() bool {
@@ -140,7 +147,14 @@ func (s *s3ArtifactStore) Serve(c *gin.Context, task *model.Task, ref *StoredArt
 	if bucket == "" {
 		bucket = s.bucket
 	}
-	presigned, err := s.presigner.PresignGetObject(c.Request.Context(), &s3.GetObjectInput{
+	presigner := s.presigner
+	// Keep the original storage reference and legacy-bucket routing intact.
+	// A GET to the mirror triggers back-to-origin when the object is absent.
+	if s.downloadPresigner != nil && bucket == s.bucket {
+		bucket = s.downloadBucket
+		presigner = s.downloadPresigner
+	}
+	presigned, err := presigner.PresignGetObject(c.Request.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(ref.ObjectKey),
 	}, s3.WithPresignExpires(s.presignTTL))
