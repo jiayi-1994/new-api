@@ -29,6 +29,7 @@ import type {
   GetTaskLogsParams,
   TaskArtifactsResponse,
   TaskRequestBodyResponse,
+  TaskResponseBodyResponse,
   UserInfo,
 } from './types'
 
@@ -130,6 +131,14 @@ export async function getTaskArtifacts(taskId: string) {
 export async function getTaskRequestBody(taskId: string) {
   const response = await api.get<TaskRequestBodyResponse>(
     `/api/task/${encodeURIComponent(taskId)}/request_body`,
+    taskArtifactRequestConfig
+  )
+  return response.data
+}
+
+export async function getTaskResponseBody(taskId: string) {
+  const response = await api.get<TaskResponseBodyResponse>(
+    `/api/task/${encodeURIComponent(taskId)}/response_body`,
     taskArtifactRequestConfig
   )
   return response.data

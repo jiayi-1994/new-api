@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/plugins"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
@@ -195,6 +196,96 @@ func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
 			require.NotNil(t, response.Data)
 			assert.Equal(t, tc.wantBody, response.Data.Body)
 			assert.Equal(t, int64(len(body)), response.Data.Size)
+		})
+	}
+}
+
+func TestTaskResponseBodyShowsUpstreamSnapshotOnlyToAdminSessions(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	// 2^64-1 would round in a float64 decode; both bodies must keep it exact.
+	task.Data = []byte(`{"upstream_account":"acct-private","seed":18446744073709551615}`)
+	task.PrivateData.Execution = &model.TaskExecutionSnapshot{RequestPath: "/v1/video/generations"}
+	require.NoError(t, model.DB.Save(task).Error)
+	unified := &model.Task{
+		TaskID: "task_unified", Platform: "private-plugin", UserId: 7, ChannelId: 1,
+		Status: model.TaskStatusInProgress, Progress: "50%", SubmitTime: 10,
+		Data: []byte(`{"upstream_account":"acct-private"}`),
+		PrivateData: model.TaskPrivateData{
+			Execution: &model.TaskExecutionSnapshot{RequestPath: "/v1/videos"},
+			BillingContext: &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+				SalesSource: billingexpr.SalesSourceVideoRequest,
+			}},
+		},
+	}
+	require.NoError(t, model.DB.Create(unified).Error)
+	discarded := &model.Task{
+		TaskID: "task_discarded", Platform: "document", UserId: 7, ChannelId: 1, Status: model.TaskStatusSuccess,
+		Data: []byte(`{"upstream_account":"acct-private"}`), PrivateData: model.TaskPrivateData{ResultDiscarded: true},
+	}
+	require.NoError(t, model.DB.Create(discarded).Error)
+
+	for _, tc := range []struct {
+		name         string
+		taskID       string
+		userID       int
+		role         int
+		tokenID      int
+		wantFound    bool
+		wantFormat   string
+		wantPlatform []string
+		wantUpstream bool
+	}{
+		{name: "owner sees the platform body only", taskID: task.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true,
+			wantFormat: "task", wantPlatform: []string{`"task_id": "task_generic"`, `18446744073709551615`}},
+		{name: "admin session sees both bodies", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true,
+			wantFormat: "task", wantPlatform: []string{`"task_id": "task_generic"`}, wantUpstream: true},
+		{name: "other user", taskID: task.TaskID, userID: 8, role: common.RoleCommonUser},
+		{name: "root api token", taskID: task.TaskID, userID: 8, role: common.RoleRootUser, tokenID: 99},
+		{name: "owner of a unified sale gets the redacted openai video body", taskID: unified.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true,
+			wantFormat: "openai_video", wantPlatform: []string{`"id": "task_unified"`, `"object": "video"`}},
+		{name: "owner of a discarded result gets no platform body", taskID: discarded.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true,
+			wantFormat: "task"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/task/"+tc.taskID+"/response_body", nil)
+			c.Params = gin.Params{{Key: "task_id", Value: tc.taskID}}
+			c.Set("id", tc.userID)
+			c.Set("role", tc.role)
+			if tc.tokenID != 0 {
+				c.Set("token_id", tc.tokenID)
+			}
+
+			GetTaskResponseBody(c)
+
+			var response struct {
+				Success bool                  `json:"success"`
+				Data    *taskResponseBodyView `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, tc.wantFound, response.Success)
+			if !tc.wantFound {
+				assert.Nil(t, response.Data)
+				return
+			}
+			assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+			require.NotNil(t, response.Data)
+			assert.Equal(t, tc.wantFormat, response.Data.PlatformFormat)
+			if len(tc.wantPlatform) == 0 {
+				assert.Empty(t, response.Data.Platform)
+			}
+			for _, fragment := range tc.wantPlatform {
+				assert.Contains(t, response.Data.Platform, fragment)
+			}
+			if tc.wantFormat == "openai_video" {
+				assert.NotContains(t, response.Data.Platform, "acct-private")
+			}
+			if !tc.wantUpstream {
+				assert.Empty(t, response.Data.Upstream)
+				return
+			}
+			assert.Equal(t, "{\n  \"upstream_account\": \"acct-private\",\n  \"seed\": 18446744073709551615\n}", response.Data.Upstream)
 		})
 	}
 }

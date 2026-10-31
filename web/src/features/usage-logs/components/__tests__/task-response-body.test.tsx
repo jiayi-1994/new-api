@@ -18,15 +18,16 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
-import { getTaskRequestBody } from '../../api'
+import { getTaskRequestBody, getTaskResponseBody } from '../../api'
 import type { TaskLog } from '../../types'
 import { TaskDetailsDialog } from '../dialogs/task-details-dialog'
 
 vi.mock('../../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api')>()),
   getTaskRequestBody: vi.fn(),
+  getTaskResponseBody: vi.fn(),
 }))
 
 const task: TaskLog = {
@@ -42,7 +43,12 @@ const task: TaskLog = {
   status: 'SUCCESS',
 }
 
-function renderDialog(log: TaskLog, isAdmin = true) {
+// Indented by the server; the seed exceeds 2^53 and must not be rounded.
+const platformBody =
+  '{\n  "id": "public-task-id",\n  "seed": 18446744073709551615\n}'
+const upstreamBody = '{\n  "upstream_account": "acct-private"\n}'
+
+function renderDialog(isAdmin: boolean) {
   return render(
     <QueryClientProvider
       client={
@@ -50,7 +56,7 @@ function renderDialog(log: TaskLog, isAdmin = true) {
       }
     >
       <TaskDetailsDialog
-        log={log}
+        log={task}
         isAdmin={isAdmin}
         isRoot={false}
         open
@@ -60,53 +66,83 @@ function renderDialog(log: TaskLog, isAdmin = true) {
   )
 }
 
+beforeEach(() => {
+  vi.mocked(getTaskRequestBody).mockResolvedValue({ success: true, data: null })
+})
+
 afterEach(() => {
   vi.mocked(getTaskRequestBody).mockReset()
+  vi.mocked(getTaskResponseBody).mockReset()
 })
 
-test('an administrator sees a persisted upstream response pretty-printed with its nested fields', async () => {
-  vi.mocked(getTaskRequestBody).mockResolvedValue({
+test('an administrator sees the platform and upstream responses exactly as the server returned them', async () => {
+  vi.mocked(getTaskResponseBody).mockResolvedValue({
     success: true,
-    data: { content_type: 'application/json', size: 2, body: '{}' },
+    data: {
+      platform_format: 'openai_video',
+      platform: platformBody,
+      upstream: upstreamBody,
+    },
   })
 
-  renderDialog({
-    ...task,
-    data: { status: 'completed', metadata: { volcesVideoUrl: 'https://ark.example/v.mp4' } },
-  })
+  renderDialog(true)
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
-  const body = within(dialog).getByText(/"volcesVideoUrl": "https:\/\/ark\.example\/v\.mp4"/)
-  expect(body).toBeVisible()
-  expect(body.textContent).toBe(
-    JSON.stringify({ status: 'completed', metadata: { volcesVideoUrl: 'https://ark.example/v.mp4' } }, null, 2)
+  expect(
+    (await within(dialog).findByText(/18446744073709551615/)).textContent
+  ).toBe(platformBody)
+  expect(within(dialog).getByText(/acct-private/).textContent).toBe(
+    upstreamBody
   )
+  expect(within(dialog).getByText('openai_video')).toBeVisible()
+  expect(getTaskResponseBody).toHaveBeenCalledWith('public-task-id')
 })
 
-test('an administrator viewing a task without a persisted response sees it reported as not recorded', async () => {
-  vi.mocked(getTaskRequestBody).mockResolvedValue({
+test('a customer sees the platform response but never an upstream response section', async () => {
+  vi.mocked(getTaskResponseBody).mockResolvedValue({
     success: true,
-    data: { content_type: 'application/json', size: 2, body: '{}' },
+    data: { platform_format: 'task', platform: platformBody },
   })
 
-  renderDialog({ ...task, data: null })
+  renderDialog(false)
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
-  expect(await within(dialog).findByText('Not recorded')).toBeVisible()
+  expect(
+    (await within(dialog).findByText(/18446744073709551615/)).textContent
+  ).toBe(platformBody)
+  expect(within(dialog).queryByText('Upstream response')).toBeNull()
 })
 
-test('a non-administrator does not get a response body section at all', async () => {
-  vi.mocked(getTaskRequestBody).mockResolvedValue({
+test('an administrator viewing a task without an upstream snapshot sees it reported as not recorded', async () => {
+  vi.mocked(getTaskResponseBody).mockResolvedValue({
     success: true,
-    data: { content_type: 'application/json', size: 2, body: '{}' },
+    data: { platform_format: 'task', platform: platformBody },
   })
 
-  renderDialog(
-    { ...task, data: { metadata: { volcesVideoUrl: 'https://ark.example/v.mp4' } } },
-    false
-  )
+  renderDialog(true)
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
-  expect(within(dialog).queryByText('Response body')).toBeNull()
-  expect(within(dialog).queryByText(/volcesVideoUrl/)).toBeNull()
+  await within(dialog).findByText(/18446744073709551615/)
+  const upstreamSection = within(dialog)
+    .getByText('Upstream response')
+    .closest('section')
+  expect(upstreamSection).not.toBeNull()
+  expect(
+    within(upstreamSection as HTMLElement).getByText('Not recorded')
+  ).toBeVisible()
+})
+
+test('a failed response body request is reported as failed to load', async () => {
+  vi.mocked(getTaskResponseBody).mockRejectedValue(new Error('network'))
+
+  renderDialog(false)
+
+  const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
+  const platformSection = within(dialog)
+    .getByText('Platform response')
+    .closest('section')
+  expect(platformSection).not.toBeNull()
+  expect(
+    await within(platformSection as HTMLElement).findByText('Failed to load')
+  ).toBeVisible()
 })

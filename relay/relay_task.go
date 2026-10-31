@@ -573,12 +573,26 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
-	if originTask.IsUnifiedVideoSale() {
-		if isOpenAIVideoAPI {
-			respBody, err = common.Marshal(service.BuildUnifiedVideoResponse(originTask))
+	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
+	if !originTask.IsUnifiedVideoSale() {
+		if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
+			return realtimeResp, nil
+		}
+	}
+	return RenderTaskFetchResponse(originTask, isOpenAIVideoAPI)
+}
+
+// RenderTaskFetchResponse builds the retrieval body a client receives for a
+// stored task. It never contacts the upstream, so the dashboard can show the
+// same body without the realtime refresh side effects of a client fetch.
+func RenderTaskFetchResponse(task *model.Task, openAIVideo bool) (respBody []byte, taskResp *dto.TaskError) {
+	var err error
+	if task.IsUnifiedVideoSale() {
+		if openAIVideo {
+			respBody, err = common.Marshal(service.BuildUnifiedVideoResponse(task))
 		} else {
-			item := TaskModel2Dto(originTask)
-			service.RedactUnifiedVideoTaskDTO(originTask, item)
+			item := TaskModel2Dto(task)
+			service.RedactUnifiedVideoTaskDTO(task, item)
 			respBody, err = common.Marshal(dto.TaskResponse[any]{Code: "success", Data: item})
 		}
 		if err != nil {
@@ -587,21 +601,15 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
-	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
-		respBody = realtimeResp
-		return
-	}
-
 	// OpenAI Video API 格式: 走各 adaptor 的 ConvertToOpenAIVideo
-	if isOpenAIVideoAPI {
-		adaptor := GetTaskAdaptor(originTask.Platform)
+	if openAIVideo {
+		adaptor := GetTaskAdaptor(task.Platform)
 		if adaptor == nil {
-			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", task.ChannelId), "invalid_channel_id", http.StatusBadRequest)
 			return
 		}
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
-			openAIVideoData, err := converter.ConvertToOpenAIVideo(originTask)
+			openAIVideoData, err := converter.ConvertToOpenAIVideo(task)
 			if err != nil {
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
@@ -609,12 +617,12 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			respBody = openAIVideoData
 			return
 		}
-		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
+		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", task.Platform), "not_implemented", http.StatusNotImplemented)
 		return
 	}
 
 	// 通用 TaskDto 格式
-	item := TaskModel2Dto(originTask)
+	item := TaskModel2Dto(task)
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
 		Data: item,

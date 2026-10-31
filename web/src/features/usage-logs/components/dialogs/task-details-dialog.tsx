@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { Shield01Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
@@ -30,7 +29,7 @@ import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
-import { getTaskRequestBody } from '../../api'
+import { getTaskRequestBody, getTaskResponseBody } from '../../api'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
 import { resolveTaskDetailAccess } from '../../lib/task-details'
 import type { TaskLog } from '../../types'
@@ -122,35 +121,80 @@ function TaskRequestBodySection(props: { taskId: string; open: boolean }) {
   )
 }
 
-// The task row already carries the latest upstream result the gateway
-// persisted (null when never recorded). It names the upstream account, task
-// id and wholesale quota, so only administrators see it.
-function TaskResponseBodySection(props: { data: unknown }) {
-  const { t } = useTranslation()
-  const body = useMemo(
-    () => (props.data == null ? '' : JSON.stringify(props.data, null, 2)),
-    [props.data]
-  )
-
+function TaskResponseBodyBlock(props: {
+  label: string
+  caption?: string
+  body?: string
+  emptyText: string
+}) {
   return (
-    <DetailSection label={t('Response body')}>
-      {body ? (
+    <DetailSection label={props.label}>
+      {props.body ? (
         <>
-          <div className='flex items-center justify-end'>
+          <div className='flex items-center justify-between gap-2'>
+            <span className='text-muted-foreground min-w-0 truncate font-mono text-xs'>
+              {props.caption ?? ''}
+            </span>
             <CopyButton
-              value={body}
+              value={props.body}
               className='size-6'
               iconClassName='size-3.5'
             />
           </div>
           <pre className='bg-background/60 max-h-80 overflow-y-auto rounded border p-2 font-mono text-[11px] leading-relaxed wrap-anywhere whitespace-pre-wrap'>
-            {body}
+            {props.body}
           </pre>
         </>
       ) : (
-        <span className='text-muted-foreground text-xs'>{t('Not recorded')}</span>
+        <span className='text-muted-foreground text-xs'>{props.emptyText}</span>
       )}
     </DetailSection>
+  )
+}
+
+// The platform body is what the client receives when retrieving the task.
+// The upstream snapshot names the upstream account, task id and wholesale
+// quota, so the server returns it to administrators only. Both arrive as
+// pre-indented text: parsing them here would round integers beyond 2^53.
+function TaskResponseBodySection(props: {
+  taskId: string
+  open: boolean
+  isAdmin: boolean
+}) {
+  const { t } = useTranslation()
+  const query = useQuery({
+    queryKey: ['usage-logs', 'task-response-body', props.taskId],
+    queryFn: async () =>
+      requireServerSuccess(await getTaskResponseBody(props.taskId)),
+    enabled: props.open,
+    retry: false,
+    staleTime: 30_000,
+  })
+  const record = query.data?.data
+
+  let emptyText = t('Not recorded')
+  if (query.isPending) {
+    emptyText = t('Loading...')
+  } else if (query.isError) {
+    emptyText = t('Failed to load')
+  }
+
+  return (
+    <>
+      <TaskResponseBodyBlock
+        label={t('Platform response')}
+        caption={record?.platform_format}
+        body={record?.platform}
+        emptyText={emptyText}
+      />
+      {props.isAdmin ? (
+        <TaskResponseBodyBlock
+          label={t('Upstream response')}
+          body={record?.upstream}
+          emptyText={emptyText}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -249,9 +293,11 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
 
         <TaskRequestBodySection taskId={props.log.task_id} open={props.open} />
 
-        {props.isAdmin ? (
-          <TaskResponseBodySection data={props.log.data} />
-        ) : null}
+        <TaskResponseBodySection
+          taskId={props.log.task_id}
+          open={props.open}
+          isAdmin={props.isAdmin}
+        />
 
         {props.isAdmin ? (
           <DetailSection

@@ -435,6 +435,19 @@ export interface TaskArtifactsResponse {
 }
 
 /** Client submit payload; `data` is null for tasks recorded before it was kept. */
+export interface TaskResponseBodyResponse {
+  success: boolean
+  message?: string
+  data?: {
+    /** Retrieval route shape the platform body follows. */
+    platform_format: 'openai_video' | 'task'
+    /** Pre-indented JSON a client retrieving the task receives; empty when not retrievable. */
+    platform: string
+    /** Pre-indented upstream snapshot, returned to administrators only. */
+    upstream?: string
+  } | null
+}
+
 export interface TaskRequestBodyResponse {
   success: boolean
   message?: string

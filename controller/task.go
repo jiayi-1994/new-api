@@ -447,22 +447,83 @@ func GetUserTask(c *gin.Context) {
 // GetTaskRequestBody returns the payload the client submitted for a task.
 // Admin sessions can read any task; tokens and other users only their own.
 // Tasks submitted before the payload was recorded return null data.
-func GetTaskRequestBody(c *gin.Context) {
+// dashboardTaskViewerIsAdmin reports an administrator browser session; API
+// tokens never reach other users' tasks or upstream task details.
+func dashboardTaskViewerIsAdmin(c *gin.Context) bool {
+	return c.GetInt("token_id") == 0 && c.GetInt("role") >= common.RoleAdminUser
+}
+
+// getDashboardTask loads a task for the task details dialog: administrator
+// sessions see every task, everyone else only their own. It answers the
+// request itself and returns nil when the task cannot be shown.
+func getDashboardTask(c *gin.Context) *model.Task {
 	taskID := c.Param("task_id")
 	var task *model.Task
 	var exists bool
 	var err error
-	if c.GetInt("token_id") == 0 && c.GetInt("role") >= common.RoleAdminUser {
+	if dashboardTaskViewerIsAdmin(c) {
 		task, exists, err = model.GetByOnlyTaskId(taskID)
 	} else {
 		task, exists, err = model.GetByTaskId(c.GetInt("id"), taskID)
 	}
 	if err != nil {
 		common.ApiError(c, err)
-		return
+		return nil
 	}
 	if !exists || task == nil {
 		common.ApiErrorMsg(c, "task not found")
+		return nil
+	}
+	return task
+}
+
+type taskResponseBodyView struct {
+	// PlatformFormat names the retrieval shape the platform body follows,
+	// inferred from the submit route: "openai_video" or "task".
+	PlatformFormat string `json:"platform_format"`
+	// Platform is what a client retrieving this task receives from the
+	// gateway, rendered from the stored task. Empty when not retrievable.
+	Platform string `json:"platform"`
+	// Upstream is the persisted upstream snapshot, for administrators only.
+	Upstream string `json:"upstream,omitempty"`
+}
+
+// GetTaskResponseBody renders the platform retrieval body for the task owner
+// and administrators, plus the raw upstream snapshot for administrators.
+func GetTaskResponseBody(c *gin.Context) {
+	task := getDashboardTask(c)
+	if task == nil {
+		return
+	}
+	view := taskResponseBodyView{PlatformFormat: "task"}
+	if execution := task.PrivateData.Execution; execution != nil && strings.HasPrefix(execution.RequestPath, "/v1/videos") {
+		view.PlatformFormat = "openai_video"
+	}
+	// Bodies are indented as text, never decoded, so integers beyond 2^53
+	// such as numeric upstream ids reach the dialog unchanged.
+	if task.ResultRetrievable() {
+		body, taskErr := relay.RenderTaskFetchResponse(task, view.PlatformFormat == "openai_video")
+		if taskErr == nil {
+			if indented, err := common.IndentJson(body); err == nil {
+				body = indented
+			}
+			view.Platform = string(body)
+		}
+	}
+	if dashboardTaskViewerIsAdmin(c) && len(task.Data) > 0 && string(task.Data) != "null" {
+		upstream := []byte(task.Data)
+		if indented, err := common.IndentJson(upstream); err == nil {
+			upstream = indented
+		}
+		view.Upstream = string(upstream)
+	}
+	c.Header("Cache-Control", "private, no-store")
+	common.ApiSuccess(c, view)
+}
+
+func GetTaskRequestBody(c *gin.Context) {
+	task := getDashboardTask(c)
+	if task == nil {
 		return
 	}
 	record, _, err := model.GetTaskRequestBody(task.ID)
