@@ -7312,6 +7312,20 @@
     "Amount (USD)": "金額（USD）",
     "Videos": "本数",
     "Add supply": "供給量を追加",
-    "Supply": "供給"
+    "Supply": "供給",
+    "Video Error Whitelist": "Video Error Whitelist",
+    "Video failures show a generic message by default. A failure containing a keyword below shows the display text, or the sanitized upstream message when the text is empty. System and upstream account failures, such as unpaid balance, no available channel or timeouts, are never shown even if a rule matches.": "Video failures show a generic message by default. A failure containing a keyword below shows the display text, or the sanitized upstream message when the text is empty. System and upstream account failures, such as unpaid balance, no available channel or timeouts, are never shown even if a rule matches.",
+    "No whitelist rules yet": "No whitelist rules yet",
+    "Error keyword": "Error keyword",
+    "Display text (optional)": "Display text (optional)",
+    "Added to the video error whitelist": "Added to the video error whitelist",
+    "Add to Video Error Whitelist": "Add to Video Error Whitelist",
+    "Keep only the stable part of the error: remove task IDs, URLs and numbers so the same error matches next time.": "Keep only the stable part of the error: remove task IDs, URLs and numbers so the same error matches next time.",
+    "Empty shows the sanitized upstream message": "Empty shows the sanitized upstream message",
+    "Add to whitelist": "Add to whitelist",
+    "Failures awaiting review": "Failures awaiting review",
+    "Failures from the last 30 days that are not whitelisted. System and upstream account failures are excluded and can never be added.": "Failures from the last 30 days that are not whitelisted. System and upstream account failures are excluded and can never be added.",
+    "No failures awaiting review": "No failures awaiting review",
+    "{{count}} occurrences": "{{count}} occurrences"
   }
 }

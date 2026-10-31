@@ -33,11 +33,19 @@ import type {
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
   VideoScheduleSimulateRequest,
+  VideoErrorCandidatesResponse,
   VideoScheduleSimulation,
 } from './types'
 
 export async function getSystemOptions() {
   const res = await api.get<SystemOptionsResponse>('/api/option/')
+  return res.data
+}
+
+export async function getVideoErrorCandidates() {
+  const res = await api.get<VideoErrorCandidatesResponse>(
+    '/api/option/video_error_candidates'
+  )
   return res.data
 }
 

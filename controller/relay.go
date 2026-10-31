@@ -876,8 +876,14 @@ func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) 
 	// stay generic because they tend to echo the channel's own credentials.
 	upstreamBody := taskErr.Code == "fail_to_fetch_task" || taskErr.Code == "plugin_submit_rejected"
 	upstreamAuth := taskErr.StatusCode == http.StatusUnauthorized || taskErr.StatusCode == http.StatusForbidden
-	if setting.ErrorPassthroughEnabled && upstreamBody && !upstreamAuth {
-		return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, common.GetContextKeyString(c, constant.ContextKeyChannelKey))
+	channelKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
+	if upstreamBody && !upstreamAuth {
+		if message, ok := service.WhitelistedUnifiedVideoError(taskErr.Message, channelKey); ok {
+			return message
+		}
+		if setting.ErrorPassthroughEnabled {
+			return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, channelKey)
+		}
 	}
 	if !taskErr.LocalError && !upstreamAuth {
 		// Explicit business rejections have a synthetic 502 status; their

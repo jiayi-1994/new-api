@@ -19,12 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import { Shield01Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { VideoErrorWhitelistDialog } from '@/features/system-settings/operations/video-error-whitelist-dialog'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
@@ -216,6 +219,7 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
   const plugin = access.plugin
   const runtime = access.runtime
   const properties = props.log.properties
+  const [whitelistOpen, setWhitelistOpen] = useState(false)
 
   return (
     <Dialog
@@ -288,6 +292,25 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
           ) : null}
           {props.log.fail_reason ? (
             <DetailRow label={t('Fail Reason')} value={props.log.fail_reason} />
+          ) : null}
+          {props.isRoot && props.log.fail_reason ? (
+            <>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => setWhitelistOpen(true)}
+              >
+                {t('Add to whitelist')}
+              </Button>
+              {whitelistOpen ? (
+                <VideoErrorWhitelistDialog
+                  keyword={props.log.fail_reason}
+                  open={whitelistOpen}
+                  onOpenChange={setWhitelistOpen}
+                />
+              ) : null}
+            </>
           ) : null}
         </DetailSection>
 

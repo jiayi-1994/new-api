@@ -860,3 +860,12 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	}
 	return openAIVideo
 }
+
+// GetFailedTasksSince returns only what failure statistics read, newest first.
+func GetFailedTasksSince(since int64, limit int) ([]*Task, error) {
+	var tasks []*Task
+	err := DB.Select("id", "fail_reason", "finish_time", "video_health_attribution", "private_data").
+		Where("status = ? AND submit_time >= ?", TaskStatusFailure, since).
+		Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}

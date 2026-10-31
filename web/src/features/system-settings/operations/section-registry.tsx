@@ -25,6 +25,7 @@ import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { VideoErrorWhitelistSection } from './video-error-whitelist-section'
 import { VideoSchedulingSettingsSection } from './video-scheduling-settings-section'
 
 const OPERATIONS_SECTIONS = [
@@ -65,6 +66,16 @@ const OPERATIONS_SECTIONS = [
     titleKey: 'Video Smart Scheduling',
     build: (settings: OperationsSettings) => (
       <VideoSchedulingSettingsSection settings={settings} />
+    ),
+  },
+  {
+    id: 'video-error-whitelist',
+    titleKey: 'Video Error Whitelist',
+    build: (settings: OperationsSettings) => (
+      <VideoErrorWhitelistSection
+        key={settings['video_error_whitelist.rules']}
+        rules={settings['video_error_whitelist.rules']}
+      />
     ),
   },
   {
