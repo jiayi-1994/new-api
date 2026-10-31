@@ -53,8 +53,12 @@ const referenceTiersSchema = z.record(
   })
 )
 const costSchema = z.object({
-  mode: z.enum(['per_video', 'per_second']),
+  mode: z.enum(['per_video', 'per_second', 'per_million_tokens']),
   prices: z.record(z.string(), z.number().finite().nonnegative()),
+  with_video_prices: z
+    .record(z.string(), z.number().finite().nonnegative())
+    .nullish(),
+  official_reference_billing: z.boolean().optional(),
   min_seconds: z.number().int().min(0).max(3600).optional(),
   max_seconds: z.number().int().min(0).max(3600).optional(),
   allowed_seconds: z.array(secondsSchema).nullish(),
@@ -269,6 +273,10 @@ export function inspectVideoSalesRoute(
         route.issue = 'Invalid procurement configuration'
         return route
       }
+    }
+    if (cost.mode === 'per_million_tokens' && sales.pricing_unit !== 'token') {
+      route.uncertain = false
+      route.issue = 'Token procurement cost needs token sales pricing'
     }
     if (channel.status !== 1) {
       route.uncertain = false

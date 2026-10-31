@@ -81,7 +81,7 @@ export type Channel = z.infer<typeof channelSchema>
 // Video Scheduling Types (settings.video_scheduling and its endpoints)
 // ============================================================================
 
-export type VideoCostMode = 'per_video' | 'per_second'
+export type VideoCostMode = 'per_video' | 'per_second' | 'per_million_tokens'
 // 'frame' is the first/last frame images of image-to-video requests, priced
 // apart from reference images.
 export type VideoReferenceKind = 'video' | 'image' | 'audio' | 'frame'
@@ -110,6 +110,9 @@ export interface VideoModelCost {
   references?: Partial<
     Record<VideoReferenceKind, Record<string, VideoReferenceCost>>
   >
+  /** per_million_tokens only: reference video USD per 1M tokens; 0 = included. */
+  with_video_prices?: Record<string, number>
+  official_reference_billing?: boolean
 }
 
 export type VideoSupplyUnit = 'usd' | 'count'

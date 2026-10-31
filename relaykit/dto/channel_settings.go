@@ -148,6 +148,9 @@ type ChannelOtherSettings struct {
 const (
 	VideoCostPerVideo  = "per_video"
 	VideoCostPerSecond = "per_second"
+	// VideoCostPerMillionTokens prices tokens like unified token sales:
+	// Prices and WithVideoPrices are USD per 1M tokens.
+	VideoCostPerMillionTokens = "per_million_tokens"
 
 	VideoRefUnsupported     = "unsupported"
 	VideoRefIncluded        = "included"
@@ -195,6 +198,12 @@ type VideoModelCost struct {
 	// References maps kind (video|image|audio|frame) -> tier|"*" -> rule. A
 	// missing kind or tier is unpriced, never included.
 	References map[string]map[string]VideoReferenceCost `json:"references,omitempty"`
+	// WithVideoPrices and OfficialReferenceBilling apply only to
+	// per_million_tokens and replace References["video"]: reference video is
+	// priced per 1M tokens (0 = included), and official billing raises it to
+	// ceil(output × 2/3) and prices the whole order at the with-video price.
+	WithVideoPrices          map[string]float64 `json:"with_video_prices,omitempty"`
+	OfficialReferenceBilling bool               `json:"official_reference_billing,omitempty"`
 }
 
 type VideoReferenceCost struct {
@@ -219,6 +228,11 @@ func (c *VideoSchedulingConfig) NormalizeTiers() (changed bool, err error) {
 		normalized, err = normalizeVideoTierTable(cost.AllowedSecondsByResolution)
 		if err != nil {
 			return changed, fmt.Errorf("video_scheduling: model %s: allowed_seconds_by_resolution: %w", model, err)
+		}
+		changed = changed || normalized
+		normalized, err = normalizeVideoTierTable(cost.WithVideoPrices)
+		if err != nil {
+			return changed, fmt.Errorf("video_scheduling: model %s: with_video_prices: %w", model, err)
 		}
 		changed = changed || normalized
 		for kind, rules := range cost.References {
@@ -269,8 +283,26 @@ func (c *VideoSchedulingConfig) Validate(maxCostUSD float64, maxSeconds int) err
 		if model == "" || model != strings.TrimSpace(model) {
 			return fmt.Errorf("video_scheduling: invalid model name %q", model)
 		}
-		if cost.Mode != VideoCostPerVideo && cost.Mode != VideoCostPerSecond {
+		if cost.Mode != VideoCostPerVideo && cost.Mode != VideoCostPerSecond && cost.Mode != VideoCostPerMillionTokens {
 			return fmt.Errorf("video_scheduling: model %s: invalid mode %q", model, cost.Mode)
+		}
+		tokenPriced := cost.Mode == VideoCostPerMillionTokens
+		if !tokenPriced && (cost.WithVideoPrices != nil || cost.OfficialReferenceBilling) {
+			return fmt.Errorf("video_scheduling: model %s: with-video prices require per_million_tokens", model)
+		}
+		if _, found := cost.References["video"]; found && tokenPriced {
+			return fmt.Errorf("video_scheduling: model %s: per_million_tokens prices reference video with with_video_prices", model)
+		}
+		for tier, price := range cost.WithVideoPrices {
+			if err := validateVideoTierKey(tier); err != nil {
+				return fmt.Errorf("video_scheduling: model %s: with_video_prices: %w", model, err)
+			}
+			if !usd(price) {
+				return fmt.Errorf("video_scheduling: model %s: with-video price for tier %s must be within [0, %g] USD", model, tier, maxCostUSD)
+			}
+			if cost.OfficialReferenceBilling && price == 0 {
+				return fmt.Errorf("video_scheduling: model %s: official reference billing needs a positive with-video price for tier %s", model, tier)
+			}
 		}
 		if len(cost.Prices) == 0 {
 			return fmt.Errorf("video_scheduling: model %s: prices are required", model)

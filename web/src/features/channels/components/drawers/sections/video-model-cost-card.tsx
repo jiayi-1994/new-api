@@ -42,6 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 
 import type { ChannelFormValues } from '../../../lib'
 import {
@@ -50,7 +51,7 @@ import {
   VIDEO_REFERENCE_KINDS,
   type VideoModelDraft,
 } from '../../../lib/video-scheduling'
-import type { VideoReferenceKind } from '../../../types'
+import type { VideoCostMode, VideoReferenceKind } from '../../../types'
 
 type VideoModelCostCardProps = {
   index: number
@@ -69,12 +70,22 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
 
   const update = (next: Partial<VideoModelDraft>) =>
     form.setValue(base, { ...item, ...next }, { shouldDirty: true })
-  const baseUnit =
-    item.mode === 'per_second' ? t('USD/output second') : t('USD/video')
+  const tokenPriced = item.mode === 'per_million_tokens'
+  const baseUnits: Record<VideoCostMode, string> = {
+    per_video: t('USD/video'),
+    per_second: t('USD/output second'),
+    per_million_tokens: t('USD/1M tokens'),
+  }
+  const baseUnit = baseUnits[item.mode]
   const modeItems = [
     { value: 'per_video', label: t('Per video') },
     { value: 'per_second', label: t('Per output second') },
+    { value: 'per_million_tokens', label: t('Per 1M tokens') },
   ]
+  // Token pricing prices reference video with the with-video column.
+  const referenceKinds = VIDEO_REFERENCE_KINDS.filter(
+    (kind) => !tokenPriced || kind !== 'video'
+  )
   const referenceModeItems = [
     { value: NOT_CONFIGURED, label: t('Not configured') },
     { value: 'unsupported', label: t('Unsupported') },
@@ -140,7 +151,16 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
             <Select
               items={modeItems}
               value={field.value}
-              onValueChange={field.onChange}
+              onValueChange={(value) => {
+                const mode = value as VideoCostMode
+                update({
+                  mode,
+                  references:
+                    mode === 'per_million_tokens'
+                      ? item.references.filter((row) => row.kind !== 'video')
+                      : item.references,
+                })
+              }}
             >
               <FormControl>
                 <SelectTrigger className='sm:w-60'>
@@ -166,9 +186,23 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
             'Purchase price per resolution tier, excluding reference media fees. Use * for untiered.'
           )}
         </p>
+        {tokenPriced && (
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Counted like unified token sales: tokens = width × height × 24 × seconds / 1024 at the sale output size. Only unified token-priced models can be quoted. Leave the with-video price empty to refuse reference video; 0 includes it.'
+            )}
+          </p>
+        )}
         {/* Rows bind form paths by position, so the position is their identity. */}
         {Array.from(item.prices.keys(), (rowIndex) => (
-          <div key={rowIndex} className='grid grid-cols-[1fr_1.5fr_auto] gap-2'>
+          <div
+            key={rowIndex}
+            className={
+              tokenPriced
+                ? 'grid grid-cols-[1fr_1.5fr_1.5fr_auto] gap-2'
+                : 'grid grid-cols-[1fr_1.5fr_auto] gap-2'
+            }
+          >
             <FormField
               control={form.control}
               name={`${base}.prices.${rowIndex}.tier`}
@@ -198,7 +232,11 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                         min={0}
                         step='any'
                         inputMode='decimal'
-                        aria-label={t('Base price')}
+                        aria-label={
+                          tokenPriced
+                            ? t('No-reference price per 1M tokens (USD)')
+                            : t('Base price')
+                        }
                       />
                     </FormControl>
                     <InputGroupAddon align='inline-end'>
@@ -209,6 +247,40 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
                 </FormItem>
               )}
             />
+            {tokenPriced && (
+              <FormField
+                control={form.control}
+                name={`${base}.prices.${rowIndex}.with_video`}
+                render={({ field }) => (
+                  <FormItem>
+                    <InputGroup>
+                      <FormControl>
+                        <InputGroupInput
+                          {...field}
+                          value={field.value ?? ''}
+                          type='number'
+                          min={0}
+                          step='any'
+                          inputMode='decimal'
+                          aria-label={
+                            item.official_reference_billing
+                              ? t(
+                                  'With-reference order price per 1M tokens (USD)'
+                                )
+                              : t('Reference video price per 1M tokens (USD)')
+                          }
+                          placeholder={t('Not configured')}
+                        />
+                      </FormControl>
+                      <InputGroupAddon align='inline-end'>
+                        <InputGroupText>{baseUnit}</InputGroupText>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <Button
               type='button'
               variant='ghost'
@@ -239,6 +311,25 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
           <Plus aria-hidden='true' />
           {t('Add price tier')}
         </Button>
+        {tokenPriced && (
+          <FormField
+            control={form.control}
+            name={`${base}.official_reference_billing`}
+            render={({ field }) => (
+              <FormItem className='flex items-center justify-between gap-4'>
+                <FormLabel>
+                  {t('Bill orders with reference video the official way')}
+                </FormLabel>
+                <FormControl>
+                  <Switch
+                    checked={field.value ?? false}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+        )}
       </div>
 
       <div className='grid gap-3 sm:grid-cols-3'>
@@ -303,7 +394,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
             size='sm'
             onClick={() =>
               update({
-                references: VIDEO_REFERENCE_KINDS.map((kind) => ({
+                references: referenceKinds.map((kind) => ({
                   kind,
                   tier: '*',
                   mode: 'included',
@@ -315,7 +406,7 @@ export function VideoModelCostCard(props: VideoModelCostCardProps) {
             {t('All kinds included')}
           </Button>
         </div>
-        {VIDEO_REFERENCE_KINDS.map((kind) => {
+        {referenceKinds.map((kind) => {
           const kindModeItems = referenceModeItems.filter(
             (option) => kind === 'video' || option.value !== 'per_input_second'
           )

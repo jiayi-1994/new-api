@@ -35,12 +35,7 @@ func resolveVideoInputSeconds(c *gin.Context, spec *videosched.Spec, cost videos
 	if spec.References["video"] == 0 {
 		return nil
 	}
-	rules := cost.References["video"]
-	rule, _, found := videosched.LookupVideoTier(rules, spec.Tier)
-	if !found || spec.Tier == "" {
-		rule = rules["*"]
-	}
-	if rule.Mode != videosched.RefPerInputSecond {
+	if !cost.MeasuresInputVideo(spec.Tier) {
 		return nil
 	}
 	spec.InputVideoSeconds = nil

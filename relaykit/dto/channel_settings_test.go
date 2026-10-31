@@ -778,6 +778,12 @@ func TestVideoSchedulingConfigValidate(t *testing.T) {
 		{name: "zero tier seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[0]}}}}`, wantErr: "within [1, 3600]"},
 		{name: "tier seconds over host limit", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[3601]}}}}`, wantErr: "within [1, 3600]"},
 		{name: "duplicate tier seconds", json: `{"models":{"m":{"mode":"per_video","prices":{"*":1},"allowed_seconds_by_resolution":{"720p":[5,5]}}}}`, wantErr: "duplicate duration"},
+		{name: "token pricing with official with-video prices", json: `{"models":{"m":{"mode":"per_million_tokens","prices":{"720p":46},"with_video_prices":{"*":28},"official_reference_billing":true,"references":{"image":{"*":{"mode":"included"}}}}}}`},
+		{name: "token pricing with included reference video", json: `{"models":{"m":{"mode":"per_million_tokens","prices":{"*":46},"with_video_prices":{"*":0}}}}`},
+		{name: "official billing needs a positive with-video price", json: `{"models":{"m":{"mode":"per_million_tokens","prices":{"*":46},"with_video_prices":{"*":0},"official_reference_billing":true}}}`, wantErr: "positive with-video price"},
+		{name: "token pricing rejects a video reference rule", json: `{"models":{"m":{"mode":"per_million_tokens","prices":{"*":46},"references":{"video":{"*":{"mode":"included"}}}}}}`, wantErr: "with_video_prices"},
+		{name: "with-video prices require token pricing", json: `{"models":{"m":{"mode":"per_second","prices":{"*":1},"with_video_prices":{"*":28}}}}`, wantErr: "require per_million_tokens"},
+		{name: "with-video price over bound", json: `{"models":{"m":{"mode":"per_million_tokens","prices":{"*":46},"with_video_prices":{"*":101}}}}`, wantErr: "with-video price for tier"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

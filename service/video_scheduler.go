@@ -834,6 +834,11 @@ func assembleVideoCandidate(c *gin.Context, group, clientModel string, channel *
 			return
 		}
 		spec.Tier = tier
+		if sales.PricingUnit == billing_setting.VideoPricingUnitToken {
+			// The sale's frozen output size, so cost and sale count the same tokens.
+			tokensPerSecond := float64(sales.Width*sales.Height*sales.FPS) / 1024
+			spec.TokensPerSecond = &tokensPerSecond
+		}
 	}
 	candidate.Spec = spec
 	if err := resolveVideoInputSeconds(c, &candidate.Spec, candidate.Cost); err != nil {
@@ -954,6 +959,7 @@ func videoCostConfig(cost dto.VideoModelCost) videosched.CostConfig {
 		Mode: cost.Mode, Prices: cost.Prices,
 		MinSeconds: cost.MinSeconds, MaxSeconds: cost.MaxSeconds, AllowedSeconds: cost.AllowedSeconds,
 		AllowedSecondsByResolution: cost.AllowedSecondsByResolution,
+		WithVideoPrices:            cost.WithVideoPrices, OfficialReferenceBilling: cost.OfficialReferenceBilling,
 	}
 	if len(cost.References) > 0 {
 		config.References = make(map[string]map[string]videosched.ReferenceCost, len(cost.References))

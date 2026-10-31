@@ -88,6 +88,11 @@ export function VideoSalesRoutingPanel(props: {
     per_input_second: t('Per input video second'),
     multiplier: t('Multiplier'),
   }
+  const costModes = {
+    per_video: t('Per video'),
+    per_second: t('Per second'),
+    per_million_tokens: t('Per 1M tokens'),
+  }
   const modelName = asciiFoldVideoModelName(props.modelName)
   const routes = (channels.data ?? [])
     .filter((channel) =>
@@ -162,11 +167,7 @@ export function VideoSalesRoutingPanel(props: {
         return (
           <div className='space-y-1'>
             <p className='font-medium'>{t('Base generation cost')}</p>
-            <p>
-              {route.cost.mode === 'per_second'
-                ? t('Per second')
-                : t('Per video')}
-            </p>
+            <p>{costModes[route.cost.mode]}</p>
             {Object.entries(route.cost.prices).map(([tier, price]) => (
               <p key={tier} className='text-muted-foreground text-xs'>
                 {tier}:{' '}
@@ -176,6 +177,23 @@ export function VideoSalesRoutingPanel(props: {
                 })}
               </p>
             ))}
+            {Object.entries(route.cost.with_video_prices ?? {}).map(
+              ([tier, price]) => (
+                <p
+                  key={`with-video/${tier}`}
+                  className='text-muted-foreground text-xs'
+                >
+                  {route.cost?.official_reference_billing
+                    ? t('With-reference order price per 1M tokens (USD)')
+                    : t('Reference video price per 1M tokens (USD)')}{' '}
+                  {tier}:{' '}
+                  {formatBillingCurrencyFromUSD(price, {
+                    locale,
+                    digitsSmall: 6,
+                  })}
+                </p>
+              )
+            )}
             {Object.keys(route.cost.references ?? {}).length > 0 && (
               <p className='pt-1 font-medium'>{t('Reference surcharges')}</p>
             )}

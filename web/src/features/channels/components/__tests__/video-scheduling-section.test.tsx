@@ -399,3 +399,45 @@ test('a channel with a supply unit shows its remaining stock and tops it up thro
   )
   expect(await within(supply).findByText(/Remaining supply: 8/)).toBeVisible()
 })
+
+test('switching to token pricing replaces video fee rules with a with-video price and saves the official flag', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = await openRouting(
+    editingChannel(
+      pricedConfig({
+        video: { '*': { mode: 'per_input', value: 0.2 } },
+        image: { '*': { mode: 'included' } },
+      })
+    )
+  )
+  await user.click(
+    await screen.findByRole('combobox', { name: 'Base price mode' })
+  )
+  await user.click(await screen.findByRole('option', { name: 'Per 1M tokens' }))
+  expect(
+    screen.queryByRole('group', { name: 'Reference videos' })
+  ).not.toBeInTheDocument()
+  await user.type(
+    screen.getByLabelText('Reference video price per 1M tokens (USD)'),
+    '28'
+  )
+  await user.click(
+    screen.getByRole('switch', {
+      name: 'Bill orders with reference video the official way',
+    })
+  )
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { settings: string }
+  expect(
+    JSON.parse(payload.settings).video_scheduling.models['videos-mini']
+  ).toEqual({
+    mode: 'per_million_tokens',
+    prices: { '*': 0.4 },
+    with_video_prices: { '*': 28 },
+    official_reference_billing: true,
+    references: { image: { '*': { mode: 'included' } } },
+  })
+})

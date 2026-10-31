@@ -59,7 +59,9 @@ export type VideoReferenceDraft = {
 export type VideoModelDraft = {
   model: string
   mode: VideoCostMode
-  prices: { tier: string; price: string }[]
+  /** with_video is the per_million_tokens reference video price; '' = not priced. */
+  prices: { tier: string; price: string; with_video?: string }[]
+  official_reference_billing?: boolean
   min_seconds: string
   max_seconds: string
   allowed_seconds: string
@@ -112,11 +114,16 @@ export function parseVideoSchedulingDraft(
   const models = Object.entries(stored.models ?? {}).map(
     ([model, cost]: [string, VideoModelCost]): VideoModelDraft => ({
       model,
-      mode: cost.mode === 'per_second' ? 'per_second' : 'per_video',
+      mode:
+        cost.mode === 'per_second' || cost.mode === 'per_million_tokens'
+          ? cost.mode
+          : 'per_video',
       prices: Object.entries(cost.prices ?? {}).map(([tier, price]) => ({
         tier,
         price: draftNumber(price),
+        with_video: draftNumber(cost.with_video_prices?.[tier]),
       })),
+      official_reference_billing: cost.official_reference_billing ?? false,
       min_seconds: cost.min_seconds ? String(cost.min_seconds) : '',
       max_seconds: cost.max_seconds ? String(cost.max_seconds) : '',
       allowed_seconds: (cost.allowed_seconds ?? []).join(', '),
@@ -168,6 +175,20 @@ export function buildVideoSchedulingConfig(
       prices: Object.fromEntries(
         item.prices.map((row) => [normalizeTier(row.tier), Number(row.price)])
       ),
+    }
+    if (item.mode === 'per_million_tokens') {
+      const withVideo = item.prices.filter((row) => row.with_video?.trim())
+      if (withVideo.length) {
+        cost.with_video_prices = Object.fromEntries(
+          withVideo.map((row) => [
+            normalizeTier(row.tier),
+            Number(row.with_video),
+          ])
+        )
+      }
+      if (item.official_reference_billing) {
+        cost.official_reference_billing = true
+      }
     }
     if (Number(item.min_seconds) > 0) {
       cost.min_seconds = Number(item.min_seconds)
@@ -241,8 +262,15 @@ export const videoSchedulingDraftSchema = z
     models: z.array(
       z.object({
         model: z.string(),
-        mode: z.enum(['per_video', 'per_second']),
-        prices: z.array(z.object({ tier: z.string(), price: z.string() })),
+        mode: z.enum(['per_video', 'per_second', 'per_million_tokens']),
+        prices: z.array(
+          z.object({
+            tier: z.string(),
+            price: z.string(),
+            with_video: z.string().optional(),
+          })
+        ),
+        official_reference_billing: z.boolean().optional(),
         min_seconds: z.string(),
         max_seconds: z.string(),
         allowed_seconds: z.string(),
@@ -301,6 +329,14 @@ export const videoSchedulingDraftSchema = z
             'Enter a price of 0 or more'
           )
         }
+        const withVideo = row.with_video?.trim() ?? ''
+        if (item.mode !== 'per_million_tokens' || !withVideo) return
+        const path = ['models', index, 'prices', rowIndex, 'with_video']
+        if (!isNumber(withVideo) || Number(withVideo) < 0) {
+          issue(path, 'Enter a price of 0 or more')
+        } else if (item.official_reference_billing && !Number(withVideo)) {
+          issue(path, 'Official billing needs a positive with-video price')
+        }
       })
       for (const field of ['min_seconds', 'max_seconds'] as const) {
         const seconds = Number(item[field])
@@ -341,6 +377,12 @@ export const videoSchedulingDraftSchema = z
       item.references.forEach((row, rowIndex) => {
         if (!row.mode) return
         const path = ['models', index, 'references', rowIndex]
+        if (item.mode === 'per_million_tokens' && row.kind === 'video') {
+          issue(
+            [...path, 'mode'],
+            'Token pricing prices reference video with the with-video price'
+          )
+        }
         if (row.mode === 'per_input_second' && row.kind !== 'video') {
           issue(
             [...path, 'mode'],

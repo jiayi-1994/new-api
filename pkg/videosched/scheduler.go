@@ -26,6 +26,9 @@ const (
 const (
 	ModePerVideo  = "per_video"
 	ModePerSecond = "per_second"
+	// ModePerMillionTokens prices output the way unified token sales do:
+	// Prices is USD per 1M tokens and the quote needs Spec.TokensPerSecond.
+	ModePerMillionTokens = "per_million_tokens"
 )
 
 // Reference media rule modes. Each kind and tier selects exactly one rule.
@@ -37,6 +40,10 @@ const (
 	RefPerInputSecond  = "per_input_second"  // Value USD per second of all input videos
 	RefPerOutputSecond = "per_output_second" // Value USD per output second
 	RefMultiplier      = "multiplier"        // adds base × (Value − 1); Value ≥ 1
+	// RefWithVideoPerMillionTokens is the quote line of reference video under
+	// ModePerMillionTokens; it is priced by CostConfig.WithVideoPrices, never
+	// configured as a reference rule.
+	RefWithVideoPerMillionTokens = "with_video_per_million_tokens"
 )
 
 // ReferenceKinds is the fixed order in which reference lines are priced and
@@ -63,8 +70,11 @@ type Spec struct {
 	ReferenceVideoURLs []string `json:"-"` // transient plugin facts, never persisted in audit snapshots
 	SecondsKind        string   // exact|fixed
 	Tier               string   // lowercase resolution or product key; "*" = the model has no tiers; "" = unknown
-	References         map[string]int
-	Missing            []string
+	// TokensPerSecond is W x H x fps / 1024 at the output size, set by the host
+	// only for unified token sales; nil means token costs cannot be quoted.
+	TokensPerSecond *float64 `json:",omitempty"`
+	References      map[string]int
+	Missing         []string
 }
 
 // ReferenceCost is one reference media rule. Value distinguishes a missing
@@ -85,6 +95,11 @@ type CostConfig struct {
 	AllowedSeconds             []int
 	AllowedSecondsByResolution map[string][]int                    // non-nil replaces model-wide duration constraints
 	References                 map[string]map[string]ReferenceCost // kind -> tier|"*" -> rule
+	// WithVideoPrices (tier|"*" -> USD per 1M tokens, 0 = included) prices
+	// reference video under ModePerMillionTokens, in the same added or
+	// official shape as unified token sales.
+	WithVideoPrices          map[string]float64
+	OfficialReferenceBilling bool
 }
 
 // CostQuote is the purchase cost of one spec. A non-empty Reason invalidates
@@ -99,7 +114,7 @@ type CostQuote struct {
 
 type ReferenceLine struct {
 	Kind, Mode, Tier string   // Tier is the rule key matched, which may differ from the base tier
-	Quantity         *float64 // 1 per request, item count or output seconds; nil for multipliers
+	Quantity         *float64 // 1 per request, item count, seconds or tokens; nil for multipliers
 	Value            *float64 // unit price or multiplier; nil when included
 	USD              float64
 	Reason           string
@@ -219,7 +234,12 @@ func Quote(cost CostConfig, spec Spec) CostQuote {
 		if n == 0 {
 			continue
 		}
-		line := quoteReference(kind, n, cost.References[kind], spec, q.BaseUSD)
+		var line ReferenceLine
+		if kind == "video" && cost.Mode == ModePerMillionTokens && n > 0 {
+			line = quoteTokenVideo(cost, spec, &q)
+		} else {
+			line = quoteReference(kind, n, cost.References[kind], spec, q.BaseUSD)
+		}
 		q.References = append(q.References, line)
 		if q.Reason != "" {
 			continue
@@ -242,7 +262,7 @@ func Quote(cost CostConfig, spec Spec) CostQuote {
 
 // quoteBase prices the base tier and checks the seconds constraints.
 func quoteBase(cost CostConfig, spec Spec) CostQuote {
-	if cost.Mode != ModePerVideo && cost.Mode != ModePerSecond {
+	if cost.Mode != ModePerVideo && cost.Mode != ModePerSecond && cost.Mode != ModePerMillionTokens {
 		return CostQuote{Reason: "invalid billing mode"}
 	}
 	if len(cost.Prices) == 0 {
@@ -279,7 +299,7 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 	constrained := cost.AllowedSecondsByResolution != nil || cost.MinSeconds > 0 || cost.MaxSeconds > 0 || len(allowed) > 0
 	quantity := 1.0
 	if spec.OutputSeconds == nil {
-		if cost.Mode == ModePerSecond || constrained {
+		if cost.Mode != ModePerVideo || constrained {
 			return CostQuote{Reason: "seconds unknown"}
 		}
 	} else {
@@ -293,9 +313,16 @@ func quoteBase(cost CostConfig, spec Spec) CostQuote {
 		if (cost.AllowedSecondsByResolution != nil || len(allowed) > 0) && !slices.ContainsFunc(allowed, func(value int) bool { return float64(value) == seconds }) {
 			return CostQuote{Reason: fmt.Sprintf("seconds %g not allowed", seconds)}
 		}
-		if cost.Mode == ModePerSecond {
+		if cost.Mode != ModePerVideo {
 			quantity = seconds
 		}
+	}
+	if cost.Mode == ModePerMillionTokens {
+		tokens, ok := outputMillionTokens(spec)
+		if !ok {
+			return CostQuote{Reason: "tokens unknown"}
+		}
+		quantity = tokens
 	}
 
 	usd, ok := product(base, quantity)
@@ -321,6 +348,103 @@ func LookupVideoTier[V any](tiers map[string]V, tier string) (value V, key strin
 	return value, key, found
 }
 
+// lookupTierOrWildcard matches tier (with the 2160p/4k alias) and falls back
+// to an explicit "*"; an empty tier only matches "*".
+func lookupTierOrWildcard[V any](tiers map[string]V, tier string) (V, string, bool) {
+	tier = strings.ToLower(strings.TrimSpace(tier))
+	if tier != "" {
+		if value, key, found := LookupVideoTier(tiers, tier); found {
+			return value, key, true
+		}
+	}
+	value, found := tiers["*"]
+	return value, "*", found
+}
+
+// MinReferenceSeconds is the official Seedance minimum billed reference video
+// duration, ceil(output × 2/3). Unified sales and channel costs share it.
+func MinReferenceSeconds(outputSeconds float64) float64 {
+	return math.Ceil(outputSeconds * 2 / 3)
+}
+
+// MeasuresInputVideo reports whether quoting tier needs the measured total
+// input video duration.
+func (c CostConfig) MeasuresInputVideo(tier string) bool {
+	if c.Mode == ModePerMillionTokens {
+		price, _, found := lookupTierOrWildcard(c.WithVideoPrices, tier)
+		return found && price > 0
+	}
+	rule, _, found := lookupTierOrWildcard(c.References["video"], tier)
+	return found && rule.Mode == RefPerInputSecond
+}
+
+// outputMillionTokens is the output in millions of tokens.
+func outputMillionTokens(spec Spec) (float64, bool) {
+	if spec.OutputSeconds == nil || spec.TokensPerSecond == nil {
+		return 0, false
+	}
+	tps := *spec.TokensPerSecond
+	if !(tps > 0) || math.IsInf(tps, 1) {
+		return 0, false
+	}
+	return product(*spec.OutputSeconds, tps/1e6)
+}
+
+// quoteTokenVideo prices reference video under ModePerMillionTokens exactly
+// as service.VideoSalesFacts.USD sells it: billable input tokens at the
+// with-video price, and under official billing the input raised to
+// MinReferenceSeconds and the output repriced at the with-video price too.
+// Both lines stay non-negative even when the with-video price is the lower one.
+func quoteTokenVideo(cost CostConfig, spec Spec, q *CostQuote) ReferenceLine {
+	line := ReferenceLine{Kind: "video", Mode: RefWithVideoPerMillionTokens}
+	price, key, found := lookupTierOrWildcard(cost.WithVideoPrices, spec.Tier)
+	if !found {
+		line.Reason = "reference video not priced"
+		return line
+	}
+	line.Tier = key
+	if !finiteNonNeg(price) {
+		line.Reason = "invalid reference video price"
+		return line
+	}
+	if price == 0 {
+		line.Mode = RefIncluded
+		return line
+	}
+	if spec.InputVideoSeconds == nil {
+		line.Reason = "input video seconds unknown"
+		return line
+	}
+	seconds := *spec.InputVideoSeconds
+	if !(seconds >= 0) || seconds > MaxDurationSeconds {
+		line.Reason = "invalid input video seconds"
+		return line
+	}
+	// Zero measured input never triggers the minimum, as in the sale.
+	if cost.OfficialReferenceBilling && seconds > 0 {
+		seconds = max(seconds, MinReferenceSeconds(*spec.OutputSeconds))
+	}
+	tokens, ok := product(seconds, *spec.TokensPerSecond)
+	value := price
+	line.Quantity, line.Value = &tokens, &value
+	usd, priced := product(tokens/1e6, price)
+	if !ok || !priced {
+		line.Reason = "invalid total price"
+		return line
+	}
+	line.USD = usd
+	if cost.OfficialReferenceBilling && seconds > 0 {
+		output, _ := outputMillionTokens(spec)
+		base, ok := product(output, price)
+		if !ok {
+			line.Reason = "invalid total price"
+			return line
+		}
+		q.BaseUSD = base
+	}
+	return line
+}
+
 // quoteReference prices one reference kind carrying n items. The rule is
 // matched on the request tier and falls back to an explicit "*"; the tier the
 // base price hit never hides a tier-specific surcharge.
@@ -330,15 +454,7 @@ func quoteReference(kind string, n int, rules map[string]ReferenceCost, spec Spe
 		line.Reason = "invalid reference " + kind + " count"
 		return line
 	}
-	tier := strings.ToLower(strings.TrimSpace(spec.Tier))
-	rule, key, ok := LookupVideoTier(rules, tier)
-	if ok {
-		tier = key
-	}
-	if tier == "" || !ok {
-		tier = "*"
-		rule, ok = rules[tier]
-	}
+	rule, tier, ok := lookupTierOrWildcard(rules, spec.Tier)
 	if !ok {
 		line.Reason = "reference " + kind + " not priced"
 		return line

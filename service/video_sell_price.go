@@ -95,7 +95,7 @@ func (f VideoSalesFacts) BillableInputVideoSeconds() float64 {
 	if !f.OfficialReferenceBilling {
 		return *f.InputVideoSeconds
 	}
-	return max(*f.InputVideoSeconds, float64((f.Seconds*2+2)/3))
+	return max(*f.InputVideoSeconds, videosched.MinReferenceSeconds(float64(f.Seconds)))
 }
 
 // USD is the sale before the group ratio. Callers check Ready first. It must

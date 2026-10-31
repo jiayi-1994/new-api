@@ -1751,6 +1751,32 @@ export function describeSpec(ctx){return {spec_version:1,output_seconds:ctx.requ
 			assert.InDelta(t, 0.3, candidate.Sell.USD, 1e-12)
 		})
 	}
+	// A token purchase price counts the tokens of the frozen token sale.
+	for _, tc := range []struct {
+		name     string
+		sale     VideoSalesFacts
+		cost, at float64
+		reason   string
+	}{
+		{"token sale", VideoSalesFacts{PricingUnit: billing_setting.VideoPricingUnitToken, Width: 1280, Height: 720, FPS: 24, USDPerMillionTokens: 46}, 9.72, 14.904, ""},
+		{"second sale has no output size", VideoSalesFacts{USDPerSecond: 0.02}, 0, 0.3, "tokens unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newVideoSchedTestContext(t)
+			c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Plugin: plugin})
+			c.Set("task_request", map[string]any{"seconds": 15, "resolution": "720p"})
+			tc.sale.Model, tc.sale.Seconds, tc.sale.Resolution = "real-video", 15, "720p"
+			SetVideoSalesFacts(c, tc.sale)
+			channel := &model.Channel{Id: 552, Models: "real-video", Status: common.ChannelStatusEnabled,
+				OtherSettings: `{"video_scheduling":{"models":{"real-video":{"mode":"per_million_tokens","prices":{"720p":30}}}}}`}
+			candidate, _ := assembleVideoCandidate(c, "default", "real-video", channel, false, operation_setting.GetVideoSchedulingSetting())
+			require.Empty(t, candidate.Excluded)
+			quote := videosched.Quote(candidate.Cost, candidate.Spec)
+			assert.Equal(t, tc.reason, quote.Reason)
+			assert.InDelta(t, tc.cost, quote.TotalUSD, 1e-9, "1280x720x24x15/1024 = 324000 tokens at 30/1M")
+			assert.InDelta(t, tc.at, candidate.Sell.USD, 1e-9)
+		})
+	}
 }
 
 // A unified sale with an input video price measures the input videos every

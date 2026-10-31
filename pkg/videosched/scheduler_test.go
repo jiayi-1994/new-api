@@ -1527,3 +1527,49 @@ func TestOutOfStockGatesByQuoteInEveryEvaluator(t *testing.T) {
 	assert.Empty(t, byID(t, scores, 1).Reason)
 	assert.Equal(t, "out of stock", byID(t, scores, 2).Reason)
 }
+
+// TestQuoteTokenCost mirrors unified token sales with prices per 1M tokens.
+// Totals are the Ark console calculator cases recorded in
+// .scratch/unified-video-output-token-unit/PLAN.md (CNY per 1K x 1000).
+func TestQuoteTokenCost(t *testing.T) {
+	tps := func(w, h int) *float64 { v := float64(w*h*24) / 1024; return &v }
+	cost := func(official bool, withVideo map[string]float64) CostConfig {
+		return CostConfig{Mode: ModePerMillionTokens, Prices: map[string]float64{"720p": 46}, WithVideoPrices: withVideo, OfficialReferenceBilling: official}
+	}
+	request := func(output float64, input *float64, videos int, size *float64) Spec {
+		return Spec{Tier: "720p", OutputSeconds: &output, InputVideoSeconds: input, TokensPerSecond: size, References: map[string]int{"video": videos}}
+	}
+	cases := []struct {
+		name            string
+		cost            CostConfig
+		spec            Spec
+		base, ref       float64
+		reason, refMode string
+	}{
+		{"no reference 4:3 keeps fractional tokens", cost(true, nil), request(5, nil, 0, tps(1112, 834)), 4.99930875, 0, "", ""},
+		{"official raises 2 s input to ceil(5x2/3) and reprices the order", cost(true, map[string]float64{"*": 28}), request(5, secs(2), 1, tps(1280, 720)), 3.024, 2.4192, "", RefWithVideoPerMillionTokens},
+		{"official keeps a longer input", cost(true, map[string]float64{"720p": 28}), request(5, secs(5), 1, tps(1280, 720)), 3.024, 3.024, "", RefWithVideoPerMillionTokens},
+		{"seedance 2.5 15 s + 5 s", CostConfig{Mode: ModePerMillionTokens, Prices: map[string]float64{"*": 70}, WithVideoPrices: map[string]float64{"*": 42}, OfficialReferenceBilling: true}, request(15, secs(5), 1, tps(1280, 720)), 13.608, 9.072, "", RefWithVideoPerMillionTokens},
+		{"added shape bills the measured input on top", cost(false, map[string]float64{"*": 28}), request(5, secs(2), 1, tps(1280, 720)), 4.968, 1.2096, "", RefWithVideoPerMillionTokens},
+		{"zero with-video price is included", cost(false, map[string]float64{"*": 0}), request(5, nil, 1, tps(1280, 720)), 4.968, 0, "", RefIncluded},
+		{"missing with-video price is not free", cost(true, nil), request(5, secs(2), 1, tps(1280, 720)), 0, 0, "reference video not priced", ""},
+		{"input must be measured", cost(true, map[string]float64{"*": 28}), request(5, nil, 1, tps(1280, 720)), 0, 0, "input video seconds unknown", ""},
+		{"no output size", cost(true, nil), request(5, nil, 0, nil), 0, 0, "tokens unknown", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := Quote(tc.cost, tc.spec)
+			require.Equal(t, tc.reason, q.Reason)
+			assert.InDelta(t, tc.base, q.BaseUSD, eps)
+			assert.InDelta(t, tc.ref, q.ReferenceUSD, eps)
+			assert.InDelta(t, tc.base+tc.ref, q.TotalUSD, eps)
+			if tc.refMode != "" {
+				require.Len(t, q.References, 1)
+				assert.Equal(t, tc.refMode, q.References[0].Mode)
+			}
+		})
+	}
+	assert.True(t, cost(true, map[string]float64{"*": 28}).MeasuresInputVideo("720p"))
+	assert.False(t, cost(false, map[string]float64{"*": 0}).MeasuresInputVideo("720p"))
+	assert.True(t, CostConfig{Mode: ModePerSecond, References: map[string]map[string]ReferenceCost{"video": {"*": rule(RefPerInputSecond, 0.1)}}}.MeasuresInputVideo("720p"))
+}
