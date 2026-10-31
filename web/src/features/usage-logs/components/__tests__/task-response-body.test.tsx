@@ -48,7 +48,7 @@ const platformBody =
   '{\n  "id": "public-task-id",\n  "seed": 18446744073709551615\n}'
 const upstreamBody = '{\n  "upstream_account": "acct-private"\n}'
 
-function renderDialog(isAdmin: boolean) {
+function renderDialog(role: 'user' | 'admin' | 'root') {
   return render(
     <QueryClientProvider
       client={
@@ -57,8 +57,8 @@ function renderDialog(isAdmin: boolean) {
     >
       <TaskDetailsDialog
         log={task}
-        isAdmin={isAdmin}
-        isRoot={false}
+        isAdmin={role !== 'user'}
+        isRoot={role === 'root'}
         open
         onOpenChange={() => {}}
       />
@@ -75,7 +75,7 @@ afterEach(() => {
   vi.mocked(getTaskResponseBody).mockReset()
 })
 
-test('an administrator sees the platform and upstream responses exactly as the server returned them', async () => {
+test('a root user sees the platform and upstream responses exactly as the server returned them', async () => {
   vi.mocked(getTaskResponseBody).mockResolvedValue({
     success: true,
     data: {
@@ -85,7 +85,7 @@ test('an administrator sees the platform and upstream responses exactly as the s
     },
   })
 
-  renderDialog(true)
+  renderDialog('root')
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
   expect(
@@ -98,28 +98,31 @@ test('an administrator sees the platform and upstream responses exactly as the s
   expect(getTaskResponseBody).toHaveBeenCalledWith('public-task-id')
 })
 
-test('a customer sees the platform response but never an upstream response section', async () => {
+test.each(['user', 'admin'] as const)(
+  'a %s sees the platform response but never an upstream response section',
+  async (role) => {
+    vi.mocked(getTaskResponseBody).mockResolvedValue({
+      success: true,
+      data: { platform_format: 'task', platform: platformBody },
+    })
+
+    renderDialog(role)
+
+    const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
+    expect(
+      (await within(dialog).findByText(/18446744073709551615/)).textContent
+    ).toBe(platformBody)
+    expect(within(dialog).queryByText('Upstream response')).toBeNull()
+  }
+)
+
+test('a root user viewing a task without an upstream snapshot sees it reported as not recorded', async () => {
   vi.mocked(getTaskResponseBody).mockResolvedValue({
     success: true,
     data: { platform_format: 'task', platform: platformBody },
   })
 
-  renderDialog(false)
-
-  const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
-  expect(
-    (await within(dialog).findByText(/18446744073709551615/)).textContent
-  ).toBe(platformBody)
-  expect(within(dialog).queryByText('Upstream response')).toBeNull()
-})
-
-test('an administrator viewing a task without an upstream snapshot sees it reported as not recorded', async () => {
-  vi.mocked(getTaskResponseBody).mockResolvedValue({
-    success: true,
-    data: { platform_format: 'task', platform: platformBody },
-  })
-
-  renderDialog(true)
+  renderDialog('root')
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
   await within(dialog).findByText(/18446744073709551615/)
@@ -135,7 +138,7 @@ test('an administrator viewing a task without an upstream snapshot sees it repor
 test('a failed response body request is reported as failed to load', async () => {
   vi.mocked(getTaskResponseBody).mockRejectedValue(new Error('network'))
 
-  renderDialog(false)
+  renderDialog('user')
 
   const dialog = await screen.findByRole('dialog', { name: /Task Details/ })
   const platformSection = within(dialog)

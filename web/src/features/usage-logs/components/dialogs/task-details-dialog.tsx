@@ -154,12 +154,12 @@ function TaskResponseBodyBlock(props: {
 
 // The platform body is what the client receives when retrieving the task.
 // The upstream snapshot names the upstream account, task id and wholesale
-// quota, so the server returns it to administrators only. Both arrive as
+// quota, so the server returns it to root sessions only. Both arrive as
 // pre-indented text: parsing them here would round integers beyond 2^53.
 function TaskResponseBodySection(props: {
   taskId: string
   open: boolean
-  isAdmin: boolean
+  isRoot: boolean
 }) {
   const { t } = useTranslation()
   const query = useQuery({
@@ -187,7 +187,7 @@ function TaskResponseBodySection(props: {
         body={record?.platform}
         emptyText={emptyText}
       />
-      {props.isAdmin ? (
+      {props.isRoot ? (
         <TaskResponseBodyBlock
           label={t('Upstream response')}
           body={record?.upstream}
@@ -296,7 +296,7 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
         <TaskResponseBodySection
           taskId={props.log.task_id}
           open={props.open}
-          isAdmin={props.isAdmin}
+          isRoot={props.isRoot}
         />
 
         {props.isAdmin ? (

@@ -200,7 +200,7 @@ func TestTaskRequestBodyIsVisibleOnlyToOwnerAndAdminSessions(t *testing.T) {
 	}
 }
 
-func TestTaskResponseBodyShowsUpstreamSnapshotOnlyToAdminSessions(t *testing.T) {
+func TestTaskResponseBodyShowsUpstreamSnapshotOnlyToRootSessions(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	// 2^64-1 would round in a float64 decode; both bodies must keep it exact.
 	task.Data = []byte(`{"upstream_account":"acct-private","seed":18446744073709551615}`)
@@ -237,7 +237,9 @@ func TestTaskResponseBodyShowsUpstreamSnapshotOnlyToAdminSessions(t *testing.T) 
 	}{
 		{name: "owner sees the platform body only", taskID: task.TaskID, userID: 7, role: common.RoleCommonUser, wantFound: true,
 			wantFormat: "task", wantPlatform: []string{`"task_id": "task_generic"`, `18446744073709551615`}},
-		{name: "admin session sees both bodies", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true,
+		{name: "admin session sees the platform body only", taskID: task.TaskID, userID: 8, role: common.RoleAdminUser, wantFound: true,
+			wantFormat: "task", wantPlatform: []string{`"task_id": "task_generic"`}},
+		{name: "root session sees both bodies", taskID: task.TaskID, userID: 8, role: common.RoleRootUser, wantFound: true,
 			wantFormat: "task", wantPlatform: []string{`"task_id": "task_generic"`}, wantUpstream: true},
 		{name: "other user", taskID: task.TaskID, userID: 8, role: common.RoleCommonUser},
 		{name: "root api token", taskID: task.TaskID, userID: 8, role: common.RoleRootUser, tokenID: 99},

@@ -444,9 +444,6 @@ func GetUserTask(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
-// GetTaskRequestBody returns the payload the client submitted for a task.
-// Admin sessions can read any task; tokens and other users only their own.
-// Tasks submitted before the payload was recorded return null data.
 // dashboardTaskViewerIsAdmin reports an administrator browser session; API
 // tokens never reach other users' tasks or upstream task details.
 func dashboardTaskViewerIsAdmin(c *gin.Context) bool {
@@ -484,12 +481,12 @@ type taskResponseBodyView struct {
 	// Platform is what a client retrieving this task receives from the
 	// gateway, rendered from the stored task. Empty when not retrievable.
 	Platform string `json:"platform"`
-	// Upstream is the persisted upstream snapshot, for administrators only.
+	// Upstream is the persisted upstream snapshot, for root sessions only.
 	Upstream string `json:"upstream,omitempty"`
 }
 
 // GetTaskResponseBody renders the platform retrieval body for the task owner
-// and administrators, plus the raw upstream snapshot for administrators.
+// and administrators, plus the raw upstream snapshot for root sessions.
 func GetTaskResponseBody(c *gin.Context) {
 	task := getDashboardTask(c)
 	if task == nil {
@@ -510,7 +507,8 @@ func GetTaskResponseBody(c *gin.Context) {
 			view.Platform = string(body)
 		}
 	}
-	if dashboardTaskViewerIsAdmin(c) && len(task.Data) > 0 && string(task.Data) != "null" {
+	viewerIsRoot := c.GetInt("token_id") == 0 && c.GetInt("role") >= common.RoleRootUser
+	if viewerIsRoot && len(task.Data) > 0 && string(task.Data) != "null" {
 		upstream := []byte(task.Data)
 		if indented, err := common.IndentJson(upstream); err == nil {
 			upstream = indented
@@ -521,6 +519,9 @@ func GetTaskResponseBody(c *gin.Context) {
 	common.ApiSuccess(c, view)
 }
 
+// GetTaskRequestBody returns the payload the client submitted for a task.
+// Admin sessions can read any task; tokens and other users only their own.
+// Tasks submitted before the payload was recorded return null data.
 func GetTaskRequestBody(c *gin.Context) {
 	task := getDashboardTask(c)
 	if task == nil {
