@@ -877,13 +877,13 @@ func unifiedVideoPublicErrorMessage(c *gin.Context, taskErr *taskdto.TaskError) 
 	upstreamBody := taskErr.Code == "fail_to_fetch_task" || taskErr.Code == "plugin_submit_rejected"
 	upstreamAuth := taskErr.StatusCode == http.StatusUnauthorized || taskErr.StatusCode == http.StatusForbidden
 	channelKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
-	if !upstreamAuth {
+	if upstreamBody && !upstreamAuth {
 		if message, ok := service.WhitelistedUnifiedVideoError(taskErr.Message, channelKey); ok {
 			return message
 		}
-	}
-	if setting.ErrorPassthroughEnabled && upstreamBody && !upstreamAuth {
-		return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, channelKey)
+		if setting.ErrorPassthroughEnabled {
+			return service.SanitizeUnifiedVideoUpstreamError(taskErr.Message, channelKey)
+		}
 	}
 	if !taskErr.LocalError && !upstreamAuth {
 		// Explicit business rejections have a synthetic 502 status; their

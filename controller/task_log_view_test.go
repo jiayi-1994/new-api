@@ -935,5 +935,8 @@ func TestUnifiedVideoErrorWhitelistShowsApprovedFailures(t *testing.T) {
 		assert.Equal(t, "image too large", unifiedVideoPublicErrorMessage(c, approved))
 		upstreamAuth := service.TaskErrorWrapper(errors.New("image too large"), "fail_to_fetch_task", http.StatusForbidden)
 		assert.Equal(t, model.UnifiedVideoRequestFailedMessage, unifiedVideoPublicErrorMessage(c, upstreamAuth))
+		// Only upstream bodies may match; other codes carry host diagnostics.
+		internal := service.TaskErrorWrapper(errors.New("image too large at /srv/plugins/x.js"), "gen_relay_info_failed", http.StatusBadRequest)
+		assert.Equal(t, model.UnifiedVideoRequestFailedMessage, unifiedVideoPublicErrorMessage(c, internal))
 	})
 }

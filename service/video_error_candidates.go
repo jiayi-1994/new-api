@@ -50,7 +50,8 @@ func ListVideoErrorCandidates() ([]VideoErrorCandidate, error) {
 	}
 	records := make([]videoFailureRecord, 0, len(tasks)+len(logs))
 	for _, task := range tasks {
-		if !unifiedVideoHostFailure(task) {
+		// The whitelist only projects unified video sales; other tasks are noise.
+		if task.IsUnifiedVideoSale() && !unifiedVideoHostFailure(task) {
 			records = append(records, videoFailureRecord{Message: task.FailReason, At: task.FinishTime})
 		}
 	}

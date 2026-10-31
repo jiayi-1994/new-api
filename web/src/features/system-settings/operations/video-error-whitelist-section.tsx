@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { Plus, Save, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -27,6 +27,7 @@ import { formatTimestampToDate } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getVideoErrorCandidates } from '../api'
+import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -135,6 +136,10 @@ export function VideoErrorWhitelistSection(props: { rules: string }) {
 
   return (
     <SettingsSection title={t('Video Error Whitelist')}>
+      <SettingsPageFormActions
+        onSave={save}
+        isSaving={updateOption.isPending}
+      />
       <p className='text-muted-foreground text-sm'>
         {t(
           'Video failures show a generic message by default. A failure containing a keyword below shows the display text, or the sanitized upstream message when the text is empty. System and upstream account failures, such as unpaid balance, no available channel or timeouts, are never shown even if a rule matches.'
@@ -176,7 +181,7 @@ export function VideoErrorWhitelistSection(props: { rules: string }) {
           </Button>
         </div>
       ))}
-      <div className='flex flex-wrap gap-2'>
+      <div>
         <Button
           type='button'
           variant='outline'
@@ -190,10 +195,6 @@ export function VideoErrorWhitelistSection(props: { rules: string }) {
         >
           <Plus className='size-4' />
           {t('Add rule')}
-        </Button>
-        <Button type='button' onClick={save} disabled={updateOption.isPending}>
-          <Save className='size-4' />
-          {t('Save')}
         </Button>
       </div>
       <VideoErrorCandidates />

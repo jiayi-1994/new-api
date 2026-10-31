@@ -24,7 +24,7 @@ var (
 		`|\bdata:[a-z]+/[a-z0-9.+-]+[^\s"']*` +
 		`|\bwww\.[^\s"'<>，。；！？、）】》]+` +
 		`|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}` +
-		`|\[[0-9a-f:]{2,}\](?::\d+)?` +
+		`|\[[0-9a-f]*:[0-9a-f:]+\](?::\d+)?` +
 		`|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:/[^\s"'<>，。；！？、）】》]*)?` +
 		`|\b(?:[a-z0-9-]+\.)+(?:com|net|org|cn|io|ai|top|cc|co|xyz|dev|app|cloud|site|tech|me|info|biz|vip|ltd|shop|online|store|hk|tw|jp|us|uk|de|ru|invalid|example)\b(?::\d+)?(?:/[^\s"'<>，。；！？、）】》]*)?`)
 )
