@@ -782,7 +782,7 @@ func TestUnifiedVideoSubmissionAcrossPlugins(t *testing.T) {
 		plugin, err := pluginruntime.DefaultRegistry.Register(fmt.Sprintf(`
 export const meta = {apiVersion:1,key:%q,name:"Unified submission fixture",version:"1.0.0",author:{name:"Test"},models:[%q,%q],fetchMode:"per_task",protocols:["openai_video"],usageSchema:{requests:{type:"number",unit:"count",description:"Video generation unit price"}}};
 export const protocols = {openai_video:{
-  decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size,videos:ctx.body.value.videos||[],decodedBy:meta.key}};},
+  decodeRequest(ctx) {return {kind:"submit",model:ctx.model,requestBody:{seconds:ctx.body.value.seconds,size:ctx.body.value.size||ctx.body.value.resolution,videos:ctx.body.value.videos||[],decodedBy:meta.key}};},
   render(ctx,task) {return task.data;}
 }};
 export function describeSpec(ctx) {return {spec_version:2,output_seconds:ctx.requestBody.seconds,resolution:ctx.requestBody.size,reference_video_urls:ctx.requestBody.videos,references:{video:ctx.requestBody.videos.length,image:0,audio:0}};}
@@ -812,15 +812,18 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 		wantStatus   int
 		samePlugin   bool
 		inputVideos  []string // priced at $0.2 per input second when present
+		ark          bool     // send the equivalent Volcengine Ark body through the Ark conversion
 	}{
-		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, nil},
-		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK, false, nil},
-		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK, false, nil},
-		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway, false, nil},
-		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable, false, nil},
-		{"same plugin retries a different upstream model", "rejected", []string{"unified-controller-a", "unified-controller-a"}, http.StatusOK, true, nil},
-		{"input video is charged once across a retry", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, []string{"/three.mp4", "/fraction.mp4"}},
-		{"unmeasurable input video is the client error", "success", nil, http.StatusBadRequest, false, []string{"/not-video"}},
+		{"explicit rejection retries", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, nil, false},
+		{"direct first plugin", "success", []string{"unified-controller-a"}, http.StatusOK, false, nil, false},
+		{"direct second plugin", "excluded", []string{"unified-controller-b"}, http.StatusOK, false, nil, false},
+		{"unknown receipt stops", "unknown", []string{"unified-controller-a"}, http.StatusBadGateway, false, nil, false},
+		{"all candidates excluded", "all_excluded", nil, http.StatusServiceUnavailable, false, nil, false},
+		{"same plugin retries a different upstream model", "rejected", []string{"unified-controller-a", "unified-controller-a"}, http.StatusOK, true, nil, false},
+		{"input video is charged once across a retry", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, []string{"/three.mp4", "/fraction.mp4"}, false},
+		{"unmeasurable input video is the client error", "success", nil, http.StatusBadRequest, false, []string{"/not-video"}, false},
+		{"Ark request retries like its OpenAI equivalent", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, nil, true},
+		{"Ark reference video is measured and charged once", "rejected", []string{"unified-controller-a", "unified-controller-b"}, http.StatusOK, false, []string{"/three.mp4", "/fraction.mp4"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initialQuota := common.QuotaRound(20 * common.QuotaPerUnit)
@@ -834,6 +837,16 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 					urls[i] = fmt.Sprintf("%q", mediaServer.URL+path)
 				}
 				body = fmt.Sprintf(`{"model":"unified-controller-video","seconds":15,"size":"1280x720","videos":[%s]}`, strings.Join(urls, ","))
+			}
+			wantSize := "1280x720"
+			if tc.ark {
+				// Ark defaults (watermark:false, seed:-1) must not change candidates or price.
+				content := `{"type":"text","text":"a cat"}`
+				for _, path := range tc.inputVideos {
+					content += fmt.Sprintf(`,{"type":"video_url","role":"reference_video","video_url":{"url":%q}}`, mediaServer.URL+path)
+				}
+				body = `{"model":"unified-controller-video","content":[` + content + `],"duration":15,"resolution":"720p","watermark":false,"seed":-1}`
+				wantSize = "720p"
 			}
 			billingConfig.VideoSales = map[string]billing_setting.VideoSalesModel{
 				"unified-controller-video": {Resolutions: map[string]billing_setting.VideoSalesTier{
@@ -927,7 +940,12 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: fmt.Sprintf("task_unified_%d", caseIndex)}}
 			info.UserSetting.BillingPreference = "wallet_only"
 			router := gin.New()
-			router.POST("/v1/videos", middleware.PinTaskPluginEndpoint(), middleware.PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+			handlers := []gin.HandlerFunc{middleware.PinTaskPluginEndpoint(), middleware.PrepareTaskPluginEndpoint()}
+			if tc.ark {
+				// The Ark envelope's path rewrite is covered by the router tests.
+				handlers = append([]gin.HandlerFunc{ArkVideoRequest()}, handlers...)
+			}
+			router.POST("/v1/videos", append(handlers, func(c *gin.Context) {
 				requestContext = c
 				c.Set(common.RequestIdKey, info.PublicTaskID)
 				c.Set("username", user.Username)
@@ -947,7 +965,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				if taskErr != nil {
 					c.Status(taskErr.StatusCode)
 				}
-			})
+			})...)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
@@ -964,7 +982,7 @@ export function buildContentRequest() {throw new Error("fixture has no artifacts
 				received := <-requests
 				require.NoError(t, received.Err)
 				assert.Equal(t, key, received.Plugin)
-				assert.Equal(t, map[string]any{"model": lastModel, "seconds": float64(15), "size": "1280x720", "decodedBy": key}, received.Body)
+				assert.Equal(t, map[string]any{"model": lastModel, "seconds": float64(15), "size": wantSize, "decodedBy": key}, received.Body)
 				assert.Equal(t, initialQuota-wantQuota, received.UserQuota, "each upstream attempt observes one wallet reservation")
 				assert.Equal(t, initialQuota-wantQuota, received.TokenQuota, "retries reuse the token reservation")
 			}
