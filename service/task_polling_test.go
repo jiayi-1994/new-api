@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1131,6 +1132,12 @@ func TestSweepTimeoutBlamesUpstreamOnlyAfterPolling(t *testing.T) {
 			previousTimeout := constant.TaskTimeoutMinutes
 			constant.TaskTimeoutMinutes = 5
 			t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
+			// This test covers timeout attribution, not the failure streak: one
+			// upstream-attributed timeout must be enough to block.
+			settings := operation_setting.GetVideoSchedulingSetting()
+			previousThreshold := settings.ConsecutiveFailureThreshold
+			settings.ConsecutiveFailureThreshold = 1
+			t.Cleanup(func() { settings.ConsecutiveFailureThreshold = previousThreshold })
 			now := time.Now().Unix()
 			tasks := map[int]*model.Task{}
 			for _, channelID := range []int{7, 8, 9, 10} {

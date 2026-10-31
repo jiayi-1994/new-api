@@ -87,12 +87,8 @@ func decideReliableVideoSchedule(input VideoDecisionInput) VideoScheduleChoice {
 		if n := cmp.Compare(b.score.Candidate.Priority, a.score.Candidate.Priority); n != 0 {
 			return n
 		}
-		if (a.flow == "recover") != (b.flow == "recover") {
-			if a.flow == "recover" {
-				return 1
-			}
-			return -1
-		}
+		// Recovery and cold-start verification share the same oldest-first
+		// order. A busy new channel must not starve an eligible recovery.
 		if n := cmp.Compare(a.score.Candidate.Reliability.LastValidationAt, b.score.Candidate.Reliability.LastValidationAt); n != 0 {
 			return n
 		}

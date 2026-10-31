@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -490,7 +491,7 @@ func observeVideoHealthAttempt(tx *gorm.DB, requestID string, attemptSeq int, ta
 		}
 	}
 	fault := finalOutcome == "upstream" || finalOutcome == "unknown"
-	if changed && (fault || attempt.Flow == "recover") {
+	if changed && (fault || finalOutcome == "success" || attempt.Flow == "recover") {
 		var state VideoHealthState
 		if err := lockForUpdate(tx).Where("channel_id = ? AND model_name = ?", attempt.ChannelID, attempt.ModelName).First(&state).Error; err != nil {
 			return err
@@ -505,15 +506,46 @@ func observeVideoHealthAttempt(tx *gorm.DB, requestID string, attemptSeq int, ta
 				dirty = true
 			}
 		}
-		// New faults revoke a normal certificate immediately. Probe failures
-		// belong to their recovery round and are assessed against both gates.
+		// Serialize successes as well as failures through the state lock. The
+		// journal then supplies a durable, deduplicated completion streak across
+		// instances without adding another counter that can drift after restart.
+		// Probe failures still belong to their own recovery round and rate gates.
 		if fault && attempt.ConfigIdentity == state.ConfigIdentity && attempt.StateVersion >= state.ConfigVersion && (state.State == videosched.HealthNormal || state.State == videosched.HealthUnverified) {
-			state.State, state.Reason, state.BlockedAt = videosched.HealthBlocked, "new upstream failure", now
-			if finalOutcome == "unknown" {
-				state.Reason = "submit outcome unknown"
+			block, reason := finalOutcome == "unknown", "submit outcome unknown"
+			if finalOutcome == "upstream" {
+				threshold := operation_setting.GetVideoSchedulingSetting().ConsecutiveFailureThreshold
+				if threshold <= 0 {
+					threshold = 3
+				}
+				threshold = min(threshold, 100)
+				var outcomes []string
+				// Timestamps have second precision. A success wins a tie so that
+				// submission IDs cannot turn out-of-order results into a false streak.
+				if err := tx.Model(&VideoHealthAttempt{}).
+					Where("channel_id = ? AND model_name = ? AND config_identity = ? AND state_version >= ?", attempt.ChannelID, attempt.ModelName, state.ConfigIdentity, state.ConfigVersion).
+					Where("final_outcome IN ?", []string{"success", "upstream"}).
+					Order("finished_at DESC").Order("CASE WHEN final_outcome = 'success' THEN 0 ELSE 1 END").Order("id DESC").Limit(threshold).
+					Pluck("final_outcome", &outcomes).Error; err != nil {
+					return err
+				}
+				block = len(outcomes) == threshold
+				for _, outcome := range outcomes {
+					if outcome == "success" {
+						block = false
+						break
+					}
+				}
+				reason = "upstream failure threshold reached"
+				if threshold == 1 {
+					block = true // Explicitly preserve the single-failure policy.
+					reason = "new upstream failure"
+				}
 			}
-			state.Version++
-			dirty = true
+			if block {
+				state.State, state.Reason, state.BlockedAt = videosched.HealthBlocked, reason, now
+				state.Version++
+				dirty = true
+			}
 		}
 		if dirty {
 			if err := SaveVideoHealthState(tx, &state, version); err != nil {

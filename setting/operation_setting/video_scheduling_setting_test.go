@@ -32,6 +32,18 @@ func TestValidateVideoSchedulingOption(t *testing.T) {
 		common.MemoryCacheEnabled, common.RedisEnabled, common.IsMasterNode = origMemory, origRedis, origMaster
 	})
 	common.MemoryCacheEnabled, common.RedisEnabled, common.IsMasterNode = true, true, true
+	t.Run("consecutive_failure_threshold_is_bounded_and_old_snapshots_remain_readable", func(t *testing.T) {
+		for _, value := range []string{"1", "3", "100"} {
+			require.NoError(t, ValidateVideoSchedulingOption("video_scheduling_setting.consecutive_failure_threshold", value))
+		}
+		for _, value := range []string{"0", "-1", "101", "1.5", "NaN"} {
+			assert.Error(t, ValidateVideoSchedulingOption("video_scheduling_setting.consecutive_failure_threshold", value))
+		}
+		snapshot := *GetVideoSchedulingSetting()
+		assert.Equal(t, 3, snapshot.ConsecutiveFailureThreshold)
+		snapshot.ConsecutiveFailureThreshold = 0
+		require.NoError(t, ValidateVideoSchedulingSnapshot(&snapshot), "historical snapshots omit the new field")
+	})
 
 	t.Run("reliability_policy_bounds_apply_to_saved_and_simulated_settings", func(t *testing.T) {
 		original := videoSchedulingSetting

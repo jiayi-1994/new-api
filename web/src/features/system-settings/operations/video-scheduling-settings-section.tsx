@@ -127,6 +127,10 @@ const videoSchedulingSchema = z
     min_submit_rate: rate,
     min_gen_rate: rate,
     min_samples: count,
+    consecutive_failure_threshold: positive.max(
+      100,
+      'Enter a whole number between 1 and 100'
+    ),
     window_seconds: positive.max(
       86400,
       'Enter a whole number between 1 and 86400'
@@ -222,6 +226,7 @@ function toFormValues(settings: OperationsSettings): VideoSchedulingFormValues {
     validation_period_seconds: values.validation_period_seconds ?? 604800,
     audit_enabled: values.audit_enabled ?? true,
     audit_retention_days: values.audit_retention_days ?? 30,
+    consecutive_failure_threshold: values.consecutive_failure_threshold ?? 3,
     capacity_groups:
       groups === null
         ? values.capacity_groups
@@ -687,6 +692,17 @@ export function VideoSchedulingSettingsSection(props: {
             {numberField('min_gen_rate', t('Minimum generation success rate'))}
             {numberField('min_samples', t('Minimum samples'), { step: 1 })}
             {numberField('window_seconds', t('Window (seconds)'), { step: 1 })}
+            {(isV2 || revealedFields.has('consecutive_failure_threshold')) &&
+              numberField(
+                'consecutive_failure_threshold',
+                t('Consecutive failure threshold'),
+                {
+                  step: 1,
+                  description: t(
+                    'Block after this many consecutive upstream failures. Successful generation resets the count; unknown submissions still block immediately.'
+                  ),
+                }
+              )}
           </div>
 
           <h4 className='font-medium'>

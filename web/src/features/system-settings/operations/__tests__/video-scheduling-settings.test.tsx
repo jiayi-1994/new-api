@@ -127,6 +127,27 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('the failure threshold defaults to three and can be saved as one', async () => {
+  const put = mockOptionSaves()
+  const user = userEvent.setup()
+  render(<Harness />)
+  await user.click(
+    screen.getByRole('button', { name: 'Apply stability and cost preset' })
+  )
+  const threshold = screen.getByRole('spinbutton', {
+    name: 'Consecutive failure threshold',
+  })
+  expect(threshold).toHaveValue(3)
+  fireEvent.change(threshold, { target: { value: '1' } })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(put.mock.calls.map((call) => call[1])).toContainEqual({
+      key: 'video_scheduling_setting.consecutive_failure_threshold',
+      value: '1',
+    })
+  )
+})
+
 test('the stability preset shows its gates and saves configuration before activation', async () => {
   const put = mockOptionSaves()
   const user = userEvent.setup()

@@ -609,10 +609,24 @@ func TestReliableVideoColdStartAndValidationOrder(t *testing.T) {
 				in.Candidates[i].Reliability.State = videosched.HealthBlocked
 			}
 		}, 0, "", "recovery_disabled"},
-		{"nonfault_before_recovery", func(in *VideoDecisionInput) {
+		{"recovery_shares_validation_order", func(in *VideoDecisionInput) {
 			in.Candidates[0].Reliability.State = videosched.HealthBlocked
 			in.Candidates[0].Reliability.BlockedAt = now.Unix() - 600
-		}, 2, "explore", "no_normal_candidate"},
+		}, 1, "recover", "no_normal_candidate"},
+		{"oldest_recovery_before_recent_cold_start", func(in *VideoDecisionInput) {
+			in.Candidates[0].Reliability.LastValidationAt = now.Unix() - 1
+			in.Candidates[1].Reliability.State = videosched.HealthBlocked
+			in.Candidates[1].Reliability.BlockedAt = now.Unix() - 600
+			in.Candidates[1].Reliability.LastValidationAt = now.Unix() - 600
+			in.Candidates = in.Candidates[:2]
+		}, 2, "recover", "no_normal_candidate"},
+		{"cold_start_still_gets_a_turn_after_recovery", func(in *VideoDecisionInput) {
+			in.Candidates[0].Reliability.LastValidationAt = now.Unix() - 900
+			in.Candidates[1].Reliability.State = videosched.HealthRecovering
+			in.Candidates[1].Reliability.BlockedAt = now.Unix() - 1200
+			in.Candidates[1].Reliability.LastValidationAt = now.Unix() - 600
+			in.Candidates = in.Candidates[:2]
+		}, 1, "explore", "no_normal_candidate"},
 		{"no_history_is_not_new", func(in *VideoDecisionInput) {
 			for i := range in.Candidates {
 				in.Candidates[i].Reliability = nil

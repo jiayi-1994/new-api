@@ -460,6 +460,7 @@ export type VideoSchedulingSetting = {
   min_submit_rate: number
   min_gen_rate: number
   min_samples: number
+  consecutive_failure_threshold?: number
   window_seconds: number
   explore_share: number
   explore_max_in_flight: number

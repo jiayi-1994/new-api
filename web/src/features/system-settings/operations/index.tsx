@@ -74,6 +74,7 @@ const defaultOperationsSettings: OperationsSettings = {
   'video_scheduling_setting.min_submit_rate': 0.8,
   'video_scheduling_setting.min_gen_rate': 0.5,
   'video_scheduling_setting.min_samples': 20,
+  'video_scheduling_setting.consecutive_failure_threshold': 3,
   'video_scheduling_setting.window_seconds': 1800,
   'video_scheduling_setting.explore_share': 0.1,
   'video_scheduling_setting.explore_max_in_flight': 2,

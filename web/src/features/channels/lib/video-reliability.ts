@@ -120,6 +120,8 @@ export function videoReliabilityLabel(
       return t('Waiting for validation turn')
     case 'new upstream failure':
       return t('New upstream failure')
+    case 'upstream failure threshold reached':
+      return t('Upstream failure threshold reached')
     case 'submit outcome unknown':
       return t('Submit outcome unknown')
     case 'success':

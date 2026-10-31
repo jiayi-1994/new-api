@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/videosched"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,6 +206,10 @@ func TestVideoHealthBrowserFixture(t *testing.T) {
 }
 
 func TestVideoHealthDatabase(t *testing.T) {
+	settings := operation_setting.GetVideoSchedulingSetting()
+	previousThreshold := settings.ConsecutiveFailureThreshold
+	settings.ConsecutiveFailureThreshold = 3
+	t.Cleanup(func() { settings.ConsecutiveFailureThreshold = previousThreshold })
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
 			var driver gorm.Dialector
@@ -249,6 +254,133 @@ func TestVideoHealthDatabase(t *testing.T) {
 			ctx := context.Background()
 			p := videosched.Policy{MinSamples: 20, MinGenRate: .8, MinOverallRate: .6, QualificationTTLSeconds: 86400, ValidationPeriodSeconds: 604800}
 			const start int64 = 1800000000 // aligned to the ordinary 1800-second bucket
+			t.Run("consecutive_failures_before_blocking", func(t *testing.T) {
+				for index, tc := range []struct {
+					name, initial string
+					outcomes      []string
+					blockedAt     int
+				}{
+					{"unverified_tolerates_two_failures", videosched.HealthUnverified, []string{"upstream", "upstream", "upstream"}, 2},
+					{"normal_tolerates_two_failures", videosched.HealthNormal, []string{"upstream", "upstream", "upstream"}, 2},
+					{"success_breaks_the_streak", videosched.HealthNormal, []string{"upstream", "upstream", "success", "upstream", "upstream", "upstream"}, 5},
+					{"excluded_outcomes_do_not_reset_or_increment", videosched.HealthUnverified, []string{"upstream", "user", "cancelled", "upstream", "", "upstream"}, 5},
+					{"unknown_still_blocks_immediately", videosched.HealthNormal, []string{"unknown"}, 0},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						channelID := 1200 + index
+						require.NoError(t, EnsureVideoHealthState(ctx, channelID, "video"))
+						if tc.initial == videosched.HealthNormal {
+							certificate := videosched.ReliabilityEvidence{Version: 1, Source: "window", BatchStart: start - 3600, BatchEnd: start - 1800, WindowSeconds: 1800, AsOf: start - 60, ValidatedAt: start - 60, ExpiresAt: start + 86400, Submitted: 20, Accepted: 20, Succeeded: 20}
+							encoded, err := marshalVideoHealthEvidence(certificate)
+							require.NoError(t, err)
+							require.NoError(t, db.Model(&VideoHealthState{}).Where("channel_id = ?", channelID).Updates(map[string]any{"state": tc.initial, "qualification_json": encoded}).Error)
+						}
+						for sequence, outcome := range tc.outcomes {
+							attempt := VideoHealthAttempt{RequestID: fmt.Sprintf("failure-streak-%d-%d", channelID, sequence), AttemptSeq: 1, ChannelID: channelID, ModelName: "video", WindowSeconds: 1800, StartedAt: start + int64(sequence*2), Flow: "normal"}
+							require.NoError(t, BeginVideoHealthAttempt(ctx, &attempt, false))
+							submit := "accepted"
+							if outcome == "unknown" {
+								submit = "unknown"
+							}
+							// Duplicate observations must not turn one task into two failures.
+							for range 2 {
+								require.NoError(t, ObserveVideoHealthAttempt(ctx, attempt.RequestID, 1, nil, submit, outcome, outcome, attempt.StartedAt+1))
+							}
+							var state VideoHealthState
+							require.NoError(t, db.Where("channel_id = ? AND model_name = ?", channelID, "video").First(&state).Error)
+							want := tc.initial
+							if sequence >= tc.blockedAt {
+								want = videosched.HealthBlocked
+							}
+							assert.Equal(t, want, state.State, "outcome %d (%s)", sequence, outcome)
+						}
+					})
+				}
+			})
+			t.Run("failure_streak_uses_completion_order", func(t *testing.T) {
+				for index, sameSecond := range []bool{false, true} {
+					t.Run(fmt.Sprintf("same_second_%t", sameSecond), func(t *testing.T) {
+						channelID := 1220 + index
+						require.NoError(t, EnsureVideoHealthState(ctx, channelID, "video"))
+						var attempts [6]VideoHealthAttempt
+						for i := range attempts {
+							attempts[i] = VideoHealthAttempt{RequestID: fmt.Sprintf("completion-%d-%d", channelID, i), AttemptSeq: 1, ChannelID: channelID, ModelName: "video", WindowSeconds: 1800, StartedAt: start, Flow: "normal"}
+							require.NoError(t, BeginVideoHealthAttempt(ctx, &attempts[i], false))
+						}
+						// The first submitted task succeeds after two later tasks fail.
+						for sequence, i := range []int{1, 2, 0, 3, 4, 5} {
+							outcome, finishedAt := "upstream", start+int64(sequence)+1
+							if i == 0 {
+								outcome = "success"
+							}
+							if sameSecond && sequence < 4 {
+								finishedAt = start + 1
+							}
+							require.NoError(t, ObserveVideoHealthAttempt(ctx, attempts[i].RequestID, 1, nil, "accepted", outcome, outcome, finishedAt))
+							var state VideoHealthState
+							require.NoError(t, db.Where("channel_id = ? AND model_name = ?", channelID, "video").First(&state).Error)
+							want := videosched.HealthUnverified
+							if !sameSecond && sequence == 5 {
+								want = videosched.HealthBlocked
+							}
+							assert.Equal(t, want, state.State, "completion %d", sequence)
+						}
+					})
+				}
+			})
+			t.Run("concurrent_failures_are_counted_once", func(t *testing.T) {
+				// SQLite serializes writes at database level; server databases use
+				// independent connections and the per-channel/model state lock.
+				if dialect == "sqlite" {
+					sqlDB.SetMaxOpenConns(1)
+					t.Cleanup(func() { sqlDB.SetMaxOpenConns(0) })
+				}
+				require.NoError(t, EnsureVideoHealthState(ctx, 1230, "video"))
+				var attempts [3]VideoHealthAttempt
+				for i := range attempts {
+					attempts[i] = VideoHealthAttempt{RequestID: fmt.Sprintf("concurrent-failure-%d", i), AttemptSeq: 1, ChannelID: 1230, ModelName: "video", WindowSeconds: 1800, StartedAt: start, Flow: "normal"}
+					require.NoError(t, BeginVideoHealthAttempt(ctx, &attempts[i], false))
+				}
+				errors := make([]error, len(attempts))
+				barrier := make(chan struct{})
+				var wg sync.WaitGroup
+				for i := range attempts {
+					wg.Go(func() {
+						<-barrier
+						errors[i] = ObserveVideoHealthAttempt(ctx, attempts[i].RequestID, 1, nil, "accepted", "upstream", "host", start+1)
+					})
+				}
+				close(barrier)
+				wg.Wait()
+				for _, err := range errors {
+					require.NoError(t, err)
+				}
+				var state VideoHealthState
+				require.NoError(t, db.Where("channel_id = ? AND model_name = ?", 1230, "video").First(&state).Error)
+				assert.Equal(t, videosched.HealthBlocked, state.State)
+				assert.Equal(t, "upstream failure threshold reached", state.Reason)
+				assert.EqualValues(t, 2, state.Version)
+			})
+			t.Run("failure_streak_is_scoped_to_model_and_configuration", func(t *testing.T) {
+				require.NoError(t, EnsureVideoHealthState(ctx, 1231, "video"))
+				require.NoError(t, db.Model(&VideoHealthState{}).Where("channel_id = ?", 1231).Updates(map[string]any{"config_version": 2, "version": 2}).Error)
+				for i, history := range []VideoHealthAttempt{
+					{ChannelID: 1231, ModelName: "video", StateVersion: 1},
+					{ChannelID: 1231, ModelName: "video", StateVersion: 2, ConfigIdentity: "old"},
+					{ChannelID: 1231, ModelName: "other-video", StateVersion: 2},
+					{ChannelID: 1232, ModelName: "video", StateVersion: 2},
+				} {
+					history.RequestID, history.AttemptSeq = fmt.Sprintf("isolated-history-%d", i), 1
+					history.SubmitOutcome, history.FinalOutcome, history.FinishedAt = "accepted", "upstream", start+1
+					require.NoError(t, db.Create(&history).Error)
+				}
+				fresh := VideoHealthAttempt{RequestID: "isolated-fresh", AttemptSeq: 1, ChannelID: 1231, ModelName: "video", WindowSeconds: 1800, StartedAt: start + 2, Flow: "normal"}
+				require.NoError(t, BeginVideoHealthAttempt(ctx, &fresh, false))
+				require.NoError(t, ObserveVideoHealthAttempt(ctx, fresh.RequestID, 1, nil, "accepted", "upstream", "host", start+3))
+				var state VideoHealthState
+				require.NoError(t, db.Where("channel_id = ? AND model_name = ?", 1231, "video").First(&state).Error)
+				assert.Equal(t, videosched.HealthUnverified, state.State)
+			})
 			t.Run("capacity_owners_follow_durable_handoff", func(t *testing.T) {
 				t.Cleanup(func() {
 					require.NoError(t, db.Where("task_id LIKE ?", "capacity-owner-%").Delete(&Task{}).Error)
@@ -767,6 +899,10 @@ func TestVideoHealthDatabase(t *testing.T) {
 				})
 			}
 			t.Run("closed_cohorts_and_low_traffic", func(t *testing.T) {
+				settings := operation_setting.GetVideoSchedulingSetting()
+				previousThreshold := settings.ConsecutiveFailureThreshold
+				settings.ConsecutiveFailureThreshold = 1
+				t.Cleanup(func() { settings.ConsecutiveFailureThreshold = previousThreshold })
 				require.NoError(t, EnsureVideoHealthState(ctx, 3, "video"))
 				_, err := RefreshVideoHealthState(ctx, 3, "video", p, start)
 				require.NoError(t, err)
