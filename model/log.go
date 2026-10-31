@@ -161,6 +161,19 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	return logs, err
 }
 
+// GetErrorLogsSince returns only what failure statistics read, newest first.
+func GetErrorLogsSince(since int64, limit int) ([]*Log, error) {
+	order := "id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("")
+	}
+	var logs []*Log
+	err := LOG_DB.Select("content", "other", "created_at").
+		Where("type = ? AND created_at >= ?", LogTypeError, since).
+		Order(order).Limit(limit).Find(&logs).Error
+	return logs, err
+}
+
 func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return

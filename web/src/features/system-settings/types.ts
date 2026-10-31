@@ -29,6 +29,19 @@ export type SystemOptionsResponse = {
   data: SystemOption[]
 }
 
+export type VideoErrorCandidate = {
+  keyword: string
+  sample: string
+  count: number
+  last_seen: number
+}
+
+export type VideoErrorCandidatesResponse = {
+  success: boolean
+  message?: string
+  data?: VideoErrorCandidate[]
+}
+
 export type UpdateOptionRequest = {
   key: string
   value: string | boolean | number
@@ -361,6 +374,7 @@ export type BillingSettings = {
 }
 
 export type OperationsSettings = {
+  'video_error_whitelist.rules': string
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

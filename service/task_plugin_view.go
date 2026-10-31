@@ -11,25 +11,49 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	videodto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 var (
-	upstreamQuotaMessagePattern = regexp.MustCompile(`(?i)额度|余额|余量|欠费|欠款|充值|扣费|quota|balance|insufficient|credit|billing|overdue|arrear|[$￥¥€£]\s*\d|\d(?:\.\d+)?\s*(?:USD|CNY|RMB|EUR|GBP)\b`)
-	upstreamCredentialPattern   = regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential)\b["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic)\s+)?[^\s"',;}\]]+`)
-	upstreamBearerPattern       = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+`)
-	upstreamAPIKeyPattern       = regexp.MustCompile(`\bsk-[a-zA-Z0-9_-]+`)
+	upstreamCredentialPattern = regexp.MustCompile(`(?i)(\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential)\b["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic)\s+)?[^\s"',;}\]]+`)
+	upstreamBearerPattern     = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+`)
+	upstreamAPIKeyPattern     = regexp.MustCompile(`\bsk-[a-zA-Z0-9_-]+`)
+	upstreamEnvelopePattern   = regexp.MustCompile(`^(?:status_code=\d+, |upstream status \d+: )`)
+	// Any URL, address or mailbox: a hidden host is still a supply-side detail.
+	upstreamLinkPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>，。；！？、）】》]+` +
+		`|\bdata:[a-z]+/[a-z0-9.+-]+[^\s"']*` +
+		`|\bwww\.[^\s"'<>，。；！？、）】》]+` +
+		`|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}` +
+		`|\[[0-9a-f:]{2,}\](?::\d+)?` +
+		`|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:/[^\s"'<>，。；！？、）】》]*)?` +
+		`|\b(?:[a-z0-9-]+\.)+(?:com|net|org|cn|io|ai|top|cc|co|xyz|dev|app|cloud|site|tech|me|info|biz|vip|ltd|shop|online|store|hk|tw|jp|us|uk|de|ru|invalid|example)\b(?::\d+)?(?:/[^\s"'<>，。；！？、）】》]*)?`)
 )
+
+const upstreamLinkPlaceholder = "[已隐藏]"
+
+// unifiedVideoUpstreamMessage unwraps the status prefix and the JSON layers
+// upstreams and gateways put around the message a person is meant to read.
+func unifiedVideoUpstreamMessage(message string) string {
+	message = upstreamEnvelopePattern.ReplaceAllString(strings.TrimSpace(message), "")
+	for range 3 {
+		var body videodto.GeneralErrorResponse
+		if common.UnmarshalJsonStr(message, &body) != nil {
+			break
+		}
+		parsed := body.ToMessage()
+		if parsed == "" {
+			break
+		}
+		message = parsed
+	}
+	return strings.TrimSpace(message)
+}
 
 // SanitizeUnifiedVideoUpstreamError applies the same public error policy to
 // submission errors and persisted task failures. Callers first check opt-in.
 func SanitizeUnifiedVideoUpstreamError(message string, secrets ...string) string {
-	var body videodto.GeneralErrorResponse
-	if common.UnmarshalJsonStr(message, &body) == nil {
-		if parsed := body.ToMessage(); parsed != "" {
-			message = parsed
-		}
-	}
-	if upstreamQuotaMessagePattern.MatchString(message) {
+	message = unifiedVideoUpstreamMessage(message)
+	if operation_setting.UpstreamQuotaMessagePattern.MatchString(message) {
 		return "上游账户状态异常，暂时无法处理该请求，请联系管理员"
 	}
 	for _, secret := range secrets {
@@ -40,11 +64,29 @@ func SanitizeUnifiedVideoUpstreamError(message string, secrets ...string) string
 	message = upstreamCredentialPattern.ReplaceAllString(message, "${1}***")
 	message = upstreamBearerPattern.ReplaceAllString(message, "${1} ***")
 	message = upstreamAPIKeyPattern.ReplaceAllString(message, "***")
+	message = upstreamLinkPattern.ReplaceAllString(message, upstreamLinkPlaceholder)
 	message = strings.TrimSpace(common.MaskSensitiveInfo(message))
-	if message == "" {
+	// Structured bodies carry field names and details no person should read.
+	if message == "" || strings.HasPrefix(message, "{") || strings.HasPrefix(message, "[{") || strings.Contains(message, `{"`) {
 		return model.UnifiedVideoRequestFailedMessage
 	}
 	return message
+}
+
+// WhitelistedUnifiedVideoError returns the public wording of a failure an
+// administrator has approved, independent of the channel passthrough opt-in.
+func WhitelistedUnifiedVideoError(message string, secrets ...string) (string, bool) {
+	if operation_setting.IsVideoErrorNeverPublic(message) {
+		return "", false
+	}
+	display, matched := operation_setting.MatchVideoErrorWhitelist(message)
+	if !matched {
+		return "", false
+	}
+	if display != "" {
+		return display, true
+	}
+	return SanitizeUnifiedVideoUpstreamError(message, secrets...), true
 }
 
 func unifiedVideoHostFailure(task *model.Task) bool {
@@ -78,7 +120,16 @@ func unifiedVideoTaskError(task *model.Task) *videodto.OpenAIVideoError {
 		return failure
 	}
 	channel, err := model.CacheGetChannel(task.ChannelId)
-	if err != nil || channel == nil || channel.Setting == nil {
+	if err != nil || channel == nil {
+		return failure
+	}
+	secrets := []string{task.PrivateData.Key, task.PrivateData.UpstreamTaskID}
+	secrets = append(secrets, channel.GetKeys()...)
+	if message, ok := WhitelistedUnifiedVideoError(task.FailReason, secrets...); ok {
+		failure.Message = message
+		return failure
+	}
+	if channel.Setting == nil {
 		return failure
 	}
 	// GetSetting repairs malformed JSON by writing the channel. Public reads
@@ -87,8 +138,6 @@ func unifiedVideoTaskError(task *model.Task) *videodto.OpenAIVideoError {
 	if common.UnmarshalJsonStr(*channel.Setting, &setting) != nil || !setting.ErrorPassthroughEnabled {
 		return failure
 	}
-	secrets := []string{task.PrivateData.Key, task.PrivateData.UpstreamTaskID}
-	secrets = append(secrets, channel.GetKeys()...)
 	failure.Message = SanitizeUnifiedVideoUpstreamError(task.FailReason, secrets...)
 	return failure
 }

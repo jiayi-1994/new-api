@@ -7312,6 +7312,20 @@
     "Amount (USD)": "金额（USD）",
     "Videos": "条数",
     "Add supply": "添加供货量",
-    "Supply": "供货"
+    "Supply": "供货",
+    "Video Error Whitelist": "视频报错白名单",
+    "Video failures show a generic message by default. A failure containing a keyword below shows the display text, or the sanitized upstream message when the text is empty. System and upstream account failures, such as unpaid balance, no available channel or timeouts, are never shown even if a rule matches.": "视频失败默认展示笼统提示。报错包含下方关键词时，展示对应的展示文案；文案留空则展示脱敏后的上游报错。系统问题和上游账户问题（如欠费、无可用渠道、超时）即使命中规则也不会展示。",
+    "No whitelist rules yet": "暂无白名单规则",
+    "Error keyword": "报错关键词",
+    "Display text (optional)": "展示文案（可选）",
+    "Added to the video error whitelist": "已加入视频报错白名单",
+    "Add to Video Error Whitelist": "加入视频报错白名单",
+    "Keep only the stable part of the error: remove task IDs, URLs and numbers so the same error matches next time.": "只保留报错中固定不变的部分，去掉任务 ID、链接和数字，下次相同的报错才能匹配。",
+    "Empty shows the sanitized upstream message": "留空则展示脱敏后的上游报错",
+    "Add to whitelist": "加入白名单",
+    "Failures awaiting review": "待选择的报错",
+    "Failures from the last 30 days that are not whitelisted. System and upstream account failures are excluded and can never be added.": "最近 30 天内尚未加入白名单的报错。系统问题和上游账户问题已被排除，也无法手动加入。",
+    "No failures awaiting review": "暂无待选择的报错",
+    "{{count}} occurrences": "出现 {{count}} 次"
   }
 }

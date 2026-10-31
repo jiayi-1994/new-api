@@ -7312,6 +7312,20 @@
     "Amount (USD)": "金額（USD）",
     "Videos": "條數",
     "Add supply": "新增供貨量",
-    "Supply": "供貨"
+    "Supply": "供貨",
+    "Video Error Whitelist": "影片錯誤白名單",
+    "Video failures show a generic message by default. A failure containing a keyword below shows the display text, or the sanitized upstream message when the text is empty. System and upstream account failures, such as unpaid balance, no available channel or timeouts, are never shown even if a rule matches.": "影片失敗預設顯示籠統提示。錯誤包含下方關鍵字時，顯示對應的顯示文字；文字留空則顯示脫敏後的上游錯誤。系統問題和上游帳戶問題（如欠費、無可用管道、逾時）即使符合規則也不會顯示。",
+    "No whitelist rules yet": "尚無白名單規則",
+    "Error keyword": "錯誤關鍵字",
+    "Display text (optional)": "顯示文字（選填）",
+    "Added to the video error whitelist": "已加入影片錯誤白名單",
+    "Add to Video Error Whitelist": "加入影片錯誤白名單",
+    "Keep only the stable part of the error: remove task IDs, URLs and numbers so the same error matches next time.": "只保留錯誤中固定不變的部分，移除任務 ID、連結和數字，下次相同的錯誤才能比對。",
+    "Empty shows the sanitized upstream message": "留空則顯示脫敏後的上游錯誤",
+    "Add to whitelist": "加入白名單",
+    "Failures awaiting review": "待選擇的錯誤",
+    "Failures from the last 30 days that are not whitelisted. System and upstream account failures are excluded and can never be added.": "最近 30 天內尚未加入白名單的錯誤。系統問題和上游帳戶問題已被排除，也無法手動加入。",
+    "No failures awaiting review": "暫無待選擇的錯誤",
+    "{{count}} occurrences": "出現 {{count}} 次"
   }
 }

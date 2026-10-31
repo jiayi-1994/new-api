@@ -276,6 +276,9 @@ func validateOptionValue(key string, value string) error {
 	if key == billing_setting.VideoSalesOption {
 		return validateVideoSalesOption(value)
 	}
+	if key == operation_setting.VideoErrorWhitelistOptionKey {
+		return operation_setting.ValidateVideoErrorWhitelist(value)
+	}
 	return operation_setting.ValidateVideoSchedulingOption(key, value)
 }
 

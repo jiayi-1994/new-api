@@ -57,6 +57,7 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.flush_interval': 5,
   'perf_metrics_setting.bucket_time': 'hour',
   'perf_metrics_setting.retention_days': 0,
+  'video_error_whitelist.rules': '{}',
   // Mirrors setting/operation_setting/video_scheduling_setting.go defaults.
   'video_scheduling_setting.mode': 'off',
   'video_scheduling_setting.selection_policy': 'weighted_v1',

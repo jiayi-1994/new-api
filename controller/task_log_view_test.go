@@ -21,6 +21,8 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -478,7 +480,7 @@ func TestUnifiedVideoErrorPassthroughFollowsChannelSetting(t *testing.T) {
 			name:        "on masks upstream URLs",
 			passthrough: true,
 			taskErr:     service.TaskErrorWrapper(errors.New(`{"error":{"message":"GET https://private-upstream.invalid/v1/videos returned 502"}}`), "fail_to_fetch_task", http.StatusBadGateway),
-			wantMessage: "GET https://***.invalid/***/*** returned 502",
+			wantMessage: "GET [已隐藏] returned 502",
 			wantAbsent:  "private-upstream",
 		},
 		{
@@ -617,6 +619,10 @@ func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 	plugin, err := pluginruntime.CompilePlugin(source, pluginruntime.Options{})
 	require.NoError(t, err)
 	const policyReason = "The input image content[1] may be related to copyright restrictions"
+	whitelist := config.GlobalConfig.Get("video_error_whitelist").(*operation_setting.VideoErrorWhitelistSetting)
+	previousRules := whitelist.Rules
+	t.Cleanup(func() { whitelist.Rules = previousRules })
+	whitelist.Rules = nil
 	for _, tc := range []struct {
 		name, setting, reason, attribution, class, want string
 		missingChannel                                  bool
@@ -627,7 +633,7 @@ func TestUnifiedVideoAsyncErrorPassthroughFollowsChannelSetting(t *testing.T) {
 		{name: "off", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: model.UnifiedVideoRequestFailedMessage},
 		{name: "on", setting: `{"error_passthrough_enabled":true}`, reason: policyReason, want: policyReason},
 		{name: "off again hides existing task", setting: `{"error_passthrough_enabled":false}`, reason: policyReason, want: model.UnifiedVideoRequestFailedMessage},
-		{name: "URL and keys", setting: `{"error_passthrough_enabled":true}`, reason: "invalid image https://private.example/a.png?token=secret current-private-key old-private-key", want: "invalid image https://***.example/***?token=*** *** ***"},
+		{name: "URL and keys", setting: `{"error_passthrough_enabled":true}`, reason: "invalid image https://private.example/a.png?token=secret current-private-key old-private-key", want: "invalid image [已隐藏] *** ***"},
 		{name: "credentials", setting: `{"error_passthrough_enabled":true}`, reason: "request rejected; Authorization: Bearer test-secret; api_key=another-secret", want: "request rejected; Authorization: ***; api_key=***"},
 		{name: "funds", setting: `{"error_passthrough_enabled":true}`, reason: "insufficient balance $1.80", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
 		{name: "currency amount", setting: `{"error_passthrough_enabled":true}`, reason: "request requires 3.50 USD", want: "上游账户状态异常，暂时无法处理该请求，请联系管理员"},
@@ -874,4 +880,60 @@ func TestTaskLogDTOKeepsFailureReasonAndDoesNotMarkPluginTaskLegacy(t *testing.T
 	assert.False(t, pluginView.LegacyVideoAvailable)
 	assert.Empty(t, pluginView.ResultURL)
 	assert.Empty(t, pluginView.FailReason)
+}
+
+func TestUnifiedVideoErrorWhitelistShowsApprovedFailures(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	previousFactory := service.GetTaskAdaptorFunc
+	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousFactory })
+	service.GetTaskAdaptorFunc = nil
+	previousMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemory })
+	setting, ok := config.GlobalConfig.Get("video_error_whitelist").(*operation_setting.VideoErrorWhitelistSetting)
+	require.True(t, ok)
+	previousRules := setting.Rules
+	t.Cleanup(func() { setting.Rules = previousRules })
+	setting.Rules = map[string]string{
+		"image too large": "",
+		"prompt blocked":  "提示词未通过审核，请修改后重试",
+		"balance is low":  "写了文案也不展示",
+		"no capacity now": "",
+		"private host":    "",
+	}
+	task.Status = model.TaskStatusFailure
+	task.Platform = "missing-plugin"
+	task.PrivateData.Key = "task-private-key"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{TieredSnapshot: &billingexpr.BillingSnapshot{
+		SalesSource: billingexpr.SalesSourceVideoRequest,
+		UsageFacts:  map[string]any{"seconds": 5, "resolution": "720p"},
+	}}
+	require.True(t, task.IsUnifiedVideoSale())
+
+	for _, tc := range []struct {
+		name, reason, attribution, want string
+	}{
+		{name: "miss stays generic", reason: "upstream exploded", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "keyword shows sanitized upstream text", reason: `{"error":{"message":"Image Too Large with task-private-key"}}`, want: "Image Too Large with ***"},
+		{name: "custom text replaces upstream text", reason: "prompt blocked by vendor-x", want: "提示词未通过审核，请修改后重试"},
+		{name: "funds never match", reason: "balance is low: $1.80", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "system failures never match", reason: "no capacity now", want: model.UnifiedVideoRequestFailedMessage},
+		{name: "host diagnostics never match", attribution: "host", reason: "private host detail", want: model.UnifiedVideoRequestFailedMessage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task.FailReason = tc.reason
+			task.VideoHealthAttribution = tc.attribution
+			item := relay.TaskModel2Dto(task)
+			service.RedactUnifiedVideoTaskDTO(task, item)
+			assert.Equal(t, tc.want, item.FailReason)
+		})
+	}
+
+	t.Run("submission", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		approved := service.TaskErrorWrapper(errors.New(`{"error":{"message":"image too large"}}`), "fail_to_fetch_task", http.StatusBadRequest)
+		assert.Equal(t, "image too large", unifiedVideoPublicErrorMessage(c, approved))
+		upstreamAuth := service.TaskErrorWrapper(errors.New("image too large"), "fail_to_fetch_task", http.StatusForbidden)
+		assert.Equal(t, model.UnifiedVideoRequestFailedMessage, unifiedVideoPublicErrorMessage(c, upstreamAuth))
+	})
 }

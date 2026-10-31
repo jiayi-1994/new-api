@@ -656,3 +656,13 @@ func taskFailReasonIsLegacyResultURL(value string) bool {
 		len(value) >= len("http://") && strings.EqualFold(value[:len("http://")], "http://") ||
 		len(value) >= len("data:") && strings.EqualFold(value[:len("data:")], "data:")
 }
+
+// GetVideoErrorCandidates lists recent failures an administrator may whitelist.
+func GetVideoErrorCandidates(c *gin.Context) {
+	candidates, err := service.ListVideoErrorCandidates()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": candidates})
+}
